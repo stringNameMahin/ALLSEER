@@ -1,0 +1,56 @@
+# --- Secrets
+.claude/settings.json
+.claude/settings.local.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Build output
+/bin/
+/dist/
+/out/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# --- eBPF artifacts
+*.bpf.o
+/bpf/**/vmlinux.h
+
+# --- Go
+*.test
+*.out
+coverage.*
+/vendor/
+go.work
+go.work.sum
+
+# --- Tooling / editors
+.idea/
+.vscode/
+.claude/
+.agents/
+skills-lock.json
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Runtime state
+/var/
+*.sock
+*.pid
+*.log
+
+# --- Extras: for devs 
+STATUS.md
+devRead.md
+future_work.md
+
+# --- WIP DOCS
+docs/
+LICENSE
+devRead.md
+STATUS.md

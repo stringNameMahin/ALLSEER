@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://allseer.dev/schema/event/v1alpha1.json",
+  "title": "ALLSEER Kernel Event",
+  "description": "A single kernel-observed action attributed to a governed process. Events originate in eBPF programs as fixed-size C structs, cross into user space via ring buffer, and are decoded and enriched into this form. Everything downstream consumes this schema and nothing else, which is what allows the eBPF layer to be replaced or replayed without any other module noticing.",
+  "type": "object",
+  "required": [
+    "id",
+    "session_id",
+    "sequence",
+    "kernel_timestamp",
+    "wall_clock",
+    "capability",
+    "domain",
+    "result",
+    "process",
+    "observation"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "id": {
+      "description": "Unique event identifier, assigned in user space at decode.",
+      "type": "string"
+    },
+
+    "session_id": {
+      "description": "The governed session, and therefore the envelope this event is validated against.",
+      "type": "string"
+    },
+
+    "sequence": {
+      "description": "Monotonic per-session counter assigned at decode. Provides a total order when timestamps collide; a gap is direct evidence of ring buffer loss.",
+      "type": "integer",
+      "minimum": 0
+    },
+
+    "kernel_timestamp": {
+      "description": "Raw ktime from the probe: monotonic nanoseconds since boot. Authoritative for ordering.",
+      "type": "integer",
+      "minimum": 0
+    },
+
+    "wall_clock": {
+      "description": "kernel_timestamp translated to wall time. Convenient for humans but subject to clock adjustment, so never order events by this field.",
+      "type": "string",
+      "format": "date-time"
+    },
+
+    "capability": {
+      "description": "The resolved capability this event exercised. This is what the validator matches against the envelope.",
+      "$ref": "ece.v1alpha1.schema.json#/$defs/capabilityKind"
+    },
+
+    "domain": {
+      "$ref": "ece.v1alpha1.schema.json#/$defs/domain"
+    },
+
+    "syscall": {
+      "description": "Kernel entry point, e.g. 'openat2'. Retained for forensics and probe debugging; matching uses capability instead.",
+      "type": "string"
+    },
+
+    "result": { "$ref": "#/$defs/result" },
+    "process": { "$ref": "#/$defs/process" },
+
+    "file": { "$ref": "#/$defs/filePayload" },
+    "network": { "$ref": "#/$defs/networkPayload" },
+    "exec": { "$ref": "#/$defs/execPayload" },
+    "privilege": { "$ref": "#/$defs/privPayload" },
+
+    "observation": { "$ref": "#/$defs/observation" },
+
+    "dropped": {
+      "description": "Ring buffer records lost before this one. Non-zero means the stream has a hole, and any 'the agent never did X' conclusion drawn across that hole is unsound.",
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "Payload must correspond to the event's domain.",
+      "if": { "properties": { "domain": { "const": "filesystem" } }, "required": ["domain"] },
+      "then": { "required": ["file"] }
+    },
+    {
+      "if": { "properties": { "domain": { "const": "network" } }, "required": ["domain"] },
+      "then": { "required": ["network"] }
+    },
+    {
+      "if": { "properties": { "domain": { "const": "privilege" } }, "required": ["domain"] },
+      "then": { "required": ["privilege"] }
+    }
+  ],
+
+  "$defs": {
+    "result": {
+      "description": "How the kernel answered. A failed action is still a governance signal: an agent repeatedly failing to open /etc/shadow is more alarming than one that succeeds once.",
+      "type": "object",
+      "required": ["return_code", "succeeded"],
+      "additionalProperties": false,
+      "properties": {
+        "return_code": {
+          "description": "Raw syscall return. Negative values are -errno.",
+          "type": "integer"
+        },
+        "errno": { "type": "string" },
+        "succeeded": { "type": "boolean" }
+      }
+    },
+
+    "process": {
+      "description": "The actor, captured in the kernel at event time. Reading /proc afterwards races with process exit and yields nothing for short-lived processes, which are the ones worth watching.",
+      "type": "object",
+      "required": ["pid", "tid", "ppid", "uid", "gid", "comm"],
+      "additionalProperties": false,
+      "properties": {
+        "pid": { "type": "integer" },
+        "tid": { "type": "integer" },
+        "ppid": { "type": "integer" },
+        "uid": { "type": "integer" },
+        "gid": { "type": "integer" },
+        "comm": {
+          "description": "Kernel's 16-byte truncated process name. Cheap but lossy.",
+          "type": "string",
+          "maxLength": 16
+        },
+        "executable": {
+          "description": "Full resolved binary path, enriched in user space.",
+          "type": "string"
+        },
+        "cgroup_id": {
+          "description": "Container or scope identifier. The primary attribution key: PIDs are reused within a boot, cgroup IDs are not.",
+          "type": "integer"
+        },
+        "start_time": {
+          "description": "Disambiguates recycled PIDs. The pair (pid, start_time) is unique for a boot; pid alone is not.",
+          "type": "integer"
+        },
+        "ancestry_depth": {
+          "description": "Process generations from the session root. A governance signal in itself: an agent shelling out three levels deep to reach the network behaves differently from one connecting directly.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+
+    "filePayload": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Path as passed to the syscall. May be relative, may contain symlinks.",
+          "type": "string"
+        },
+        "resolved_path": {
+          "description": "Absolute, symlink-resolved path. Selector matching MUST use this field.",
+          "type": "string"
+        },
+        "flags": { "type": "integer" },
+        "mode": { "type": "integer" },
+        "inode": {
+          "description": "Identifies the file independent of its name, which is how rename-and-swap tricks are detected.",
+          "type": "integer"
+        },
+        "device": { "type": "integer" },
+        "new_path": {
+          "description": "Destination for rename and link operations.",
+          "type": "string"
+        },
+        "bytes_transferred": { "type": "integer" }
+      }
+    },
+
+    "networkPayload": {
+      "type": "object",
+      "required": ["protocol"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "type": "string" },
+        "source_addr": { "type": "string" },
+        "source_port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "dest_addr": { "type": "string" },
+        "dest_port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "address_family": { "type": "string" },
+        "socket_type": { "type": "string" },
+        "hostname": {
+          "description": "The name the destination IP was reached by, recovered by correlating observed DNS answers. Best-effort: DNS-over-HTTPS and hardcoded IPs defeat it. Failed correlation must widen scrutiny, never silently allow.",
+          "type": "string"
+        },
+        "bytes_sent": { "type": "integer" },
+        "bytes_received": { "type": "integer" }
+      }
+    },
+
+    "execPayload": {
+      "type": "object",
+      "required": ["filename"],
+      "additionalProperties": false,
+      "properties": {
+        "filename": { "type": "string" },
+        "argv": { "type": "array", "items": { "type": "string" } },
+        "env_keys": {
+          "description": "Environment variable names only. Values are never captured: they routinely hold credentials, and an audit log is the last place those should land.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "interpreter": {
+          "description": "Set when the binary is a script runner, since the meaningful action is the script rather than the interpreter.",
+          "type": "string"
+        },
+        "binary_hash": {
+          "description": "SHA-256 of the executed file, computed lazily. Expensive; gated by configuration.",
+          "type": "string"
+        }
+      }
+    },
+
+    "privPayload": {
+      "type": "object",
+      "required": ["operation"],
+      "additionalProperties": false,
+      "properties": {
+        "operation": { "type": "string" },
+        "old_uid": { "type": "integer" },
+        "new_uid": { "type": "integer" },
+        "capabilities_added": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "namespace_type": { "type": "string" }
+      }
+    },
+
+    "observation": {
+      "description": "The normalized, selector-matchable form of the event. The validator reads this rather than reaching into payload structs, which is what keeps it payload-agnostic.",
+      "type": "object",
+      "required": ["kind", "domain"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "ece.v1alpha1.schema.json#/$defs/capabilityKind" },
+        "domain": { "$ref": "ece.v1alpha1.schema.json#/$defs/domain" },
+        "target": {
+          "description": "The primary resource acted upon: an absolute path, a host:port, or a binary path, depending on domain.",
+          "type": "string"
+        },
+        "attributes": {
+          "description": "Resolved, kind-specific detail used for matching. A map so new probes can enrich observations without a schema change.",
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    }
+  }
+}

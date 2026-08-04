@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://allseer.dev/schema/decision/v1alpha1.json",
+  "title": "ALLSEER Governance Decision",
+  "description": "The verdict rendered for an observed event, with the full reasoning chain behind it. This is the system's public product and the record a human reads when asking why an agent was stopped, so it carries the reasoning rather than just the outcome.",
+  "type": "object",
+  "required": [
+    "id",
+    "session_id",
+    "event_id",
+    "timestamp",
+    "action",
+    "verdict",
+    "risk",
+    "reasoning",
+    "enforced"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "event_id": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+
+    "action": {
+      "description": "The outcome the enforcement layer acts on.",
+      "$ref": "ece.v1alpha1.schema.json#/$defs/action"
+    },
+
+    "verdict": { "$ref": "#/$defs/verdict" },
+    "risk": { "$ref": "#/$defs/riskAssessment" },
+
+    "reasoning": {
+      "description": "The ordered chain of steps that produced this action. What makes the system explainable rather than oracular: a user must be able to follow validation to risk to policy without reading source code.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/reasoningStep" },
+      "minItems": 1
+    },
+
+    "matched_grant": {
+      "description": "The grant that covered the event, if any.",
+      "$ref": "ece.v1alpha1.schema.json#/$defs/grant"
+    },
+
+    "matched_rule": {
+      "description": "The policy rule that determined the action, or 'default'.",
+      "type": "string"
+    },
+
+    "latency": {
+      "description": "Nanoseconds from event receipt to decision. In enforce mode this delay is charged directly to the agent's syscall, so a slow decision path is a usability failure.",
+      "type": "integer",
+      "minimum": 0
+    },
+
+    "enforced": {
+      "description": "Whether the action was actually applied. False means advisory: monitor mode, or an enforcement failure. Critical for audit, since a 'block' that was never enforced must not read as if it stopped something.",
+      "type": "boolean"
+    }
+  },
+
+  "$defs": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "within_envelope",
+        "outside_envelope",
+        "explicitly_denied",
+        "constraint_violation",
+        "grant_exceeded",
+        "indeterminate"
+      ],
+      "description": "within_envelope: matched a grant. outside_envelope: no grant covered it, the core finding this system exists to produce. explicitly_denied: a denial matched, stronger than merely ungranted. constraint_violation: individually granted but exceeded a session budget. grant_exceeded: right capability, wrong target, a different story from a capability never expected at all. indeterminate: validation could not conclude, typically because enrichment failed. Indeterminate must never be silently treated as allowed."
+    },
+
+    "level": {
+      "type": "string",
+      "enum": ["none", "low", "medium", "high", "critical"]
+    },
+
+    "riskAssessment": {
+      "type": "object",
+      "required": ["score", "level", "factors", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "score": {
+          "description": "Normalized to [0,100]. Normalization matters because thresholds are user-configurable, and users cannot reason about an unbounded scale.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "level": { "$ref": "#/$defs/level" },
+        "factors": {
+          "description": "The individual contributions behind the score. Kept so a surprising score can be traced to its cause instead of taken on faith.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/factor" }
+        },
+        "confidence": {
+          "description": "How much evidence backed the assessment. A high score with low confidence is a candidate for human review rather than an automatic block.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+
+    "factor": {
+      "type": "object",
+      "required": ["name", "weight", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "The heuristic that fired, e.g. 'sensitive_path' or 'novel_egress'.",
+          "type": "string"
+        },
+        "weight": {
+          "description": "Contribution to the final score. Signed: factors may reduce risk as well as raise it.",
+          "type": "number"
+        },
+        "description": { "type": "string" },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+
+    "reasoningStep": {
+      "type": "object",
+      "required": ["stage", "conclusion"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": {
+          "description": "The module that produced this step.",
+          "type": "string"
+        },
+        "conclusion": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    }
+  }
+}

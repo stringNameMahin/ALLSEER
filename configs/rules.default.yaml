@@ -1,0 +1,243 @@
+# ALLSEER default policy rule set.
+#
+# Rules map evidence (verdict, capability, risk score) onto actions. This is the
+# only file an operator is expected to edit routinely, and the only place
+# judgment lives. Everything upstream produces facts.
+#
+# Evaluation is first-match-wins, ordered by priority descending, then by
+# declaration order. Ordering is therefore significant, and `priority` exists to
+# make it explicit rather than dependent on file layout.
+#
+# Design intent: conservative enough to be safe, quiet enough to leave enabled.
+# A rule set that fires constantly trains users to ignore it, which is worse
+# than having no rules at all.
+
+name: default
+version: "1"
+description: >
+  Conservative baseline policy for governing AI coding agents. Blocks
+  unambiguously dangerous kernel and credential operations, requests approval
+  for meaningful envelope departures, and stays quiet on routine work.
+
+# Applied when no rule matches. The single most consequential line in this file.
+default_action: warn
+
+rules:
+  # --- Always block: no legitimate coding task needs these -------------------
+
+  - id: kernel-surface-tampering
+    description: >
+      Loading kernel modules or eBPF programs, or reading kallsyms. A coding
+      agent has no legitimate reason to touch the kernel's own attack surface,
+      and an agent doing so may be attacking the monitoring system itself.
+    priority: 1000
+    enabled: true
+    match:
+      domains: [kernel]
+    action: block
+    terminal: true
+
+  - id: privilege-escalation
+    description: >
+      Attempts to gain privileges. Blocked whatever the envelope says: an
+      envelope granting privilege escalation to a coding agent is a generation
+      failure, not a requirement.
+    priority: 990
+    enabled: true
+    match:
+      capabilities: [priv.escalate, priv.setuid, priv.capset]
+      verdicts: [outside_envelope, explicitly_denied, grant_exceeded]
+    action: block
+    terminal: true
+
+  - id: debugger-attach
+    description: >
+      ptrace against another process. Reading another process's memory is how
+      credentials are stolen from a running agent or from the daemon itself.
+    priority: 980
+    enabled: true
+    match:
+      capabilities: [process.ptrace]
+      verdicts: [outside_envelope, explicitly_denied]
+    action: block
+    terminal: false
+
+  # --- Explicit denials always win ------------------------------------------
+
+  - id: envelope-explicit-denial
+    description: >
+      The envelope specifically forbade this. Denials exist for carve-outs the
+      envelope's author anticipated, so a match here is a deliberate boundary
+      being crossed rather than an unanticipated one.
+    priority: 900
+    enabled: true
+    match:
+      verdicts: [explicitly_denied]
+    action: block
+
+  # --- Credential and exfiltration patterns ---------------------------------
+
+  - id: credential-access-high-risk
+    description: >
+      Reading credential material with a high risk score. This is the first half
+      of the pattern this system most wants to catch; the second half is egress.
+    priority: 850
+    enabled: true
+    match:
+      verdicts: [outside_envelope, grant_exceeded]
+      domains: [filesystem]
+      min_risk_score: 70
+      min_confidence: 0.6
+    action: request_approval
+
+  - id: unexpected-network-egress
+    description: >
+      A network connection the envelope did not anticipate. Egress is the
+      highest-consequence common capability: it is how data leaves, and it
+      cannot be undone after the fact.
+    priority: 840
+    enabled: true
+    match:
+      verdicts: [outside_envelope, grant_exceeded]
+      capabilities: [net.connect, net.send]
+    action: request_approval
+
+  - id: raw-socket
+    description: >
+      Raw socket creation bypasses normal protocol handling and is not something
+      a coding task produces.
+    priority: 830
+    enabled: true
+    match:
+      capabilities: [net.rawsocket]
+      verdicts: [outside_envelope, explicitly_denied, grant_exceeded]
+    action: block
+
+  # --- Workspace boundary ---------------------------------------------------
+
+  - id: workspace-escape-write
+    description: >
+      A write outside the declared workspace. Categorically different from
+      writing the wrong file inside it: the task's blast radius was defined by
+      that boundary.
+    priority: 800
+    enabled: true
+    match:
+      violation_types: [workspace_escape]
+      domains: [filesystem]
+      capabilities: [fs.write, fs.create, fs.delete, fs.rename, fs.truncate]
+    action: request_approval
+
+  - id: workspace-escape-read
+    description: >
+      A read outside the workspace. Common and usually benign, since toolchains,
+      caches, and system libraries all live outside, so this warns rather than
+      prompts, and the risk engine escalates the cases that matter.
+    priority: 790
+    enabled: true
+    match:
+      violation_types: [workspace_escape]
+      capabilities: [fs.read]
+      max_risk_score: 60
+    action: warn
+
+  # --- Destructive operations -----------------------------------------------
+
+  - id: ungranted-delete
+    description: >
+      Deleting files the envelope did not anticipate. Weighted toward prompting
+      because deletion is the least recoverable filesystem operation.
+    priority: 750
+    enabled: true
+    match:
+      verdicts: [outside_envelope, grant_exceeded]
+      capabilities: [fs.delete, fs.truncate]
+    action: request_approval
+
+  - id: permission-change
+    description: >
+      Changing file ownership or permissions. Rarely part of a coding task, and
+      a common step in establishing persistence.
+    priority: 740
+    enabled: true
+    match:
+      capabilities: [fs.chmod, fs.chown]
+      verdicts: [outside_envelope, grant_exceeded]
+    action: request_approval
+
+  # --- Constraint and telemetry integrity -----------------------------------
+
+  - id: session-constraint-exceeded
+    description: >
+      A session-wide budget was exhausted. Each individual operation may have
+      been granted; collectively they exceeded what the task warranted.
+    priority: 700
+    enabled: true
+    match:
+      verdicts: [constraint_violation]
+    action: request_approval
+
+  - id: indeterminate-high-risk
+    description: >
+      Validation could not reach a conclusion, typically an unresolvable path
+      or an uncorrelated IP, and the risk signals are elevated. Unresolved is
+      not the same as safe, so this escalates rather than passing through.
+    priority: 690
+    enabled: true
+    match:
+      verdicts: [indeterminate]
+      min_risk_score: 50
+    action: request_approval
+
+  - id: indeterminate-low-risk
+    description: >
+      Validation was inconclusive but nothing else is elevated. Logged so that
+      enrichment gaps are visible and fixable rather than invisible.
+    priority: 680
+    enabled: true
+    match:
+      verdicts: [indeterminate]
+      max_risk_score: 50
+    action: warn
+
+  # --- General envelope departures ------------------------------------------
+
+  - id: high-risk-departure
+    description: >
+      Any envelope departure scoring high with reasonable confidence. The
+      confidence floor keeps a shaky score from triggering an interruption.
+    priority: 600
+    enabled: true
+    match:
+      verdicts: [outside_envelope, grant_exceeded]
+      min_risk_score: 75
+      min_confidence: 0.5
+    action: request_approval
+
+  - id: medium-risk-departure
+    description: Moderate-risk departures are surfaced but not interrupted.
+    priority: 590
+    enabled: true
+    match:
+      verdicts: [outside_envelope, grant_exceeded]
+      min_risk_score: 40
+      max_risk_score: 75
+    action: warn
+
+  # --- Expected behavior ----------------------------------------------------
+
+  - id: within-envelope
+    description: >
+      The observation matched a grant. Recorded but not surfaced. This is the
+      overwhelming majority of events, and the audit log is where it belongs.
+    priority: 100
+    enabled: true
+    match:
+      verdicts: [within_envelope]
+    action: allow
+
+# TODO(policy): validate this rule set against recorded benign sessions and
+# measure how often each rule fires. Any rule that fires on routine work needs
+# tightening or removal before enforce mode is credible.
+# TODO(policy): add a strict rule set for CI, where there is no human to prompt
+# and request_approval must collapse to block.

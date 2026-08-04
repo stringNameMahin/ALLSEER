@@ -1,0 +1,127 @@
+# Example ALLSEER daemon configuration.
+#
+# Every value here is a recommended starting point, not the eventual one. The
+# defaults are conservative in what they enforce (monitor mode) and strict in
+# what they observe (fail-closed on telemetry loss), because a governance system
+# has to earn the right to block. Run it in monitor mode until its
+# false-positive rate is known, then tighten.
+#
+# Layering: defaults < this file < environment < command line. Security-relevant
+# settings may only be restricted by later layers, never relaxed. An environment
+# variable must not be able to downgrade enforce mode to monitor, since the
+# environment is what a compromised agent is best positioned to influence.
+
+daemon:
+  socket_path: /run/allseer/allseerd.sock
+  # Socket permissions are the primary access control. Anyone who can write to
+  # this socket can create sessions, and therefore define what an agent may do.
+  socket_mode: 0660
+  state_dir: /var/lib/allseer
+  max_concurrent_sessions: 8
+  shutdown_grace: 30s
+  # eBPF loading needs CAP_BPF and CAP_SYS_ADMIN; steady-state operation does
+  # not. Keeping them after attach is an unnecessary standing risk.
+  drop_privileges: true
+  run_as_user: allseer
+
+telemetry:
+  object_path: /usr/lib/allseer/allseer.bpf.o
+  # Must be a power-of-two multiple of the page size. Larger buffers tolerate
+  # consumer stalls at the cost of locked memory.
+  ring_buffer_size: 8388608
+  event_channel_size: 16384
+  # Empty means attach everything. Narrowing this is the main lever for reducing
+  # overhead, paid for in blind spots.
+  enabled_probes: []
+  enable_binary_hashing: false
+  enable_dns_correlation: true
+  # A gap in telemetry means the system can no longer make sound statements
+  # about what the agent did, including "nothing bad happened". Halting is the
+  # honest response, and also the disruptive one.
+  fail_closed_on_drop: true
+
+intent:
+  # "rules" is deterministic and offline. "llm" is more accurate on novel
+  # phrasing. "hybrid" runs both and takes the intersection.
+  analyzer: hybrid
+  timeout: 20s
+  fallback_to_rules: true
+  enable_sanitizer: true
+  llm:
+    provider: anthropic
+    model: claude-sonnet-5
+    # The key itself is never stored in config, so this file can be committed
+    # and shared without leaking credentials.
+    api_key_env: ANTHROPIC_API_KEY
+    max_tokens: 4096
+    timeout: 15s
+    max_retries: 2
+
+envelope:
+  profile_dir: /etc/allseer/profiles
+  require_approval: true
+  # The setting most likely to quietly disable the human-in-the-loop guarantee.
+  # Zero disables auto-approval entirely; raise it only once envelope quality is
+  # measured rather than assumed.
+  auto_approve_below_risk: 0
+  default_ttl: 1h
+  # An envelope with fifty grants is not meaningfully constraining anything.
+  max_grants: 32
+
+risk:
+  # Empty means all registered scorers.
+  enabled_scorers: []
+  scorer_weights:
+    sensitive_path: 1.0
+    workspace_escape: 0.8
+    novel_network_destination: 1.0
+    privilege_change: 1.5
+    credential_access: 2.0
+    exfiltration_pattern: 2.0
+    violation_rate: 0.6
+  # Deployment-specific additions to the built-in list.
+  sensitive_paths:
+    - /etc/shadow
+    - /etc/sudoers
+    - ~/.ssh/**
+    - ~/.aws/**
+    - ~/.kube/config
+    - "**/.env"
+    - "**/.env.*"
+  sensitive_hosts: []
+  thresholds:
+    low: 20
+    medium: 45
+    high: 70
+    critical: 90
+  # Baselines are valuable for the research contribution but add a poisoning
+  # surface: an attacker who can shape the baseline can normalize their own
+  # behavior. Off until that is addressed.
+  enable_baseline: false
+
+policy:
+  rule_set_path: /etc/allseer/rules.yaml
+  # Start here. A system that begins by blocking will be uninstalled before it
+  # is trusted.
+  default_mode: monitor
+  hot_reload: true
+  approval_timeout: 5m
+  # "deny" is the safe default, but a deny-on-timeout firing while the user is
+  # at lunch kills long-running tasks. A genuine tradeoff to make consciously.
+  approval_timeout_action: deny
+
+audit:
+  path: /var/lib/allseer/audit.jsonl
+  format: jsonl
+  # Expensive, but necessary for research analysis and replay-based development.
+  record_all_events: false
+  max_size_mb: 512
+  retention_days: 90
+  # Without this, a crash loses exactly the records most likely to matter.
+  sync_writes: true
+
+logging:
+  level: info
+  format: json
+  output: stderr
+  add_source: false

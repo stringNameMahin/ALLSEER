@@ -1,0 +1,148 @@
+{
+  "$comment": "Reference envelope for the prompt 'add a rate limiter to the HTTP middleware and run the tests'. Hand-written to illustrate the intended precision of a generated envelope: narrow path globs, a specific executable allowlist, a proxy-only network grant, and explicit denials carving dangerous paths out of a broad workspace write grant. Used as a schema fixture and as a few-shot example for the LLM analyzer.",
+
+  "schema_version": "allseer.dev/ece/v1alpha1",
+  "id": "3f8a1c2e-5b7d-4e91-a0c3-8d2f6b4e9a17",
+  "session_id": "sess-01HQ7X8K2M",
+  "created_at": "2026-07-31T09:14:22Z",
+  "expires_at": "2026-07-31T09:44:22Z",
+
+  "intent": {
+    "raw_prompt": "add a rate limiter to the HTTP middleware and run the tests",
+    "summary": "Implement rate limiting in the HTTP middleware layer, then run the Go test suite to verify.",
+    "task_type": "feature-implementation",
+    "analyzer": "llm:claude-sonnet-5",
+    "confidence": 0.87,
+    "ambiguities": [
+      "Rate limiting algorithm unspecified (token bucket vs sliding window).",
+      "Unclear whether an external rate-limiting dependency may be added, which would require network access to the module proxy."
+    ]
+  },
+
+  "grants": [
+    {
+      "kind": "fs.read",
+      "domain": "filesystem",
+      "selector": {
+        "path_patterns": [
+          "/home/dev/project/**",
+          "/usr/local/go/**",
+          "/home/dev/go/pkg/mod/**"
+        ]
+      },
+      "rationale": "Read project sources to locate the middleware layer, plus the Go toolchain and module cache required to build."
+    },
+    {
+      "kind": "fs.write",
+      "domain": "filesystem",
+      "selector": {
+        "path_patterns": [
+          "/home/dev/project/internal/middleware/**",
+          "/home/dev/project/internal/middleware/*_test.go"
+        ]
+      },
+      "rationale": "The rate limiter and its tests belong in the middleware package. Writes are scoped to that package rather than the whole repo, so an edit elsewhere is a visible deviation."
+    },
+    {
+      "kind": "fs.create",
+      "domain": "filesystem",
+      "selector": {
+        "path_patterns": [
+          "/home/dev/project/internal/middleware/**",
+          "/tmp/go-build*/**"
+        ]
+      },
+      "rationale": "New source files in the target package; the Go build cache writes to a temporary directory."
+    },
+    {
+      "kind": "process.exec",
+      "domain": "process",
+      "selector": {
+        "executables": [
+          "/usr/local/go/bin/go",
+          "/usr/bin/gofmt",
+          "/bin/sh"
+        ],
+        "arg_patterns": ["go build*", "go test*", "go vet*", "gofmt*"],
+        "max_count": 40
+      },
+      "rationale": "Building and testing requires the Go toolchain. The shell is included because the toolchain invokes it for cgo and generate steps. Note that arg_patterns is advisory only and is not a security boundary."
+    },
+    {
+      "kind": "net.connect",
+      "domain": "network",
+      "selector": {
+        "hosts": ["proxy.golang.org", "sum.golang.org"],
+        "ports": [443],
+        "protocols": ["tcp"]
+      },
+      "rationale": "Only required if the implementation adds a dependency. Marked optional because a standard-library implementation needs no egress at all.",
+      "optional": true
+    },
+    {
+      "kind": "net.dns",
+      "domain": "network",
+      "selector": { "hosts": ["proxy.golang.org", "sum.golang.org"] },
+      "rationale": "Name resolution for the module proxy, needed only if the optional network grant is exercised.",
+      "optional": true
+    }
+  ],
+
+  "denials": [
+    {
+      "kind": "fs.write",
+      "domain": "filesystem",
+      "selector": { "path_patterns": ["/home/dev/project/.git/**"] },
+      "rationale": "Direct manipulation of git internals is never appropriate for a code-editing task and would let an agent rewrite history rather than make a reviewable change."
+    },
+    {
+      "kind": "fs.write",
+      "domain": "filesystem",
+      "selector": {
+        "path_patterns": [
+          "/home/dev/project/.github/**",
+          "/home/dev/project/Makefile",
+          "/home/dev/project/**/*.yml"
+        ]
+      },
+      "rationale": "CI configuration is a privileged execution path. Modifying it converts a code change into an execution-environment change, which this task does not require."
+    },
+    {
+      "kind": "fs.read",
+      "domain": "filesystem",
+      "selector": {
+        "path_patterns": [
+          "/home/dev/.ssh/**",
+          "/home/dev/.aws/**",
+          "/home/dev/.config/gh/**",
+          "/home/dev/project/.env*"
+        ]
+      },
+      "rationale": "Credential material is not required to implement a rate limiter. Reading it is the first half of the credential-access-then-egress pattern this system exists to catch."
+    }
+  ],
+
+  "constraints": {
+    "max_duration": "30m",
+    "max_processes": 24,
+    "max_file_writes": 60,
+    "max_network_bytes": 52428800,
+    "workspace_root": "/home/dev/project",
+    "allow_network_by_default": false
+  },
+
+  "default_action": "request_approval",
+
+  "approval": {
+    "approved_by": "dev@workstation",
+    "approved_at": "2026-07-31T09:14:41Z",
+    "method": "cli",
+    "modifications": [
+      "Narrowed fs.write from /home/dev/project/** to the middleware package.",
+      "Added the credential-path read denial."
+    ]
+  },
+
+  "sealed": true,
+  "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

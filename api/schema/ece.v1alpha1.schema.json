@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://allseer.dev/schema/ece/v1alpha1.json",
+  "title": "Expected Capability Envelope",
+  "description": "A task-specific specification of the capabilities an AI agent is expected to exercise, derived from user intent before execution begins. The envelope is the reference against which all observed kernel behavior is validated. It is immutable once sealed.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "session_id",
+    "created_at",
+    "intent",
+    "grants",
+    "constraints",
+    "default_action",
+    "sealed"
+  ],
+  "additionalProperties": false,
+
+  "properties": {
+    "schema_version": {
+      "description": "Format identifier. A daemon MUST refuse an envelope whose version it cannot faithfully interpret; silently ignoring an unknown restriction field would be a security failure.",
+      "type": "string",
+      "const": "allseer.dev/ece/v1alpha1"
+    },
+
+    "id": {
+      "description": "Unique envelope identifier (UUIDv4).",
+      "type": "string",
+      "format": "uuid"
+    },
+
+    "session_id": {
+      "description": "The governed session this envelope applies to.",
+      "type": "string"
+    },
+
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+
+    "expires_at": {
+      "description": "Validity bound. An envelope describes one task, and tasks end; an unexpiring envelope becomes a standing grant, which is exactly what this system exists to avoid.",
+      "type": "string",
+      "format": "date-time"
+    },
+
+    "intent": { "$ref": "#/$defs/intentRecord" },
+
+    "grants": {
+      "description": "Expected capabilities. The ABSENCE of a grant is the enforcement mechanism: anything not granted is by construction outside the envelope.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/grant" },
+      "maxItems": 64
+    },
+
+    "denials": {
+      "description": "Explicit prohibitions that override any grant. Used for carve-outs a broad grant would otherwise swallow, such as granting repo-wide writes while denying writes to .git. Denials always win.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/grant" }
+    },
+
+    "constraints": { "$ref": "#/$defs/constraints" },
+
+    "default_action": {
+      "description": "Applied to observations matching no grant and no denial. This is the envelope's posture.",
+      "$ref": "#/$defs/action"
+    },
+
+    "approval": { "$ref": "#/$defs/approvalRecord" },
+
+    "sealed": {
+      "description": "Marks the envelope immutable. The daemon MUST refuse to enforce an unsealed envelope and MUST refuse to modify a sealed one.",
+      "type": "boolean"
+    },
+
+    "digest": {
+      "description": "SHA-256 over the canonical serialization, excluding this field. Detects tampering between generation and enforcement.",
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  },
+
+  "$defs": {
+    "action": {
+      "type": "string",
+      "enum": ["allow", "warn", "request_approval", "block"],
+      "description": "allow: permit and record. warn: permit but flag (an observability outcome, not a control). request_approval: suspend and ask a human. block: prevent or terminate."
+    },
+
+    "severity": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"]
+    },
+
+    "domain": {
+      "type": "string",
+      "enum": ["filesystem", "process", "network", "privilege", "ipc", "kernel"]
+    },
+
+    "capabilityKind": {
+      "description": "A specific capability. Deliberately coarser than syscalls: an envelope written from user intent should say 'reads source files', not 'may call openat2'. Syscall detail is retained on the raw event for forensics.",
+      "type": "string",
+      "enum": [
+        "fs.read", "fs.write", "fs.create", "fs.delete", "fs.rename",
+        "fs.chmod", "fs.chown", "fs.truncate", "fs.link", "fs.mount",
+
+        "process.exec", "process.fork", "process.exit", "process.signal",
+        "process.ptrace",
+
+        "net.connect", "net.bind", "net.listen", "net.accept", "net.send",
+        "net.receive", "net.dns", "net.rawsocket",
+
+        "priv.escalate", "priv.setuid", "priv.capset", "priv.namespace",
+        "priv.seccomp",
+
+        "ipc.pipe", "ipc.sharedmem", "ipc.unixsocket",
+
+        "kernel.moduleload", "kernel.bpfload", "kernel.kallsyms"
+      ]
+    },
+
+    "selector": {
+      "description": "Narrows a capability to specific resources. A grant with no selector is unbounded and almost always a generation failure rather than a genuine requirement. Only fields meaningful to the grant's kind are populated.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path_patterns": {
+          "description": "Glob patterns for filesystem capabilities. Must be evaluated against the resolved absolute path. Matching a pre-resolution path allows a symlink inside a granted directory to point anywhere on the filesystem, silently converting a narrow grant into an unbounded one.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "hosts": {
+          "description": "Hostnames, wildcard domains, CIDR blocks, or literal IPs.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ports": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 65535 }
+        },
+        "protocols": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "executables": {
+          "description": "Binaries that may be launched, matched against the resolved path.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "arg_patterns": {
+          "description": "Command-line constraints. A readability convenience, not a security boundary: argument matching is trivially evaded and must never be the only control.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "max_count": {
+          "description": "How many times the capability may be exercised. Zero means unlimited.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+
+    "grant": {
+      "type": "object",
+      "required": ["kind", "domain"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/capabilityKind" },
+        "domain": { "$ref": "#/$defs/domain" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "rationale": {
+          "description": "Why this capability is expected. Required by convention: a grant that cannot explain itself signals that intent analysis went wrong, and a human reviewing a block needs to know why the capability was ever anticipated.",
+          "type": "string"
+        },
+        "optional": {
+          "description": "The agent may legitimately never exercise this. An unexercised non-optional grant is worth reporting; the task may not have done what was asked.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+
+    "intentRecord": {
+      "description": "How this envelope came to exist. This is what makes an envelope reviewable: a human can ask whether the grants actually follow from the request.",
+      "type": "object",
+      "required": ["raw_prompt", "summary", "analyzer", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "raw_prompt": {
+          "description": "The user's request verbatim. Never normalized, since the exact text is what a reviewer needs.",
+          "type": "string"
+        },
+        "summary": {
+          "description": "The analyzer's restatement. Divergence from raw_prompt is a warning sign: the system may be governing a task the user did not ask for.",
+          "type": "string"
+        },
+        "task_type": { "type": "string" },
+        "analyzer": {
+          "description": "Which implementation produced this analysis, e.g. 'llm:claude-sonnet-5' or 'rules:v3'. Lets a systematically bad analyzer be traced from the envelopes it produced.",
+          "type": "string"
+        },
+        "confidence": {
+          "description": "Self-reported certainty. Low confidence should route to human approval rather than silently producing a permissive envelope.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "ambiguities": {
+          "description": "What the analyzer could not resolve: the questions worth asking before execution starts.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "constraints": {
+      "description": "Session-wide bounds independent of individual grants. The backstop for envelopes that are individually reasonable but collectively excessive.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_duration": {
+          "description": "Wall-clock bound as a Go duration string, e.g. '30m'.",
+          "type": "string"
+        },
+        "max_processes": { "type": "integer", "minimum": 0 },
+        "max_file_writes": { "type": "integer", "minimum": 0 },
+        "max_network_bytes": {
+          "description": "Total egress cap. Volume is the clearest exfiltration signal available without inspecting payloads.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "workspace_root": {
+          "description": "Absolute path the task is scoped to. Filesystem grants are interpreted relative to it, and escaping it is significant on its own.",
+          "type": "string"
+        },
+        "allow_network_by_default": {
+          "description": "Inverts network posture. Defaults false: for a coding agent, egress should be the exception.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+
+    "approvalRecord": {
+      "type": "object",
+      "required": ["approved_by", "approved_at", "method"],
+      "additionalProperties": false,
+      "properties": {
+        "approved_by": { "type": "string" },
+        "approved_at": { "type": "string", "format": "date-time" },
+        "method": {
+          "description": "How approval was obtained, e.g. 'cli' or 'auto:trusted-workspace'. An auto-approval is still an approval and must be as visible as a human one.",
+          "type": "string"
+        },
+        "modifications": {
+          "description": "Changes the approver made to the generated envelope. Systematic edits are the strongest available signal that the analyzer is miscalibrated.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}
