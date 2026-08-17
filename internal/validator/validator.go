@@ -196,11 +196,11 @@ type NetworkMatcher interface {
 // grants; within a class the most specific entry wins, measured from a grant's
 // broadest selector; ties break toward the earlier envelope index.
 //
-// TODO(validator): implement the default validator as a pure function, with a
-// table-driven suite covering every ViolationType. It owns envelope expiry,
-// MaxCount enforcement against SessionState.GrantUseCount, and mapping a
-// MatchResult carrying Unevaluable to ViolationUnresolvable and
-// VerdictIndeterminate rather than to a selector mismatch.
+// Done: DefaultValidator in validate.go implements Validate and
+// ValidateSession as pure functions, producing every Verdict and every
+// ViolationType. Order is envelope expiry, then resolution, then denials, then
+// grants, with anything unevaluable stopping at indeterminate — including an
+// unevaluable denial, which cannot be dismissed just because a grant matched.
 // TODO(validator): decide how a two-path operation is validated. A rename or
 // link names a source and a destination, Observation has one Target, and
 // selector matching evaluates only that, so a rename *into* a protected path is
