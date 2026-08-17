@@ -1,0 +1,144 @@
+# Adversarial network host-matching corpus.
+#
+# Format: three tab-separated fields.
+#
+#	<expect>	<pattern>	<host-or-ip>
+#
+# <expect> is one of:
+#	match		MatchHost(pattern, host) is true
+#	nomatch		MatchHost(pattern, host) is false, and the two were comparable
+#	invalid		ValidateHostPattern(pattern) returns an error, and nothing matches
+#	uncorrelated	the pattern names hosts and the observation is an address, or
+#			the reverse; no match, and CorrelationMissing is true
+#
+# Blank lines and lines beginning with '#' are ignored. Every case carries a
+# comment naming the confusion it defends against. Loaded by
+# internal/validator/network_corpus_test.go.
+#
+# Port cases are not here: MatchPort takes a list, which this format cannot
+# express. They live in TestMatchPort.
+
+# --- Literal addresses -------------------------------------------------------
+
+match	93.184.216.34	93.184.216.34
+nomatch	93.184.216.34	93.184.216.35
+match	2606:2800:220:1:248:1893:25c8:1946	2606:2800:220:1:248:1893:25c8:1946
+# IPv6 has many spellings of one address; they are the same destination.
+match	2001:db8::1	2001:0db8:0000:0000:0000:0000:0000:0001
+match	2001:DB8::1	2001:db8::1
+# An IPv4-mapped IPv6 address is the IPv4 address. A dual-stack socket reports
+# the mapped form for a connection an envelope would write in dotted quad.
+match	93.184.216.34	::ffff:93.184.216.34
+match	::ffff:93.184.216.34	93.184.216.34
+# Different families are different destinations.
+nomatch	127.0.0.1	::1
+# An interface zone on an observation is stripped, not treated as a new host.
+match	fe80::1	fe80::1%eth0
+
+# --- CIDR blocks -------------------------------------------------------------
+
+match	10.0.0.0/8	10.1.2.3
+nomatch	10.0.0.0/8	11.0.0.1
+# Boundaries, off by one on each side.
+match	10.0.0.0/8	10.0.0.0
+match	10.0.0.0/8	10.255.255.255
+nomatch	10.0.0.0/8	9.255.255.255
+nomatch	10.0.0.0/8	11.0.0.0
+match	192.168.1.0/24	192.168.1.255
+nomatch	192.168.1.0/24	192.168.2.0
+# A single-address block is the address.
+match	93.184.216.34/32	93.184.216.34
+nomatch	93.184.216.34/32	93.184.216.35
+# Host bits set in the pattern are masked away rather than making it unmatchable.
+match	10.1.2.3/8	10.9.9.9
+# A block matches a mapped address, since the mapped address is IPv4.
+match	10.0.0.0/8	::ffff:10.1.2.3
+# ... and an IPv6 block does not swallow IPv4.
+nomatch	::/0	10.1.2.3
+match	::/0	2001:db8::1
+# The catch-all v4 block. Legal, alarming, and a linting concern, not a
+# matching one.
+match	0.0.0.0/0	8.8.8.8
+
+# --- Hostnames ---------------------------------------------------------------
+
+match	api.github.com	api.github.com
+nomatch	api.github.com	api.github.io
+# DNS is case-insensitive; a name is not evadable by case, unlike a path.
+match	api.github.com	API.GITHUB.COM
+match	API.GitHub.com	api.github.com
+# The root's trailing dot is the same name.
+match	api.github.com	api.github.com.
+match	api.github.com.	api.github.com
+# Suffix confusion: a longer name that ends in the granted one is a different
+# host, and an attacker-registered domain is the obvious way to exploit a
+# careless suffix comparison.
+nomatch	github.com	evil-github.com
+nomatch	github.com	github.com.evil.tld
+nomatch	github.com	notgithub.com
+# Prefix confusion in the other direction.
+nomatch	api.github.com	api.github.com.attacker.net
+# A subdomain is not the apex.
+nomatch	github.com	api.github.com
+nomatch	api.github.com	github.com
+
+# --- Wildcard domains --------------------------------------------------------
+
+# "*.example.com" covers exactly one additional label, as a TLS certificate
+# does. Deeper names and the apex are not covered.
+match	*.github.com	api.github.com
+match	*.github.com	API.GitHub.com
+nomatch	*.github.com	a.b.github.com
+nomatch	*.github.com	github.com
+# The wildcard is a whole label: a name merely ending in "github.com" is not
+# under it, and neither is one that continues past it.
+nomatch	*.github.com	evil-github.com
+nomatch	*.github.com	api.github.com.evil.tld
+# A wildcard over a single-label suffix is legal, for internal networks.
+match	*.internal	build.internal
+nomatch	*.internal	a.b.internal
+
+# --- Names and addresses are never assumed equivalent ------------------------
+
+# The rule the whole module exists for. A granted hostname does not cover an
+# address, however likely the correspondence: reverse lookups lie, DNS over
+# HTTPS defeats correlation, and a hardcoded address is exactly how a grant
+# would be evaded. These escalate to the risk engine instead.
+uncorrelated	api.github.com	140.82.121.5
+uncorrelated	*.github.com	140.82.121.5
+uncorrelated	140.82.121.5	api.github.com
+uncorrelated	10.0.0.0/8	build.internal
+# Correlation failure is not a spelling problem: even a name that reads like an
+# address is not compared against one.
+uncorrelated	localhost	127.0.0.1
+
+# --- Malformed patterns fail closed -----------------------------------------
+
+# A port does not belong in a host selector; Selector.Ports carries it.
+invalid	api.github.com:443	api.github.com
+invalid	93.184.216.34:443	93.184.216.34
+# A wildcard is only a leading label, never an infix or a bare star.
+invalid	api-*.github.com	api-x.github.com
+invalid	*	api.github.com
+invalid	*.	api.github.com
+invalid	*.*.github.com	a.b.github.com
+invalid	**.github.com	a.github.com
+# Malformed names.
+invalid	api..github.com	api.github.com
+invalid	-github.com	github.com
+invalid	github-.com	github.com
+invalid	api.github.com/v3	api.github.com
+# A URL is not a host.
+invalid	https://api.github.com	api.github.com
+# Non-ASCII is rejected outright rather than normalized: the resolver sees the
+# punycode A-label, and rejecting also means an envelope cannot hide a Cyrillic
+# lookalike of a real domain.
+invalid	gіthub.com	github.com
+invalid	café.example.com	xn--caf-dma.example.com
+# Malformed blocks.
+invalid	10.0.0.0/33	10.1.2.3
+invalid	10.0.0.0/	10.1.2.3
+invalid	/8	10.1.2.3
+# Empty and whitespace.
+invalid		api.github.com
+invalid	 api.github.com	api.github.com

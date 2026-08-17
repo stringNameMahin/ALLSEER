@@ -5,15 +5,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
-// corpusPath is the shared adversarial table. It lives under test/testdata so
-// it is reviewable as data rather than buried in a Go literal, and so a future
-// matcher implementation can be held to the same expectations.
-const corpusPath = "../../test/testdata/paths/corpus.tsv"
+// The adversarial tables live under test/testdata so they are reviewable as
+// data rather than buried in Go literals, and so a future matcher
+// implementation can be held to the same expectations.
+const (
+	pathCorpusPath    = "../../test/testdata/paths/corpus.tsv"
+	networkCorpusPath = "../../test/testdata/network/corpus.tsv"
+)
 
+// corpusCase is one line of a corpus file. The third field is a path for the
+// path corpus and a host for the network one.
 type corpusCase struct {
 	line    int
 	expect  string
@@ -21,7 +27,10 @@ type corpusCase struct {
 	path    string
 }
 
-func loadCorpus(t *testing.T) []corpusCase {
+// loadCorpus parses a corpus file, enforcing the shared format. Both matchers
+// use it, so a malformed table fails as a format error rather than as a
+// mysterious matcher failure.
+func loadCorpus(t *testing.T, corpusPath string, expectations ...string) []corpusCase {
 	t.Helper()
 
 	f, err := os.Open(filepath.FromSlash(corpusPath))
@@ -39,13 +48,11 @@ func loadCorpus(t *testing.T) []corpusCase {
 		}
 		fields := strings.Split(raw, "\t")
 		if len(fields) != 3 {
-			t.Fatalf("corpus line %d: want 3 tab-separated fields, got %d: %q", line, len(fields), raw)
+			t.Fatalf("%s line %d: want 3 tab-separated fields, got %d: %q", corpusPath, line, len(fields), raw)
 		}
 		c := corpusCase{line: line, expect: fields[0], pattern: fields[1], path: fields[2]}
-		switch c.expect {
-		case "match", "nomatch", "invalid", "unresolved":
-		default:
-			t.Fatalf("corpus line %d: unknown expectation %q", line, c.expect)
+		if !slices.Contains(expectations, c.expect) {
+			t.Fatalf("%s line %d: unknown expectation %q, want one of %v", corpusPath, line, c.expect, expectations)
 		}
 		cases = append(cases, c)
 	}
@@ -58,10 +65,10 @@ func loadCorpus(t *testing.T) []corpusCase {
 	return cases
 }
 
-func TestCorpus(t *testing.T) {
+func TestPathCorpus(t *testing.T) {
 	m := NewPathMatcher()
 
-	for _, c := range loadCorpus(t) {
+	for _, c := range loadCorpus(t, pathCorpusPath, "match", "nomatch", "invalid", "unresolved") {
 		t.Run(fmt.Sprintf("line%d_%s", c.line, c.expect), func(t *testing.T) {
 			got := m.Match(c.pattern, c.path)
 
@@ -102,10 +109,10 @@ func TestCorpus(t *testing.T) {
 	}
 }
 
-// TestCorpusCoverage guards against the corpus quietly losing the case
+// TestPathCorpusCoverage guards against the corpus quietly losing the case
 // families it exists for. Counts are lower bounds, not exact.
-func TestCorpusCoverage(t *testing.T) {
-	cases := loadCorpus(t)
+func TestPathCorpusCoverage(t *testing.T) {
+	cases := loadCorpus(t, pathCorpusPath, "match", "nomatch", "invalid", "unresolved")
 
 	counts := map[string]int{}
 	for _, c := range cases {

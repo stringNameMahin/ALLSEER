@@ -185,16 +185,25 @@ type NetworkMatcher interface {
 // Done: the adversarial path corpus lives in test/testdata/paths/, with the
 // cases whose bytes cannot be reviewed as text (unicode normalization,
 // symlinks) in path_test.go.
+// Done: network semantics are specified in docs/network-matching.md and
+// implemented by NetworkPatternMatcher in network.go, with its corpus in
+// test/testdata/network/. Names and addresses are never assumed equivalent;
+// CorrelationMissing distinguishes an uncorrelated destination from a genuine
+// mismatch so the risk engine sees the difference.
 //
 // TODO(validator): implement the default validator as a pure function, with a
 // table-driven suite covering every ViolationType.
 // TODO(validator): specify grant precedence when several grants match. Leaning
 // most-specific-wins, with denials always overriding.
-// TODO(validator): implement NetworkMatcher and the composing Matcher over the
-// path matcher, Selector.Executables, and Selector.ArgPatterns.
+// TODO(validator): implement the composing Matcher over the path and network
+// matchers plus Selector.Executables, Selector.Protocols, and
+// Selector.ArgPatterns. It owns splitting Observation.Target into host and
+// port, and owns routing a CorrelationMissing result to scrutiny rather than
+// to a plain selector mismatch.
 // TODO(validator): lint selector patterns at envelope admission with
-// ValidatePattern, and warn on the case and unicode ambiguities documented in
-// docs/path-matching.md §5. An invalid denial denies nothing.
+// ValidatePattern and ValidateHostPattern, and warn on the case and unicode
+// ambiguities documented in docs/path-matching.md §5. An invalid denial denies
+// nothing.
 // TODO(validator): benchmark against a realistic build. A linear scan over
-// grants per event may not hold up on the hot path; BenchmarkMatchPath covers
-// only the single-pattern cost.
+// grants per event may not hold up on the hot path; BenchmarkMatchPath and
+// BenchmarkMatchHost cover only the single-pattern cost.
