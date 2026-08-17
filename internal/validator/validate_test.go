@@ -700,14 +700,9 @@ func TestValidateProducesEveryVerdict(t *testing.T) {
 		produced[c.res.Verdict] = true
 	}
 
-	for _, want := range []decision.Verdict{
-		decision.VerdictWithinEnvelope,
-		decision.VerdictOutsideEnvelope,
-		decision.VerdictExplicitlyDenied,
-		decision.VerdictGrantExceeded,
-		decision.VerdictConstraintViolation,
-		decision.VerdictIndeterminate,
-	} {
+	// Driven from the vocabulary rather than a local list, so a verdict added
+	// to decision.AllVerdicts without a case here fails immediately.
+	for _, want := range decision.AllVerdicts() {
 		if !produced[want] {
 			t.Errorf("no case produces verdict %q", want)
 		}
@@ -723,16 +718,7 @@ func TestValidateProducesEveryViolationType(t *testing.T) {
 	}
 	// ConstraintExceeded is produced by ValidateSession too, and by the
 	// per-event path above; both are covered by the cases below.
-	for _, want := range []ViolationType{
-		ViolationUngrantedCapability,
-		ViolationSelectorMismatch,
-		ViolationExplicitDenial,
-		ViolationCountExceeded,
-		ViolationConstraintExceeded,
-		ViolationEnvelopeExpired,
-		ViolationWorkspaceEscape,
-		ViolationUnresolvable,
-	} {
+	for _, want := range AllViolationTypes() {
 		if !produced[want] {
 			t.Errorf("no case produces violation %q", want)
 		}

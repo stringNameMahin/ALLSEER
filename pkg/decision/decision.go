@@ -83,6 +83,48 @@ const (
 	VerdictIndeterminate Verdict = "indeterminate"
 )
 
+// AllVerdicts returns every verdict the validator can produce.
+//
+// Vocabulary, not behavior: the same role capability.AllKinds plays for Kind.
+// It exists because a policy rule naming a verdict outside this set can never
+// match, and the rule set linter has no other way to prove that. Append-only,
+// like every wire-contract enum here.
+func AllVerdicts() []Verdict {
+	return []Verdict{
+		VerdictWithinEnvelope,
+		VerdictOutsideEnvelope,
+		VerdictExplicitlyDenied,
+		VerdictConstraintViolation,
+		VerdictGrantExceeded,
+		VerdictIndeterminate,
+	}
+}
+
+// ValidVerdict reports whether v is a verdict this build can produce.
+func ValidVerdict(v Verdict) bool {
+	for _, known := range AllVerdicts() {
+		if known == v {
+			return true
+		}
+	}
+	return false
+}
+
+// AllLevels returns every risk level, from lowest to highest.
+func AllLevels() []Level {
+	return []Level{LevelNone, LevelLow, LevelMedium, LevelHigh, LevelCritical}
+}
+
+// ValidLevel reports whether l is a level the risk engine can assign.
+func ValidLevel(l Level) bool {
+	for _, known := range AllLevels() {
+		if known == l {
+			return true
+		}
+	}
+	return false
+}
+
 // RiskAssessment is the scored evaluation of an observation.
 type RiskAssessment struct {
 	// Score is normalized to [0,100]. Normalization matters because thresholds

@@ -186,13 +186,35 @@ type LintIssue struct {
 	Message  string              `json:"message"`
 }
 
-// TODO(policy): implement first-match-wins evaluation ordered by priority then
-// declaration order, and document that ordering prominently.
-// TODO(policy): validate the shipped default rule set. It has to be
-// conservative enough to be safe and quiet enough to leave enabled.
-// TODO(policy): implement the linter: unreachable rules, shadowed rules,
-// conditions that can never match, rule sets whose default action is weaker
-// than any rule in them.
+// Done: first-match-wins evaluation is implemented by RuleEngine in
+// evaluate.go, ordered by priority descending then declaration order, sorted
+// once at load so Rules() reports exactly the sequence Evaluate walks. Two
+// rules there are not obvious from these types: Mode selects which rules are
+// eligible and never rewrites an action, because monitor mode exists to measure
+// what the policy would have done; and a condition with no evidence behind it
+// does not match, so a max_risk_score rule cannot fire on an event the risk
+// engine never scored.
+// Done: Loader is implemented by FileLoader in load.go, over YAML. This is
+// where the project's first dependency landed, gopkg.in/yaml.v3, taken
+// deliberately: the rule set is the one file an operator edits by hand, and
+// folded scalars are what make a rule's description readable enough to be
+// worth writing. Decoding is strict — unknown fields rejected, a second
+// document rejected, "enabled" required to be written out — because every one
+// of those defects otherwise produces a rule that silently matches differently
+// than it reads. Validation is the engine's own admission check, called rather
+// than reimplemented, so what loads runs.
+// Done: the shipped default rule set is loaded, admitted, and walked through
+// the engine by tests in load_test.go, which pin the outcomes its own rule
+// descriptions claim. What remains is empirical rather than structural and is
+// tracked in configs/rules.default.yaml: how often each rule fires on recorded
+// benign sessions.
+// Done: Linter is implemented by RuleLinter in lint.go. It reports only what
+// follows from the evaluation semantics — conditions that can never match, and
+// rules an earlier rule always beats to the event — with critical reserved for
+// a rule that cannot fire at all. Two candidates were considered and left out
+// on the evidence: a disabled rule is inert by design, and a default action
+// stronger than every rule is an allowlist posture rather than a defect. The
+// one provable default_action finding is that a catch-all rule displaces it.
 // TODO(policy): decide whether rule sets should be signed. Policy is the file
 // an attacker with local write access would most want to modify.
 // TODO(policy): add a dry-run evaluator replaying a recorded session against a
