@@ -121,6 +121,35 @@ const (
 	ViolationUnresolvable ViolationType = "unresolvable"
 )
 
+// AllViolationTypes returns every violation type the validator can report.
+//
+// The counterpart of decision.AllVerdicts, and it exists for the same reason: a
+// policy rule naming a violation type outside this set can never match, and the
+// rule set linter cannot prove that without the list. Kept honest by
+// TestValidateProducesEveryViolationType, which drives its table from here.
+func AllViolationTypes() []ViolationType {
+	return []ViolationType{
+		ViolationUngrantedCapability,
+		ViolationSelectorMismatch,
+		ViolationExplicitDenial,
+		ViolationCountExceeded,
+		ViolationConstraintExceeded,
+		ViolationEnvelopeExpired,
+		ViolationWorkspaceEscape,
+		ViolationUnresolvable,
+	}
+}
+
+// ValidViolationType reports whether vt is one this build can report.
+func ValidViolationType(vt ViolationType) bool {
+	for _, known := range AllViolationTypes() {
+		if known == vt {
+			return true
+		}
+	}
+	return false
+}
+
 // SessionState is the accumulated observation history for a session.
 //
 // Held behind an interface so the validator stays a pure function of its

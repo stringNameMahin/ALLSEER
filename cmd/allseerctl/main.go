@@ -20,8 +20,8 @@
 //	allseerctl config validate <file>    check configuration
 //	allseerctl replay <file>             replay recorded telemetry
 //
-// Implemented so far: replay, capabilities, version. Everything else needs the
-// control socket, which arrives with the daemon in Phase 2.
+// Implemented so far: replay, policy dry-run, capabilities, version. Everything
+// else needs the control socket, which arrives with the daemon in Phase 2.
 //
 // Dispatch uses the standard library flag package with subcommands. A CLI
 // framework is a dependency this project does not need.
@@ -39,8 +39,11 @@ import (
 // TODO(allseerctl): render envelopes and decisions for humans. This is the main
 // usability surface: an approval prompt nobody can understand in a few seconds
 // gets approved reflexively, which is worse than not asking.
-// TODO(allseerctl): implement `policy dry-run` against recorded sessions, so a
-// rule change can be evaluated before it is trusted.
+// Done: `policy dry-run` replays a recording against a rule set and an envelope
+// in policy.go, calling the loader, the linter, the validator, and the policy
+// engine rather than reimplementing any of them. It enforces nothing.
+// TODO(allseerctl): add `policy lint <file>`, which is the dry-run command's
+// first two steps with the replay left off.
 
 // command is one subcommand.
 //
@@ -60,6 +63,7 @@ type command struct {
 func commands() []command {
 	return []command{
 		{"replay", "Replay a recorded telemetry stream", runReplay},
+		{"policy", "Inspect policy rule sets; dry-run one against a recording", runPolicy},
 		{"capabilities", "List the capability catalog this build knows", runCapabilities},
 		{"version", "Print build metadata", runVersion},
 		{"help", "Show this help", func([]string) int { usage(os.Stdout); return 0 }},

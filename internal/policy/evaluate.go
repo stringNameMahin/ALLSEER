@@ -205,14 +205,23 @@ func compile(rules []Rule, defaultAction ece.Action) (*ruleSet, error) {
 		seen[ordered[i].ID] = true
 	}
 
-	// Stable, so equal priorities keep declaration order. sort.SliceStable
-	// rather than a comparison on index: the file's order is the tiebreak an
-	// operator expects when they write two rules at the same priority.
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].Priority > ordered[j].Priority
-	})
+	return &ruleSet{rules: evaluationOrder(ordered), defaultAction: defaultAction}, nil
+}
 
-	return &ruleSet{rules: ordered, defaultAction: defaultAction}, nil
+// evaluationOrder sorts rules the way Evaluate walks them: priority descending,
+// then declaration order. It sorts in place and returns the same slice.
+//
+// Shared with the linter, which has to reason about the order rules actually
+// fire in. Two implementations of this would be two answers to "which rule
+// shadows which", and the linter's would be the one nobody notices is wrong.
+func evaluationOrder(rules []Rule) []Rule {
+	// Stable, so equal priorities keep declaration order. The file's order is
+	// the tiebreak an operator expects when they write two rules at the same
+	// priority.
+	sort.SliceStable(rules, func(i, j int) bool {
+		return rules[i].Priority > rules[j].Priority
+	})
+	return rules
 }
 
 func validateRule(r *Rule) error {
