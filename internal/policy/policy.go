@@ -186,10 +186,20 @@ type LintIssue struct {
 	Message  string              `json:"message"`
 }
 
-// TODO(policy): implement first-match-wins evaluation ordered by priority then
-// declaration order, and document that ordering prominently.
-// TODO(policy): validate the shipped default rule set. It has to be
-// conservative enough to be safe and quiet enough to leave enabled.
+// Done: first-match-wins evaluation is implemented by RuleEngine in
+// evaluate.go, ordered by priority descending then declaration order, sorted
+// once at load so Rules() reports exactly the sequence Evaluate walks. Two
+// rules there are not obvious from these types: Mode selects which rules are
+// eligible and never rewrites an action, because monitor mode exists to measure
+// what the policy would have done; and a condition with no evidence behind it
+// does not match, so a max_risk_score rule cannot fire on an event the risk
+// engine never scored.
+// TODO(policy): implement Loader over configs/rules.default.yaml. This is where
+// the project's first dependency lands (gopkg.in/yaml.v3), which is why it is
+// separate from evaluation: the semantics above are testable with no dependency
+// at all, and the shipped rule set is not yet loadable by anything.
+// TODO(policy): validate the shipped default rule set against the engine. It
+// has to be conservative enough to be safe and quiet enough to leave enabled.
 // TODO(policy): implement the linter: unreachable rules, shadowed rules,
 // conditions that can never match, rule sets whose default action is weaker
 // than any rule in them.
