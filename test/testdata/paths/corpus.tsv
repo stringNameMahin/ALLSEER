@@ -1,0 +1,136 @@
+# Adversarial path-matching corpus.
+#
+# Format: three tab-separated fields.
+#
+#	<expect>	<pattern>	<path>
+#
+# <expect> is one of:
+#	match		MatchPath(pattern, path) is true
+#	nomatch		MatchPath(pattern, path) is false
+#	invalid		ValidatePattern(pattern) returns an error (and so nothing matches)
+#	unresolved	IsResolved(path) is false (and so nothing matches)
+#
+# Blank lines and lines beginning with '#' are ignored. Every case carries a
+# comment naming the escape or the rule it tests. Loaded by
+# internal/validator/path_corpus_test.go.
+#
+# Two families of case are deliberately absent, because both depend on exact
+# bytes that a text file cannot show a reviewer:
+#
+#   - Unicode normalization and homoglyphs — TestMatchUnicode, which spells the
+#     code points out as escapes.
+#   - Symlink chains and symlinked roots — TestWithinRootSymlinkedRoot, which
+#     needs a real filesystem.
+
+# --- Baseline: the rules working as advertised ------------------------------
+
+# A single star stays inside one segment.
+match	/ws/*.go	/ws/main.go
+nomatch	/ws/*.go	/ws/pkg/main.go
+# ... and does not leak into the parent segment either.
+nomatch	/ws/*.go	/main.go
+
+# ** is a whole segment and spans zero or more of them.
+match	/ws/**	/ws
+match	/ws/**	/ws/a
+match	/ws/**	/ws/a/b/c.go
+match	/ws/**/*.go	/ws/main.go
+match	/ws/**/*.go	/ws/a/b/main.go
+nomatch	/ws/**	/wsx/a
+nomatch	/ws/**	/other/ws/a
+
+# ** in the middle of a pattern.
+match	/ws/**/testdata/*.json	/ws/a/b/testdata/x.json
+nomatch	/ws/**/testdata/*.json	/ws/a/b/testdata/sub/x.json
+
+# ? is exactly one byte, and never the separator.
+match	/ws/?.go	/ws/a.go
+nomatch	/ws/?.go	/ws/ab.go
+nomatch	/ws/a?b	/ws/a/b
+
+# Character classes, including the POSIX literal-']'-first rule.
+match	/ws/[abc].go	/ws/b.go
+nomatch	/ws/[abc].go	/ws/d.go
+match	/ws/[a-z0-9]*	/ws/x1
+nomatch	/ws/[!a-z]*	/ws/abc
+match	/ws/[!a-z]*	/ws/Abc
+match	/ws/[]]	/ws/]
+
+# --- Escape attempts ---------------------------------------------------------
+
+# Classic .. traversal. The path is unresolved, so it is not a mismatch, it is
+# a case the validator must not answer at all.
+unresolved	/ws/**	/ws/../etc/passwd
+unresolved	/ws/**	/ws/a/../../etc/shadow
+# Doubled and disguised forms. "..." and ".." inside a segment name are just
+# filenames; only a bare ".." segment is traversal.
+unresolved	/ws/**	/ws/....//etc/passwd
+match	/ws/**	/ws/...hidden
+match	/ws/**	/ws/a..b
+# A single "." segment is equally unresolved: something skipped normalization.
+unresolved	/ws/**	/ws/./main.go
+# An empty segment means an unnormalized path reached the matcher.
+unresolved	/ws/**	/ws//main.go
+
+# URL-encoded traversal. %2e%2e is a filename to the kernel, never traversal,
+# so this must match the subtree rather than being read as an escape.
+match	/ws/**	/ws/%2e%2e/etc/passwd
+
+# Relative paths never match anything: the resolver failed or the probe
+# truncated, and an unresolved path is not a safe path.
+unresolved	/ws/**	ws/main.go
+unresolved	/ws/**	main.go
+# A path truncated at ALLSEER_PATH_MAX mid-segment still looks well-formed. It
+# matches the pattern it was truncated into, which is exactly why truncation
+# must be flagged as an enrichment failure upstream and never reach here.
+match	/ws/**	/ws/node_modules/a/node_modules/b/node_modules/c/very-long-name-cut
+
+# A sibling directory sharing the root's name prefix is not inside the root.
+nomatch	/ws/**	/ws-evil/secret
+nomatch	/ws	/ws-evil
+
+# A pattern must not match a longer path just because it is a prefix of one.
+nomatch	/ws/a	/ws/ab
+nomatch	/ws/a	/ws/a/b
+
+# --- Dotfiles ----------------------------------------------------------------
+
+# Dotfiles are ordinary. This is the decision that makes a denial of /ws/**
+# actually cover /ws/.env; a shell-style "* skips dotfiles" rule would leave
+# every credential file in the workspace outside every denial.
+match	/ws/*	/ws/.env
+match	/ws/**	/ws/.git/config
+match	/ws/**/.git/**	/ws/sub/.git/objects/ab/cd
+match	/ws/.*	/ws/.gitignore
+
+# --- Case --------------------------------------------------------------------
+
+# Matching is byte-exact, so case matters even when the host filesystem's does
+# not. On a case-insensitive filesystem a denial can be evaded by case; that is
+# a documented limitation, not a matcher bug.
+nomatch	/ws/*.go	/ws/MAIN.GO
+nomatch	/ws/Makefile	/ws/makefile
+
+# --- Trailing slashes --------------------------------------------------------
+
+# A directory is the same directory however it is spelled.
+match	/ws/src/	/ws/src
+match	/ws/src	/ws/src/
+match	/ws/**/	/ws/a/b
+
+# --- Malformed patterns fail closed -----------------------------------------
+
+# ** only means anything as a whole segment; mixing is rejected rather than
+# quietly demoted to * (too narrow) or promoted to a subtree (too wide).
+invalid	/ws/**.go	/ws/main.go
+invalid	/ws/a**/b	/ws/a/b
+# A relative pattern cannot be anchored, so it cannot be evaluated.
+invalid	ws/**	/ws/main.go
+invalid	*.go	/ws/main.go
+# Unterminated class.
+invalid	/ws/[abc	/ws/a
+# Empty, traversing, and unnormalized patterns.
+invalid		/ws/a
+invalid	/ws/../etc/**	/etc/passwd
+invalid	/ws/./*	/ws/a
+invalid	/ws//a	/ws/a

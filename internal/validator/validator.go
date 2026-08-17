@@ -179,15 +179,22 @@ type NetworkMatcher interface {
 	MatchPort(allowed []int, port int) bool
 }
 
+// Done: glob semantics are specified in docs/path-matching.md and implemented
+// by GlobPathMatcher in path.go. ** spans whole segments only, patterns match
+// dotfiles, matching is byte-exact, and unresolved input never matches.
+// Done: the adversarial path corpus lives in test/testdata/paths/, with the
+// cases whose bytes cannot be reviewed as text (unicode normalization,
+// symlinks) in path_test.go.
+//
 // TODO(validator): implement the default validator as a pure function, with a
 // table-driven suite covering every ViolationType.
 // TODO(validator): specify grant precedence when several grants match. Leaning
 // most-specific-wins, with denials always overriding.
-// TODO(validator): pin down glob semantics. Whether ** crosses directory
-// boundaries and whether patterns match dotfiles are the two decisions most
-// likely to produce a security surprise, so they belong in docs/, not only in a
-// code comment.
-// TODO(validator): build an adversarial path corpus: .. traversal, symlink
-// chains, unicode normalization, trailing slashes, case-insensitive collisions.
+// TODO(validator): implement NetworkMatcher and the composing Matcher over the
+// path matcher, Selector.Executables, and Selector.ArgPatterns.
+// TODO(validator): lint selector patterns at envelope admission with
+// ValidatePattern, and warn on the case and unicode ambiguities documented in
+// docs/path-matching.md §5. An invalid denial denies nothing.
 // TODO(validator): benchmark against a realistic build. A linear scan over
-// grants per event may not hold up on the hot path.
+// grants per event may not hold up on the hot path; BenchmarkMatchPath covers
+// only the single-pattern cost.
