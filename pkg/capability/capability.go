@@ -160,8 +160,66 @@ type Observation struct {
 	// Attributes carries resolved Kind-specific detail used for matching
 	// (protocol, resolved IP, argv). A map, so new probes can enrich
 	// observations without a type change here.
+	//
+	// The keys the validator reads are named below and are a wire contract:
+	// enrichment writes them and selector matching reads them, so a typo on
+	// either side silently disables a selector dimension rather than failing.
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
+
+// Attribute keys carried on an Observation.
+//
+// Only the keys the validator matches on are fixed here. Probes may add
+// anything else for forensics; unknown keys are ignored by matching, which is
+// what lets a new probe enrich observations without a coordinated change.
+const (
+	// AttrProtocol is the transport or application protocol of a network
+	// observation ("tcp", "udp", "https"), matched against Selector.Protocols.
+	AttrProtocol = "protocol"
+
+	// AttrDestIP is the literal destination address of a network observation.
+	//
+	// It is distinct from the host in Target, which carries the correlated
+	// hostname when DNS correlation succeeded. Both are recorded because a
+	// grant may name either, and the address is the one the kernel is certain
+	// of: correlation is best-effort, the address is not.
+	AttrDestIP = "dest_ip"
+
+	// AttrPort is the destination port as a decimal string. Redundant with
+	// Target, which carries "host:port", and kept because reading a field is
+	// less error-prone than re-splitting a string.
+	AttrPort = "port"
+
+	// AttrHostnameCorrelated is "false" when DNS correlation failed, so the
+	// destination is known only by address. Absent when correlation succeeded.
+	//
+	// Selector matching does not read it — it derives the same fact from the
+	// target's shape — but risk scoring and audit both want it stated rather
+	// than inferred.
+	AttrHostnameCorrelated = "hostname_correlated"
+
+	// AttrArgv is the command line of a process.exec observation, arguments
+	// joined by a single space, matched against Selector.ArgPatterns.
+	//
+	// Lossy by construction: an argument containing a space is
+	// indistinguishable from two arguments. That is tolerable only because
+	// ArgPatterns is a readability convenience and never a security boundary.
+	AttrArgv = "argv"
+
+	// AttrInterpreter names the script runner when the executed binary is one
+	// (sh, python, node), because the meaningful action is the script rather
+	// than the interpreter.
+	AttrInterpreter = "interpreter"
+
+	// AttrNewPath is the destination of a rename or link, whose source is the
+	// Target.
+	//
+	// It is carried but not matched: an Observation has one Target, and
+	// selector matching evaluates only that. A rename *into* a protected path
+	// is therefore not caught by a path selector on the destination. See
+	// docs/selector-matching.md.
+	AttrNewPath = "new_path"
+)
 
 // Catalog is the authoritative registry of known capabilities.
 //

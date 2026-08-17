@@ -191,15 +191,35 @@ type NetworkMatcher interface {
 // CorrelationMissing distinguishes an uncorrelated destination from a genuine
 // mismatch so the risk engine sees the difference.
 //
+// Done: grant precedence is specified in docs/grant-precedence.md and
+// implemented by ResolvePrecedence in precedence.go. Denials always override
+// grants; within a class the most specific entry wins, measured from a grant's
+// broadest selector; ties break toward the earlier envelope index.
+//
 // TODO(validator): implement the default validator as a pure function, with a
-// table-driven suite covering every ViolationType.
-// TODO(validator): specify grant precedence when several grants match. Leaning
-// most-specific-wins, with denials always overriding.
-// TODO(validator): implement the composing Matcher over the path and network
-// matchers plus Selector.Executables, Selector.Protocols, and
-// Selector.ArgPatterns. It owns splitting Observation.Target into host and
-// port, and owns routing a CorrelationMissing result to scrutiny rather than
-// to a plain selector mismatch.
+// table-driven suite covering every ViolationType. It owns envelope expiry,
+// MaxCount enforcement against SessionState.GrantUseCount, and mapping a
+// MatchResult carrying Unevaluable to ViolationUnresolvable and
+// VerdictIndeterminate rather than to a selector mismatch.
+// TODO(validator): decide how a two-path operation is validated. A rename or
+// link names a source and a destination, Observation has one Target, and
+// selector matching evaluates only that, so a rename *into* a protected path is
+// matched on its source. internal/telemetry/resolve preserves the destination
+// in AttrNewPath; nothing matches against it. See docs/selector-matching.md
+// §4.1.
+// TODO(validator): treat an invalid pattern in a denial as an envelope error
+// rather than a warning. An invalid grant pattern grants nothing, which is
+// safe; an invalid denial pattern denies nothing, which is the one place the
+// fail-closed posture inverts. See docs/grant-precedence.md §5.
+// Done: events reach the matcher through event.go. ObservationOf prefers a
+// recorded Event.Observation and falls back to internal/telemetry/resolve;
+// MatchEvent reports an unresolvable event as unevaluable rather than handing
+// the matcher a blank observation, which a Kind-only grant would satisfy.
+// Done: the composing Matcher is specified in docs/selector-matching.md and
+// implemented by SelectorMatcher in matcher.go. Dimensions combine with AND,
+// lists with OR, and an unconstrained dimension covers everything. Its
+// MatchResult carries an Unevaluable flag so a caller never has to tell a
+// mismatch from a blind spot by reading the reason string.
 // TODO(validator): lint selector patterns at envelope admission with
 // ValidatePattern and ValidateHostPattern, and warn on the case and unicode
 // ambiguities documented in docs/path-matching.md §5. An invalid denial denies
