@@ -11,6 +11,13 @@
 // exhaustively testable as a pure function. Anything requiring judgment or
 // tuning belongs downstream in the risk engine; anything requiring lookups
 // belongs upstream in enrichment.
+//
+// The package answers one further question, off the hot path and once per
+// envelope: whether an envelope's selectors can be evaluated at all. That is
+// envelope admission rather than behavior validation, and it lives here because
+// the answer has to agree with the matchers exactly — a pattern accepted at
+// approval time and rejected by the matcher matches nothing, silently. See
+// lint.go.
 package validator
 
 import (
@@ -207,10 +214,12 @@ type NetworkMatcher interface {
 // matched on its source. internal/telemetry/resolve preserves the destination
 // in AttrNewPath; nothing matches against it. See docs/selector-matching.md
 // §4.1.
-// TODO(validator): treat an invalid pattern in a denial as an envelope error
-// rather than a warning. An invalid grant pattern grants nothing, which is
-// safe; an invalid denial pattern denies nothing, which is the one place the
-// fail-closed posture inverts. See docs/grant-precedence.md §5.
+// Done: an invalid pattern in a denial is a blocking envelope error, and the
+// same pattern in a grant is a non-blocking warning. An invalid grant pattern
+// grants nothing, which is fail-closed and visible as false positives; an
+// invalid denial pattern denies nothing, which is the one place the posture
+// inverts and the one failure nothing downstream can observe. Implemented by
+// EnvelopeLinter in lint.go; see docs/grant-precedence.md §5.
 // Done: events reach the matcher through event.go. ObservationOf prefers a
 // recorded Event.Observation and falls back to internal/telemetry/resolve;
 // MatchEvent reports an unresolvable event as unevaluable rather than handing
@@ -220,10 +229,18 @@ type NetworkMatcher interface {
 // lists with OR, and an unconstrained dimension covers everything. Its
 // MatchResult carries an Unevaluable flag so a caller never has to tell a
 // mismatch from a blind spot by reading the reason string.
-// TODO(validator): lint selector patterns at envelope admission with
-// ValidatePattern and ValidateHostPattern, and warn on the case and unicode
-// ambiguities documented in docs/path-matching.md §5. An invalid denial denies
-// nothing.
+// Done: selector admission linting is implemented by EnvelopeLinter in lint.go,
+// which implements ece.Validator by calling the same ValidatePattern,
+// ValidateHostPattern, and IsValidPort the matchers call. It lives here rather
+// than in internal/envelope so it cannot drift from matching, and so a daemon
+// loading an envelope from a store need not import the generator. The case and
+// Unicode ambiguities of docs/path-matching.md §5 are reported, never blocking:
+// non-ASCII on both sides, case on denials only, since a grant in the wrong
+// case fails closed and reporting it would put an issue on every real envelope.
+// TODO(validator): lint overlapping entries — a grant strictly broader than
+// another is usually a drafting mistake, and CompareSpecificity already
+// computes the relation. It belongs in EnvelopeLinter rather than on the hot
+// path. See docs/grant-precedence.md §5.
 // TODO(validator): benchmark against a realistic build. A linear scan over
 // grants per event may not hold up on the hot path; BenchmarkMatchPath and
 // BenchmarkMatchHost cover only the single-pattern cost.
