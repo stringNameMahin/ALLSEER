@@ -12,6 +12,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/stringNameMahin/ALLSEER/internal/pipeline"
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
 	"github.com/stringNameMahin/ALLSEER/internal/session"
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry/replay"
@@ -208,38 +209,50 @@ func runPolicyDryRun(args []string) int {
 	return 0
 }
 
-// evaluateStream runs each event through validation and policy.
+// evaluateStream runs each event through the governance pipeline.
 //
-// The pipeline order is the daemon's, minus the stages that do not exist yet:
-// resolve, validate, decide. Risk is absent, which is reported rather than
-// simulated — a fabricated score would change which rules fire.
+// The sequence used to be written out here by hand. It now lives in
+// internal/pipeline, which this calls: validate, decide, then commit to session
+// state, with the ordering and the single-writer guarantee owned there rather
+// than restated at every call site. Two orchestrations of the same stages is
+// one more than can be kept in agreement, and the one in the CLI is the one
+// that would drift from what the daemon actually does.
+//
+// Risk is still absent — no stage exists for it — which is reported rather than
+// simulated, since a fabricated score would change which rules fire.
 func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Envelope, engine *policy.RuleEngine, mode policy.Mode) (*session.MemoryState, []dryRunResult, error) {
-	val := validator.NewValidator()
-
-	// Session state is accumulated here rather than left nil, so grant budgets
-	// and session constraints are actually evaluated. StartedAt is deliberately
+	// Session state is accumulated rather than left nil, so grant budgets and
+	// session constraints are actually evaluated. StartedAt is deliberately
 	// unset: that puts elapsed time on the recording's own clock, so a dry run
 	// of an archived stream reports the duration the session had rather than
 	// the age of the file.
 	st := session.NewState(env.SessionID, env)
-	var out []dryRunResult
 
+	p, err := pipeline.New(pipeline.Config{
+		Session: pipeline.Session{Envelope: env, Mode: mode, State: st},
+		// No sink: a dry run audits nothing, and passing one would write
+		// records for a session that never happened.
+	}, validator.NewValidator(), engine)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building pipeline: %w", err)
+	}
+
+	var out []dryRunResult
 	for e := range events {
-		res, err := val.Validate(ctx, validator.ValidateRequest{
-			Envelope: env, Event: &e, State: st,
-		})
+		pc, err := p.ProcessContext(ctx, &e)
 		if err != nil {
-			return nil, nil, fmt.Errorf("validating %s: %w", e.ID, err)
+			return nil, nil, fmt.Errorf("processing %s: %w", e.ID, err)
 		}
 
-		outcome, err := engine.Evaluate(ctx, policy.EvaluateRequest{
-			Event:      &e,
-			Validation: res,
-			Envelope:   env,
-			Mode:       mode,
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("evaluating %s: %w", e.ID, err)
+		// The pipeline turns a stage failure into an indeterminate decision and
+		// carries on, which is right for a daemon: an event with no record is
+		// indistinguishable from an event that never happened. A dry run wants
+		// the opposite. It exists to answer "what would this policy have done",
+		// and a run where the governance path itself broke cannot answer that,
+		// so it stops and says which stage failed rather than reporting a page
+		// of indeterminates as though they were findings.
+		if pc.Err != nil {
+			return nil, nil, fmt.Errorf("%s stage on %s: %w", pc.FailedStage, e.ID, pc.Err)
 		}
 
 		out = append(out, dryRunResult{
@@ -247,25 +260,15 @@ func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Env
 			EventID:      e.ID,
 			Capability:   string(e.Capability),
 			Target:       targetOf(&e),
-			Verdict:      res.Verdict,
-			Violations:   violationNames(res),
-			RuleID:       outcome.RuleID,
-			Action:       outcome.Action,
-			Terminal:     outcome.Terminal,
-			WouldEnforce: wouldEnforce(mode, outcome.Action),
+			Verdict:      pc.Validation.Verdict,
+			Violations:   violationNames(pc.Validation),
+			RuleID:       pc.Outcome.RuleID,
+			Action:       pc.Outcome.Action,
+			Terminal:     pc.Outcome.Terminal,
+			WouldEnforce: wouldEnforce(mode, pc.Outcome.Action),
 			Enforced:     false,
-			Reasoning:    append(res.Reasoning, outcome.Reasoning...),
+			Reasoning:    append(pc.Validation.Reasoning, pc.Outcome.Reasoning...),
 		})
-
-		// Recorded after the event has been judged, which is what keeps an
-		// inclusive limit inclusive. A grant is charged only when it actually
-		// covered the operation: a grant_exceeded result still names the grant
-		// it ran out of, and charging that would keep spending a budget the
-		// operation was already refused.
-		if res.MatchedGrant != nil && res.Verdict == decision.VerdictWithinEnvelope {
-			st.RecordGrantUse(res.MatchedGrantIndex)
-		}
-		st.RecordEvent(&e)
 	}
 	return st, out, nil
 }

@@ -22,7 +22,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/stringNameMahin/ALLSEER/internal/policy"
+	"github.com/stringNameMahin/ALLSEER/internal/validator"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
+	"github.com/stringNameMahin/ALLSEER/pkg/ece"
 	"github.com/stringNameMahin/ALLSEER/pkg/event"
 )
 
@@ -65,6 +68,14 @@ type Stage interface {
 // return types. That is a concession to readability: the alternative produces
 // deeply nested generic signatures for no practical gain, since the context
 // stays confined to one goroutine for its whole lifetime.
+//
+// The intermediate results are **typed fields, not entries in Values**. They are
+// the system's central artifacts — the validator's answer is what policy reads,
+// and it is what the audit record is assembled from — and routing them through
+// an `any` map would turn a rename or a type change into a runtime type
+// assertion failure on the hot path, in the one component whose whole job is to
+// not lose events. Values survives for genuinely private stage-to-stage data,
+// which none of the stages here has.
 type ProcessingContext struct {
 	Event     *event.Event
 	SessionID string
@@ -72,13 +83,100 @@ type ProcessingContext struct {
 	// Started is when processing began, used to compute decision latency.
 	Started time.Time
 
-	// Decision accumulates the outcome. Stages fill in their portion.
+	// --- session binding ----------------------------------------------------
+	// Set by the pipeline before the first stage runs, identically for every
+	// event in the session. Stages read it rather than closing over it, which
+	// is what keeps a stage a pure function of its context and safe to share.
+
+	// Envelope governs this session. Sealed, and never modified here.
+	Envelope *ece.Envelope
+
+	// Mode is the enforcement posture passed through to policy. The pipeline
+	// does not interpret it: whether a mode changes which rules are eligible is
+	// policy's business, and second-guessing it here would be a second set of
+	// mode semantics.
+	Mode policy.Mode
+
+	// State is the session's accumulated counters. Stages **read** it; only the
+	// pipeline writes to it, and only after every stage has run. See the
+	// ordering note on EventPipeline.
+	State State
+
+	// --- stage output -------------------------------------------------------
+
+	// Validation is what the validator concluded. Nil until the validate stage
+	// has run, and a later stage that needs it must fail rather than proceed
+	// without it — a policy decision made against an absent verdict is a
+	// decision made about nothing.
+	Validation *validator.Result
+
+	// Risk is the scored assessment, or nil when no risk stage ran. Nil is
+	// meaningful and must not be replaced with a zero assessment: policy treats
+	// a condition with no evidence behind it as not matching, and a fabricated
+	// score of zero would satisfy every max_risk_score rule in the set.
+	Risk *decision.RiskAssessment
+
+	// Outcome is the action policy selected.
+	Outcome *policy.Outcome
+
+	// Decision is the finished record. Assembled by the pipeline from the
+	// fields above once the stages are done, rather than accumulated piecemeal,
+	// so there is exactly one place the system's public product is constructed
+	// and the failure path cannot produce a differently shaped one.
 	Decision *decision.Decision
+
+	// FailedStage and Err report the stage that stopped processing, if any.
+	//
+	// The Decision alone cannot carry this: an indeterminate decision says the
+	// event could not be classified, not whether that was the validator's
+	// honest answer about an unresolvable path or the pipeline falling over.
+	// Those are the same finding about the agent and opposite findings about
+	// the system, and a caller that has to tell them apart — a dry run
+	// reporting on a policy, a daemon deciding whether to keep going — should
+	// not have to parse a reason string to do it.
+	FailedStage string
+	Err         error
 
 	// Values holds inter-stage data that does not belong on the Decision.
 	// Untyped and discouraged: reach for it only when a stage genuinely needs
 	// to pass something private to a later stage.
 	Values map[string]any
+}
+
+// State is the per-session state the pipeline reads through and writes to.
+//
+// A narrow interface declared at the point of use rather than an import of
+// internal/session, which is the pattern validator.SessionState and risk.History
+// already established: the pipeline names what it needs, and session.MemoryState
+// happens to satisfy it. It is the read side (validator.SessionState) plus the
+// three writes, because the pipeline is the component that owns advancing them.
+type State interface {
+	validator.SessionState
+
+	// RecordEvent folds an observed event into the counters.
+	RecordEvent(e *event.Event)
+
+	// RecordDecision folds a rendered decision into the counters.
+	RecordDecision(d *decision.Decision)
+
+	// RecordGrantUse charges one use against a grant, by envelope index.
+	RecordGrantUse(grantIndex int)
+}
+
+// Session is what one pipeline governs: one envelope, one mode, one state.
+//
+// Distinct from session.Session, which is the lifecycle record. This is only
+// the binding a pipeline needs to process events, and the pipeline deliberately
+// does not import internal/session to get it — a pipeline is constructed for a
+// session, not the other way round.
+type Session struct {
+	// ID is the session identifier stamped onto every decision. Defaults to
+	// Envelope.SessionID when empty.
+	ID string
+
+	Envelope *ece.Envelope
+	Mode     policy.Mode
+	State    State
 }
 
 // Stats reports pipeline throughput and health.
@@ -125,18 +223,41 @@ type Builder interface {
 // accident.
 type ErrorHandler interface {
 	// Handle processes a stage error and returns the decision to emit.
-	// Returning nil drops the event, which must be reserved for cases where
-	// dropping is provably safe.
+	//
+	// Returning nil emits no decision, which must be reserved for cases where
+	// having no audit record is provably safe. It does **not** drop the event:
+	// the pipeline still folds the event into the session counters, because the
+	// counters describe what the kernel observed and a failure in our analysis
+	// is not evidence that the agent did less. Returning budget on a stage
+	// failure would make failing a stage the cheapest way to spend one.
 	Handle(ctx context.Context, pc *ProcessingContext, stage string, err error) *decision.Decision
 }
 
-// TODO(pipeline): implement per-session serial processing with cross-session
-// parallelism, keyed by session ID.
-// TODO(pipeline): add panic recovery around every stage. A panic in a scorer
-// must not take down governance for every session on the host.
+// Done: per-session serial processing is EventPipeline in process.go. A
+// pipeline is bound to one session and processes it on one goroutine, which is
+// what makes session.MemoryState's single-writer assumption a guarantee rather
+// than a convention. The stages read, the pipeline writes, and the write
+// happens after the whole stage list — so a budget stays inclusive and a future
+// risk stage can still tell a novel target from a familiar one.
+// Done: every stage runs under panic recovery in process.go. A panic becomes an
+// ordinary stage error and travels the same route to an indeterminate decision,
+// so one scorer mishandling one malformed path cannot end governance for the
+// session, or for every session sharing the process.
+// TODO(pipeline): cross-session parallelism, keyed by session ID. Deliberately
+// not here: dispatching an event to the right envelope and state is
+// session.Manager's job, and a pipeline that looked sessions up would be a
+// session registry with a stage list attached. Builder.WithConcurrency refuses
+// anything above one rather than accepting a number it would ignore.
 // TODO(pipeline): define the backpressure policy end to end, from the kernel
 // ring buffer through to the audit sink, and document where events can be lost.
+// Nothing here buffers yet — Process is synchronous and Run holds no queue —
+// which is why Stats.QueueDepth is a measured zero rather than an unmeasured
+// one. It stops being trivially true the moment a queue exists.
 // TODO(pipeline): add a tracing decorator so a single event's path through all
-// stages can be inspected during development.
-// TODO(pipeline): benchmark the full path. The number that matters is added
-// latency per governed syscall in enforce mode.
+// stages can be inspected during development. ProcessContext already exposes
+// every intermediate result, so this is presentation rather than plumbing.
+// TODO(pipeline): benchmark the number that actually matters — added latency
+// per governed syscall in enforce mode. BenchmarkProcess covers the
+// deterministic path (2.5 µs/op, 38 allocs/op over validate and decide) but
+// enforcement is M12, and the cost that will decide whether this can be left
+// enabled is the one charged to the agent's syscall.
