@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
+	"github.com/stringNameMahin/ALLSEER/internal/session"
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry/replay"
 	"github.com/stringNameMahin/ALLSEER/internal/validator"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
@@ -30,8 +31,14 @@ import (
 // one that runs in production, which is worse than not answering it.
 //
 // Nothing is enforced, and nothing can be: the command opens three files read
-// only, constructs no decision.Enforcer, and touches no session. Every reported
-// action is what enforcement *would* be asked to do.
+// only and constructs no decision.Enforcer. Every reported action is what
+// enforcement *would* be asked to do.
+//
+// It does accumulate session state, in memory and discarded when the process
+// exits, because grant budgets and session constraints are only answerable
+// against a running count. That is a read of the recording, not a write to
+// anything: no session is created, nothing is persisted, and the three inputs
+// are untouched.
 
 // runPolicy dispatches the policy subcommands.
 func runPolicy(args []string) int {
@@ -173,7 +180,7 @@ func runPolicyDryRun(args []string) int {
 	}
 	defer func() { _ = src.Close() }()
 
-	results, evalErr := evaluateStream(ctx, src.Events(), env, engine, mode)
+	st, results, evalErr := evaluateStream(ctx, src.Events(), env, engine, mode)
 	if evalErr != nil {
 		fmt.Fprintf(os.Stderr, "allseerctl policy dry-run: %v\n", evalErr)
 		return 1
@@ -190,7 +197,7 @@ func runPolicyDryRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "\nallseerctl policy dry-run: %v\n", streamErr)
 	}
 	if !*quiet {
-		printDryRunSummary(os.Stderr, results, rs, env, mode, streamErr)
+		printDryRunSummary(os.Stderr, results, rs, env, st, mode, streamErr)
 	}
 	if streamErr != nil {
 		// A dry run over a truncated stream is a dry run over part of a
@@ -206,17 +213,23 @@ func runPolicyDryRun(args []string) int {
 // The pipeline order is the daemon's, minus the stages that do not exist yet:
 // resolve, validate, decide. Risk is absent, which is reported rather than
 // simulated — a fabricated score would change which rules fire.
-func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Envelope, engine *policy.RuleEngine, mode policy.Mode) ([]dryRunResult, error) {
+func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Envelope, engine *policy.RuleEngine, mode policy.Mode) (*session.MemoryState, []dryRunResult, error) {
 	val := validator.NewValidator()
+
+	// Session state is accumulated here rather than left nil, so grant budgets
+	// and session constraints are actually evaluated. StartedAt is deliberately
+	// unset: that puts elapsed time on the recording's own clock, so a dry run
+	// of an archived stream reports the duration the session had rather than
+	// the age of the file.
+	st := session.NewState(env.SessionID, env)
 	var out []dryRunResult
 
 	for e := range events {
-		// Session state is nil: counting writes and bytes belongs to the
-		// session manager, which does not exist yet. The summary says so rather
-		// than letting grant budgets and session constraints look evaluated.
-		res, err := val.Validate(ctx, validator.ValidateRequest{Envelope: env, Event: &e})
+		res, err := val.Validate(ctx, validator.ValidateRequest{
+			Envelope: env, Event: &e, State: st,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("validating %s: %w", e.ID, err)
+			return nil, nil, fmt.Errorf("validating %s: %w", e.ID, err)
 		}
 
 		outcome, err := engine.Evaluate(ctx, policy.EvaluateRequest{
@@ -226,7 +239,7 @@ func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Env
 			Mode:       mode,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("evaluating %s: %w", e.ID, err)
+			return nil, nil, fmt.Errorf("evaluating %s: %w", e.ID, err)
 		}
 
 		out = append(out, dryRunResult{
@@ -243,8 +256,18 @@ func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Env
 			Enforced:     false,
 			Reasoning:    append(res.Reasoning, outcome.Reasoning...),
 		})
+
+		// Recorded after the event has been judged, which is what keeps an
+		// inclusive limit inclusive. A grant is charged only when it actually
+		// covered the operation: a grant_exceeded result still names the grant
+		// it ran out of, and charging that would keep spending a budget the
+		// operation was already refused.
+		if res.MatchedGrant != nil && res.Verdict == decision.VerdictWithinEnvelope {
+			st.RecordGrantUse(res.MatchedGrantIndex)
+		}
+		st.RecordEvent(&e)
 	}
-	return out, nil
+	return st, out, nil
 }
 
 // wouldEnforce reports whether enforcement would have been asked to act, given
@@ -387,7 +410,7 @@ func formatEnforcement(would bool) string {
 
 // printDryRunSummary reports what the run established and, as importantly,
 // what it could not.
-func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet, env *ece.Envelope, mode policy.Mode, streamErr error) {
+func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet, env *ece.Envelope, st *session.MemoryState, mode policy.Mode, streamErr error) {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "\n%d %s evaluated in %s mode; nothing was enforced\n",
@@ -429,9 +452,21 @@ func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet,
 				"and an unscored event never satisfies a score or confidence condition",
 			n, plural(n, "rule is", "rules are")))
 	}
-	if envelopeHasBudgets(env) {
-		caveats = append(caveats, "grant budgets and session constraints were not evaluated: "+
-			"session state accounting is not implemented, so no counter was available to check")
+	// Grant budgets and session constraints *are* evaluated now — the run
+	// accumulates session state as the daemon will. Duration is the one budget
+	// that can still go unchecked, and only for a specific reason: a recording
+	// is measured by its own wall clocks, so a stream that carries none cannot
+	// establish how long the session ran. Saying so is the difference between a
+	// constraint that held and a constraint nobody looked at.
+	if env.Constraints.MaxDuration > 0 && st.ElapsedSeconds() == 0 {
+		caveats = append(caveats, fmt.Sprintf(
+			"the envelope's max_duration of %s was not evaluated: the recording carries no wall clocks, "+
+				"so the session's elapsed time could not be established from it", env.Constraints.MaxDuration))
+	}
+	if st.DroppedEvents() > 0 {
+		caveats = append(caveats, fmt.Sprintf(
+			"%d record(s) were lost before this recording was written, so every count below is a lower bound "+
+				"and no conclusion drawn across the gap is sound", st.DroppedEvents()))
 	}
 	if streamErr != nil {
 		caveats = append(caveats, "the stream ended on a malformed record, so this is a partial session")
@@ -457,18 +492,8 @@ func riskConditionedRules(rs *policy.RuleSet) int {
 	return n
 }
 
-// envelopeHasBudgets reports whether the envelope carries anything the missing
-// session state would have been consulted for, so the caveat appears only when
-// it is true of this run.
-func envelopeHasBudgets(env *ece.Envelope) bool {
-	c := env.Constraints
-	if c.MaxDuration > 0 || c.MaxProcesses > 0 || c.MaxFileWrites > 0 || c.MaxNetworkBytes > 0 {
-		return true
-	}
-	for _, g := range env.Grants {
-		if g.Selector.MaxCount > 0 {
-			return true
-		}
-	}
-	return false
-}
+// Done: envelopeHasBudgets is gone. It existed to raise a caveat that grant
+// budgets and session constraints went unevaluated, which stopped being true
+// when internal/session landed and evaluateStream started accumulating state.
+// The narrower caveat that survives is duration, which a recording without wall
+// clocks genuinely cannot establish.

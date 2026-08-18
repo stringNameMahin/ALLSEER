@@ -62,6 +62,18 @@ type Result struct {
 	MatchedGrant  *capability.Grant
 	MatchedDenial *capability.Grant
 
+	// MatchedGrantIndex is the position of MatchedGrant in Envelope.Grants, and
+	// is meaningful only when MatchedGrant is non-nil. Guarding on the pointer
+	// rather than on a sentinel keeps the zero value from being mistaken for
+	// grant 0, which is a real index.
+	//
+	// It exists because SessionState.GrantUseCount is keyed by index: the
+	// validator reads a grant's budget by index and the session manager charges
+	// it by index, so the index of the grant that actually won precedence has to
+	// survive the call. Recovering it downstream by comparing selectors would
+	// re-run precedence with no guarantee of reaching the same answer.
+	MatchedGrantIndex int
+
 	// Violations details every way the observation departed from the envelope.
 	// A single event may violate more than once: an ungranted capability
 	// against a sensitive path that also exceeds a budget.

@@ -303,6 +303,132 @@ func TestDryRunOverMultipleFixtures(t *testing.T) {
 	}
 }
 
+// --- session state ----------------------------------------------------------
+
+// budgetedEnvelope is gitEnvelope with two budgets added: the fs.read grant may
+// be exercised once, and the session may modify two files. Everything else is
+// identical, so any change in verdict is attributable to the budget.
+const budgetedEnvelope = `{
+  "schema_version": "allseer.dev/ece/v1alpha1",
+  "id": "11111111-2222-3333-4444-666666666666",
+  "session_id": "s-git-budgeted",
+  "created_at": "2026-03-02T12:00:00Z",
+  "intent": {
+    "raw_prompt": "commit the staged changes",
+    "summary": "Run git commit in the project.",
+    "task_type": "git-operation",
+    "analyzer": "rules:v1",
+    "confidence": 0.9
+  },
+  "grants": [
+    {"kind": "fs.read", "domain": "filesystem", "selector": {"path_patterns": ["/home/dev/project/**"], "max_count": 1}},
+    {"kind": "fs.write", "domain": "filesystem", "selector": {"path_patterns": ["/home/dev/project/**"]}},
+    {"kind": "fs.create", "domain": "filesystem", "selector": {"path_patterns": ["/home/dev/project/**"]}},
+    {"kind": "fs.rename", "domain": "filesystem", "selector": {"path_patterns": ["/home/dev/project/**"]}},
+    {"kind": "process.exec", "domain": "process", "selector": {"executables": ["/usr/bin/git"]}},
+    {"kind": "process.exit", "domain": "process", "selector": {"executables": ["/usr/bin/git"]}}
+  ],
+  "denials": [
+    {"kind": "fs.write", "domain": "filesystem", "selector": {"path_patterns": ["/home/dev/project/.github/**"]}}
+  ],
+  "constraints": {"workspace_root": "/home/dev/project", "max_file_writes": 2},
+  "default_action": "request_approval",
+  "sealed": true
+}`
+
+// Grant budgets and session constraints are only answerable against a running
+// count, and this is the proof that the count is running: the same recording
+// and the same rule set, differing only in the budgets the envelope declares,
+// reaches different verdicts on exactly the events the budgets bear on.
+func TestDryRunEvaluatesGrantBudgetsAndSessionConstraints(t *testing.T) {
+	env := writeFixture(t, "envelope.json", budgetedEnvelope)
+
+	results, code := dryRun(t, "-rules", defaultRules(), "-envelope", env, gitEvents)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	byEvent := map[string]dryRunResult{}
+	for _, r := range results {
+		byEvent[r.EventID] = r
+	}
+
+	want := []struct {
+		id      string
+		verdict decision.Verdict
+		why     string
+	}{
+		// max_count on fs.read is 1: the first read spends it, and the reads
+		// after it are refused with the grant named rather than reported as
+		// never expected.
+		{"gt-002", decision.VerdictWithinEnvelope, "the grant's single use"},
+		{"gt-003", decision.VerdictGrantExceeded, "the read budget is spent"},
+		{"gt-004", decision.VerdictGrantExceeded, "still spent"},
+
+		// max_file_writes is 2. fs.create, fs.write and fs.rename are all
+		// filesystem modifications, so the third one is the event that takes
+		// the session past its budget — and it is the one reported, not a
+		// background condition attached to the session.
+		{"gt-005", decision.VerdictWithinEnvelope, "first modification"},
+		{"gt-006", decision.VerdictWithinEnvelope, "second modification"},
+		{"gt-007", decision.VerdictConstraintViolation, "third modification, budget spent"},
+
+		// Denials are checked before budgets, so a denied write is reported as
+		// denied rather than as a budget breach. The stronger finding wins.
+		{"gt-008", decision.VerdictExplicitlyDenied, "denial outranks the constraint"},
+
+		// Unaffected by either budget: process events and the out-of-workspace
+		// read reach the verdicts they reach without any of this.
+		{"gt-001", decision.VerdictWithinEnvelope, "exec is unbudgeted"},
+		{"gt-009", decision.VerdictGrantExceeded, "outside the workspace, as before"},
+		{"gt-010", decision.VerdictWithinEnvelope, "exit is unbudgeted"},
+	}
+
+	for _, w := range want {
+		got, ok := byEvent[w.id]
+		if !ok {
+			t.Errorf("%s: no result", w.id)
+			continue
+		}
+		if got.Verdict != w.verdict {
+			t.Errorf("%s: verdict = %s, want %s (%s)", w.id, got.Verdict, w.verdict, w.why)
+		}
+	}
+
+	if v := byEvent["gt-003"].Violations; len(v) != 1 || v[0] != "count_exceeded" {
+		t.Errorf("gt-003 violations = %v, want [count_exceeded]", v)
+	}
+	if v := byEvent["gt-007"].Violations; len(v) != 1 || v[0] != "constraint_exceeded" {
+		t.Errorf("gt-007 violations = %v, want [constraint_exceeded]", v)
+	}
+}
+
+// The control for the test above: with no budgets declared, the same events
+// reach the verdicts the unbudgeted envelope always produced. Session state
+// accounting must not change an envelope that asked for nothing.
+func TestDryRunWithoutBudgetsIsUnchanged(t *testing.T) {
+	env := writeFixture(t, "envelope.json", gitEnvelope)
+
+	results, code := dryRun(t, "-rules", defaultRules(), "-envelope", env, gitEvents)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	want := map[string]decision.Verdict{
+		"gt-002": decision.VerdictWithinEnvelope,
+		"gt-003": decision.VerdictWithinEnvelope,
+		"gt-004": decision.VerdictWithinEnvelope,
+		"gt-005": decision.VerdictWithinEnvelope,
+		"gt-006": decision.VerdictWithinEnvelope,
+		"gt-007": decision.VerdictWithinEnvelope,
+	}
+	for _, r := range results {
+		if w, ok := want[r.EventID]; ok && r.Verdict != w {
+			t.Errorf("%s: verdict = %s, want %s with no budgets declared", r.EventID, r.Verdict, w)
+		}
+	}
+}
+
 // --- refusals ---------------------------------------------------------------
 
 func TestDryRunExitCodes(t *testing.T) {
