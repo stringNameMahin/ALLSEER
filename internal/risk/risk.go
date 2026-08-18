@@ -151,12 +151,37 @@ type Baseline interface {
 	Known(taskType string) bool
 }
 
-// TODO(risk): implement the initial scorer set: sensitive_path,
-// workspace_escape, novel_network_destination, privilege_change,
-// violation_rate, credential_access, exfiltration_pattern.
-// TODO(risk): choose and justify the aggregation rule. Leaning toward a
-// weighted sum with a critical-factor floor, so one critical finding cannot be
-// diluted by many benign ones.
+// Done: BaselineEngine in score.go implements Engine as a deterministic,
+// explainable baseline. Five factors — verdict, violation_severity,
+// workspace_escape, novel_target, violation_history — are summed as integer
+// points and clamped to [0,100]. It is the first real risk stage rather than
+// the engine §3.6 describes: there is no sensitivity oracle, no learned
+// baseline and no sequence detection, and score.go says so at the top.
+// Done: two of the seven planned scorers exist. workspace_escape is
+// WorkspaceEscapeScorer, and violation_rate is ViolationHistoryScorer, renamed
+// because what it actually reads is a count rather than a rate — a rate would
+// need a window and there is no measured window to choose.
+// TODO(risk): the remaining five need a SensitivityOracle, which none of them
+// can be written without: sensitive_path, novel_network_destination,
+// privilege_change, credential_access, exfiltration_pattern. Until then the
+// baseline cannot tell a private key from a system header, which is pinned by
+// TestBaselineScorerCannotSeeSensitivity in internal/pipeline so the claim
+// fails the day it stops being true.
+// Done: the aggregation rule is BoundedSumAggregator, a plain clamped sum. The
+// weighted sum with a critical-factor floor was considered and deferred rather
+// than adopted: with five factors and a heaviest contribution of 55, no
+// accumulation of small factors can bury a large one, so the floor would be a
+// mechanism with no failure to prevent. It becomes worth adding when the scorer
+// set is large enough for dilution to be possible.
+// TODO(risk): the point values are calibrated against the shipped rule set's
+// own stated bands, not measured. They are a documented starting point; the
+// labeled corpus below is what turns them into a tuned result.
+// TODO(risk): score a destination known only by address above one reached by a
+// correlated name. capability.AttrHostnameCorrelated already records the
+// distinction and enrichment already writes it, so this is evidence in hand
+// that the baseline does not read — left out only to keep the first model to
+// five factors. It is the cheapest of the remaining signals and needs no
+// oracle.
 // TODO(risk): assemble a labeled evaluation set of benign and malicious
 // sessions. Tuning without measurement produces a system that is either ignored
 // or distrusted.

@@ -588,16 +588,40 @@ func (b *builder) Build() (Pipeline, error) {
 	}, nil
 }
 
-// New assembles the standard pipeline: validate, then decide.
+// New assembles the unscored pipeline: validate, then decide.
 //
 // The sequence cmd/allseerctl's dry-run wrote out by hand, which is the
-// reference this package was built to replace. Risk is absent because no risk
-// engine exists; when one does it becomes a third stage between these two, and
-// nothing else here changes — which is the reason commit sits after the whole
-// list rather than after validation.
+// reference this package was built to replace, and it is kept exactly as it was
+// so that reference stays checkable. A pipeline built here leaves
+// ProcessingContext.Risk nil, which policy reads as "no evidence" — every
+// risk-conditioned rule is inert under it, visibly rather than silently.
+//
+// Prefer NewWithRisk. This constructor is for the equivalence test that pins the
+// stage list against the original hand-written loop, and for a caller that
+// deliberately wants validation semantics with nothing scored.
 func New(cfg Config, v Validator, e PolicyEngine) (*EventPipeline, error) {
 	p, err := NewBuilder(cfg).
 		WithStage(NewValidateStage(v)).
+		WithStage(NewDecideStage(e)).
+		Build()
+	if err != nil {
+		return nil, err
+	}
+	return p.(*EventPipeline), nil
+}
+
+// NewWithRisk assembles the full deterministic pipeline: validate, score, decide.
+//
+// The composition the ordering note at the top of this file describes, and the
+// one a daemon should run. Adding the score stage changed nothing else here,
+// which was the point of putting commit after the whole stage list rather than
+// after validation: the scorer reads the session history as it stood before this
+// event, so a target the agent is touching for the first time still reads as
+// novel.
+func NewWithRisk(cfg Config, v Validator, r RiskEngine, e PolicyEngine) (*EventPipeline, error) {
+	p, err := NewBuilder(cfg).
+		WithStage(NewValidateStage(v)).
+		WithStage(NewScoreStage(r)).
 		WithStage(NewDecideStage(e)).
 		Build()
 	if err != nil {

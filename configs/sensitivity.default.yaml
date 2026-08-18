@@ -1,0 +1,232 @@
+# ALLSEER default resource sensitivity list.
+#
+# This file is a security claim. Every entry below asserts "this location should
+# be treated as consequential", and ALLSEER ships that assertion rather than
+# leaving the list empty — because an empty list is not neutral. An empty list
+# says nothing is sensitive, which is a claim too, and a false one.
+#
+# What the list does, precisely: `internal/risk`'s sensitive_path scorer adds
+# points to an event's risk score when the resource it touched matches an entry.
+# It only ever *raises* a score. There is no entry, and no grading, that can
+# lower one — a list that could lower a score would make "add a path here" a way
+# to launder access, and would make a missing entry indistinguishable from an
+# exemption.
+#
+# What matching an entry does NOT do: it does not block, deny, or decide. That
+# is policy's job (configs/rules.default.yaml), and it reads the score this list
+# contributes to. Sensitivity is evidence; the rule set is the judgment.
+#
+# ---------------------------------------------------------------------------
+# Path vocabulary
+# ---------------------------------------------------------------------------
+#
+# Patterns are matched by internal/validator's GlobPathMatcher — the same
+# matcher an envelope's grants and denials use, called rather than
+# reimplemented, so an entry here cannot come to mean something different from
+# an identically written grant. That fixes the vocabulary:
+#
+#   - Patterns MUST be absolute. `**/.ssh/**` is rejected at load; write
+#     `/**/.ssh/**`.
+#   - `**` spans whole path segments and only whole segments. `/a**b` is an
+#     error, not a lenient wildcard.
+#   - `*` matches within one segment.
+#   - Matching is byte-exact and patterns match dotfiles.
+#   - Paths are compared **resolved**. A symlink into a sensitive directory is
+#     matched on where it lands, not on what it was called.
+#
+# There is deliberately no `~`. The daemon governs a session for some user whose
+# home directory it does not necessarily know when this file is loaded, so home
+# locations are written as `/**/.ssh/**` rather than `~/.ssh/**`. The cost is
+# stated plainly: `/**/.ssh/**` also matches `/tmp/anything/.ssh/`. Under the
+# raise-only rule that is a false positive on an unusual path and never a hole,
+# which is the direction this list is allowed to be wrong in.
+#
+# ---------------------------------------------------------------------------
+# Grades
+# ---------------------------------------------------------------------------
+#
+#   critical  Credential material that grants access to something else, that the
+#             agent cannot rotate, and whose disclosure is not undoable.
+#   high      Credentials scoped to one service, or material that reveals the
+#             shape of an account or infrastructure.
+#   medium    Identity and history: useful to an attacker, routinely read by
+#             ordinary tooling.
+#   low       Configuration whose *modification* redirects behavior, but whose
+#             reading is unremarkable.
+#   info      Explicitly rated as unremarkable. This is not the same as absent:
+#             an unlisted path is *unknown*, and the record says so. Rating a
+#             location `info` is how the list states "we looked, and this is the
+#             ordinary toolchain traffic every build produces".
+#
+# `info` and `low` contribute zero points. They exist so the audit record can
+# distinguish "known and unremarkable" from "never heard of it", which is the
+# distinction the whole module refuses to collapse.
+#
+# When several entries match one path, the **highest** grade wins. Adding a
+# narrower entry can therefore only ever raise a path's grade, never lower it.
+#
+# ---------------------------------------------------------------------------
+# Editing this file
+# ---------------------------------------------------------------------------
+#
+# `reason` is required and must say why the location is consequential, not what
+# it is. "SSH keys" is not a reason; "a credential granting access to other
+# hosts that the agent cannot rotate" is. An entry nobody can review is an entry
+# nobody will remove when it turns out to be wrong.
+#
+# Every pattern is validated at load. An unusable pattern **refuses the whole
+# file** rather than being skipped, because a sensitivity entry that matches
+# nothing protects nothing and does it silently.
+
+name: default
+version: "1"
+description: >
+  Conservative baseline sensitivity list for governing AI coding agents. Rates
+  credential material, identity, and the locations an attacker reaches for,
+  and explicitly rates the toolchain traffic an ordinary build produces so that
+  known-benign is distinguishable from unrecognized.
+
+paths:
+  # --- critical: credentials that reach other systems -----------------------
+
+  - patterns:
+      - /**/.ssh/id_*
+      - /**/.ssh/*_key
+      - /**/.ssh/*_ed25519
+      - /**/.ssh/*_rsa
+    sensitivity: critical
+    reason: >
+      Private SSH keys authenticate to other hosts. Disclosure grants lateral
+      movement the agent's own privileges do not, cannot be undone by deleting
+      anything locally, and cannot be rotated by the agent that leaked it.
+      Public halves match these patterns too; over-rating a `.pub` read costs a
+      false positive on an operation that is rare anyway, and separating them
+      would need per-file exclusion this matcher deliberately does not have.
+
+  - patterns: [/etc/shadow, /etc/gshadow]
+    sensitivity: critical
+    reason: >
+      Password hashes for every local account. A coding task has no reason to
+      read them, and an agent that does is either enumerating credentials or
+      running as something it should not be.
+
+  - patterns: [/etc/sudoers, /etc/sudoers.d/**]
+    sensitivity: critical
+    reason: >
+      Defines who may escalate privilege. Reading it maps the escalation
+      surface; writing it is the escalation.
+
+  - patterns: [/**/.aws/credentials, /**/.aws/config]
+    sensitivity: critical
+    reason: >
+      Long-lived cloud access keys. Disclosure grants access to infrastructure
+      that outlives the session, and the blast radius is whatever the account
+      can reach rather than whatever the workspace contains.
+
+  - patterns: [/**/.kube/config, /**/.docker/config.json]
+    sensitivity: critical
+    reason: >
+      Cluster and registry credentials. Both grant the ability to run code
+      elsewhere, which makes them a route out of any sandbox around the agent.
+
+  - patterns: [/**/.netrc, /**/.pgpass, /**/.git-credentials]
+    sensitivity: critical
+    reason: >
+      Plaintext credential stores, by format. Nothing in them is encrypted and
+      nothing in them is scoped to this session.
+
+  - patterns: [/**/.gnupg/**]
+    sensitivity: critical
+    reason: >
+      Private signing and encryption keys. Disclosure lets an attacker sign
+      artifacts as the user, which survives revocation of everything else.
+
+  - patterns: [/**/*.pem, /**/*.p12, /**/*.pfx]
+    sensitivity: critical
+    reason: >
+      Certificate and private-key containers, identified by format rather than
+      location because they are routinely placed anywhere. A test fixture with
+      this extension will be over-rated; that raises a score on a departing
+      read and never lowers one.
+
+  # --- high: service-scoped credentials and account shape -------------------
+
+  - patterns: [/**/.ssh/**]
+    sensitivity: high
+    reason: >
+      The rest of an SSH directory — config, known_hosts, authorized_keys.
+      Reading it enumerates the hosts the user reaches and the identities they
+      use; writing authorized_keys is a persistence mechanism.
+
+  - patterns: [/**/.env, /**/.env.*]
+    sensitivity: high
+    reason: >
+      The conventional home of service tokens in application repositories.
+      Frequently present inside a workspace, which is precisely why reading one
+      is worth scoring rather than assuming benign because it is nearby.
+
+  - patterns: [/**/.npmrc, /**/.pypirc, /**/.gem/credentials]
+    sensitivity: high
+    reason: >
+      Package registry publish tokens. Disclosure allows publishing under the
+      user's identity, which is a supply-chain compromise rather than a local
+      one.
+
+  - patterns: [/**/.config/gh/**, /**/.config/gcloud/**, /**/.azure/**]
+    sensitivity: high
+    reason: >
+      CLI credential stores for source hosting and cloud providers. They hold
+      refresh tokens, so disclosure survives the session that leaked them.
+
+  - patterns: [/proc/*/environ, /proc/*/mem, /proc/*/maps]
+    sensitivity: high
+    reason: >
+      Another process's environment and memory. Environment variables routinely
+      carry credentials, and reading another process's memory is how a running
+      agent or the governing daemon itself is looted.
+
+  # --- medium: identity and history -----------------------------------------
+
+  - patterns: [/etc/passwd, /etc/group]
+    sensitivity: medium
+    reason: >
+      Account enumeration. Read constantly by ordinary tooling through
+      getpwnam, so this is graded to be visible in a departure without being
+      alarming on its own.
+
+  - patterns: [/**/.bash_history, /**/.zsh_history, /**/.psql_history]
+    sensitivity: medium
+    reason: >
+      Shell history frequently contains credentials typed on a command line,
+      and always contains a map of what the user does and where.
+
+  # --- low: configuration whose modification redirects behavior -------------
+
+  - patterns: [/etc/hosts, /etc/resolv.conf, /etc/nsswitch.conf]
+    sensitivity: low
+    reason: >
+      Name resolution configuration. Reading it is unremarkable; modifying it
+      redirects every subsequent connection, which is why it is on the list at
+      all rather than left unknown.
+
+  # --- info: explicitly unremarkable ----------------------------------------
+  #
+  # These entries add nothing to a score. They exist so the audit record can say
+  # "rated, and unremarkable" rather than "unrecognized" for the traffic that
+  # dominates every build — which is the difference this module refuses to
+  # collapse, and the reason the oracle has an unknown state at all.
+
+  - patterns: [/usr/include/**, /usr/share/**, /usr/lib/**, /usr/local/include/**]
+    sensitivity: info
+    reason: >
+      System headers, shared data, and libraries. Read continuously by
+      compilers, linkers, and package tooling, and outside any plausible
+      workspace root, so they are the most common cause of a workspace escape
+      that means nothing.
+
+  - patterns: [/etc/ssl/certs/**, /etc/pki/tls/certs/**]
+    sensitivity: info
+    reason: >
+      Public CA trust stores. Read by anything that opens a TLS connection.
+      Named explicitly because a path under /etc/ssl looks alarming and is not;
+      the private counterparts live elsewhere and are rated critical above.

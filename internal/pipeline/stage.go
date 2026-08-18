@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
+	"github.com/stringNameMahin/ALLSEER/internal/risk"
 	"github.com/stringNameMahin/ALLSEER/internal/validator"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
 	"github.com/stringNameMahin/ALLSEER/pkg/ece"
@@ -26,6 +27,16 @@ import (
 // validator.DefaultValidator.
 type Validator interface {
 	Validate(ctx context.Context, req validator.ValidateRequest) (*validator.Result, error)
+}
+
+// RiskEngine is the scoring the pipeline needs. Satisfied by
+// risk.BaselineEngine.
+//
+// Only Score, not ScoreSession: the hot path scores events, and session-level
+// scoring is answered at session end by whoever owns the session rather than on
+// every syscall.
+type RiskEngine interface {
+	Score(ctx context.Context, req risk.ScoreRequest) (*decision.RiskAssessment, error)
 }
 
 // PolicyEngine is the evaluation the pipeline needs. Satisfied by
@@ -75,6 +86,71 @@ func (s *ValidateStage) Execute(ctx context.Context, pc *ProcessingContext) erro
 	return nil
 }
 
+// ScoreStage assesses how serious the validated event is.
+//
+// Sits between validate and decide, which is the position the whole pipeline
+// ordering was built around: it reads the validator's answer, and it reads the
+// session history *before* the pipeline commits this event, so a target the
+// agent is touching for the first time still reads as novel. Moving the commit
+// earlier would make every target familiar by the time this stage asked.
+type ScoreStage struct{ e RiskEngine }
+
+var _ Stage = (*ScoreStage)(nil)
+
+// NewScoreStage wraps a risk engine as a pipeline stage.
+func NewScoreStage(e RiskEngine) *ScoreStage { return &ScoreStage{e: e} }
+
+// Name identifies the stage in metrics and reasoning chains.
+func (s *ScoreStage) Name() string { return "score" }
+
+// Execute scores the event and records the assessment on the context.
+//
+// It refuses to run without a validation result for the same reason the decide
+// stage does: every factor in the baseline model reads the validator's answer,
+// and a score computed against an absent verdict would be a number with nothing
+// behind it — which is precisely the fabricated evidence policy's no-evidence
+// rule exists to keep out.
+//
+// A scoring failure is an error, never a zero assessment. The pipeline turns it
+// into an explicit indeterminate decision; substituting a score would hand
+// policy a reassuring value the engine never produced.
+func (s *ScoreStage) Execute(ctx context.Context, pc *ProcessingContext) error {
+	if s.e == nil {
+		return errors.New("score: no risk engine configured")
+	}
+	if pc.Validation == nil {
+		return errors.New("score: no validation result; an event that was never validated cannot be scored")
+	}
+
+	// pc.State is passed as the history. It may be nil — a pipeline is built
+	// with state, but the field is an interface and a nil one is the honest
+	// "no history" input the engine already handles by withholding the
+	// history-derived factors and lowering confidence.
+	var history risk.History
+	if pc.State != nil {
+		history = pc.State
+	}
+
+	assessment, err := s.e.Score(ctx, risk.ScoreRequest{
+		Event:      pc.Event,
+		Validation: pc.Validation,
+		Envelope:   pc.Envelope,
+		History:    history,
+	})
+	if err != nil {
+		return fmt.Errorf("score: %w", err)
+	}
+	if assessment == nil {
+		// The interface promises a non-nil assessment alongside a nil error. A
+		// nil here would reach policy as "risk did not run", which is a
+		// different and much quieter claim than "risk ran and found nothing".
+		return errors.New("score: risk engine returned no assessment")
+	}
+
+	pc.Risk = assessment
+	return nil
+}
+
 // DecideStage turns the validated event into an action.
 type DecideStage struct{ e PolicyEngine }
 
@@ -95,9 +171,9 @@ func (s *DecideStage) Name() string { return "decide" }
 // would look exactly like a considered decision. That is the policy engine's
 // own rule about evidence, applied one stage earlier.
 //
-// Risk is passed through as-is, nil included. Nil is the honest state until a
-// risk engine exists, and the engine already treats a condition with no
-// evidence behind it as not matching.
+// Risk is passed through as-is, nil included. Nil is the honest state for a
+// pipeline built without a score stage, and the policy engine already treats a
+// condition with no evidence behind it as not matching.
 func (s *DecideStage) Execute(ctx context.Context, pc *ProcessingContext) error {
 	if s.e == nil {
 		return errors.New("decide: no policy engine configured")

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
+	"github.com/stringNameMahin/ALLSEER/internal/risk"
 	"github.com/stringNameMahin/ALLSEER/internal/validator"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
 	"github.com/stringNameMahin/ALLSEER/pkg/ece"
@@ -113,7 +114,9 @@ type ProcessingContext struct {
 	// Risk is the scored assessment, or nil when no risk stage ran. Nil is
 	// meaningful and must not be replaced with a zero assessment: policy treats
 	// a condition with no evidence behind it as not matching, and a fabricated
-	// score of zero would satisfy every max_risk_score rule in the set.
+	// score of zero would satisfy every max_risk_score rule in the set. A
+	// pipeline built by New still leaves it nil; NewWithRisk is the composition
+	// that fills it in.
 	Risk *decision.RiskAssessment
 
 	// Outcome is the action policy selected.
@@ -148,10 +151,18 @@ type ProcessingContext struct {
 // A narrow interface declared at the point of use rather than an import of
 // internal/session, which is the pattern validator.SessionState and risk.History
 // already established: the pipeline names what it needs, and session.MemoryState
-// happens to satisfy it. It is the read side (validator.SessionState) plus the
-// three writes, because the pipeline is the component that owns advancing them.
+// happens to satisfy it. It is both read sides plus the three writes, because
+// the pipeline is the component that owns advancing them.
+//
+// risk.History is named here rather than reached for with a type assertion in
+// the score stage. The two read sides describe one session and
+// session.MemoryState was built to satisfy both from one set of counters; a
+// stage that asserted its way to the history would silently score against no
+// history at all when the assertion failed, and "no history" is a state this
+// system treats as meaningful evidence rather than as a shrug.
 type State interface {
 	validator.SessionState
+	risk.History
 
 	// RecordEvent folds an observed event into the counters.
 	RecordEvent(e *event.Event)
@@ -237,8 +248,15 @@ type ErrorHandler interface {
 // pipeline is bound to one session and processes it on one goroutine, which is
 // what makes session.MemoryState's single-writer assumption a guarantee rather
 // than a convention. The stages read, the pipeline writes, and the write
-// happens after the whole stage list — so a budget stays inclusive and a future
-// risk stage can still tell a novel target from a familiar one.
+// happens after the whole stage list — so a budget stays inclusive and the risk
+// stage can still tell a novel target from a familiar one.
+// Done: the risk stage is ScoreStage in stage.go, over internal/risk. It sits
+// between validate and decide, and NewWithRisk in process.go is the composition
+// a daemon should run; New is kept as the unscored one the equivalence test
+// pins against the original hand-written loop. Nothing else in this package
+// changed to accommodate it, which is what the write-last ordering was for.
+// TestRiskStageSeesHistoryBeforeCommit is the end-to-end proof that the scorer
+// sees the session as it stood before the event under judgment.
 // Done: every stage runs under panic recovery in process.go. A panic becomes an
 // ordinary stage error and travels the same route to an indeterminate decision,
 // so one scorer mishandling one malformed path cannot end governance for the

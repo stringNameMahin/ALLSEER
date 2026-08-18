@@ -162,6 +162,97 @@ func MatchPath(pattern, path string) bool {
 	return matchSegments(segments(normalize(pattern)), segments(normalize(path)))
 }
 
+// PatternSet is a set of path patterns with their segmentation precomputed.
+//
+// MatchPath is the right shape for one pattern against one path and the wrong
+// shape for many: it revalidates the pattern and re-splits both sides on every
+// call, so scanning n patterns costs n validations of the same pattern list and
+// n splits of the same path. A PatternSet pays the pattern cost once at
+// construction and the path cost once per lookup, which turns a linear scan
+// from allocation-heavy into one allocation.
+//
+// Written for internal/risk's sensitivity list, which scans every configured
+// pattern for every event on the hot path. It applies equally to a grant scan,
+// which has the same shape and the same problem — see the benchmarking TODO in
+// validator.go.
+//
+// Immutable after construction and safe for concurrent use.
+type PatternSet struct {
+	raw  []string
+	segs [][]string
+}
+
+// CompilePatterns validates and segments a pattern list.
+//
+// Validation is ValidatePattern, called rather than repeated, so a set accepts
+// exactly the patterns the single-pattern path accepts. An invalid pattern is
+// an error rather than an entry that silently never matches: MatchPath can
+// afford to answer "no match" for a bad pattern because its caller supplied one
+// pattern and one answer, while a set is built once from configuration a human
+// wrote and should refuse it while that human is still looking.
+func CompilePatterns(patterns []string) (*PatternSet, error) {
+	set := &PatternSet{
+		raw:  make([]string, 0, len(patterns)),
+		segs: make([][]string, 0, len(patterns)),
+	}
+	for _, p := range patterns {
+		if err := ValidatePattern(p); err != nil {
+			return nil, err
+		}
+		set.raw = append(set.raw, p)
+		set.segs = append(set.segs, segments(normalize(p)))
+	}
+	return set, nil
+}
+
+// Len reports how many patterns the set holds.
+func (s *PatternSet) Len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.raw)
+}
+
+// Pattern returns the i'th pattern as written.
+func (s *PatternSet) Pattern(i int) string {
+	if s == nil || i < 0 || i >= len(s.raw) {
+		return ""
+	}
+	return s.raw[i]
+}
+
+// MatchIndex returns the index of the first pattern covering path, or -1.
+//
+// "First" is the order the set was built in, so a caller that needs a
+// precedence other than declaration order orders its patterns accordingly
+// rather than scanning for all matches.
+//
+// An unresolved path matches nothing, the same refusal MatchPath makes and for
+// the same reason: a truncated or relative path is one the matcher cannot
+// reason about, and a confident answer about it would be a confident answer
+// about a path that never existed.
+func (s *PatternSet) MatchIndex(path string) int {
+	if s == nil || len(s.segs) == 0 {
+		return -1
+	}
+	// Split once for the whole set, and get the resolution check out of the
+	// same split. This is the line the type exists for: calling IsResolved and
+	// then segmenting would split the path twice before the scan even starts.
+	pathSegs, ok := resolvedSegments(path)
+	if !ok {
+		return -1
+	}
+	for i, pat := range s.segs {
+		if matchSegments(pat, pathSegs) {
+			return i
+		}
+	}
+	return -1
+}
+
+// Match reports whether any pattern in the set covers path.
+func (s *PatternSet) Match(path string) bool { return s.MatchIndex(path) >= 0 }
+
 // IsResolved reports whether p is in the form the matcher requires: absolute,
 // free of "." and ".." segments, free of empty segments, and free of NUL.
 //
@@ -176,22 +267,37 @@ func MatchPath(pattern, path string) bool {
 // ALLSEER_PATH_MAX by the probe, which is exactly the case that must never be
 // mistaken for a complete path.
 func IsResolved(p string) bool {
+	_, ok := resolvedSegments(p)
+	return ok
+}
+
+// resolvedSegments is IsResolved with the segmentation kept.
+//
+// One definition of "resolved", used by both the predicate and the scan. A
+// second implementation here to save an allocation would be two answers to the
+// question the fuzzer covers, and the cheaper one would be the one nobody
+// fuzzed.
+//
+// A resolved "/" yields no segments and true, which is what makes "/**" match
+// the root through the zero-segment case.
+func resolvedSegments(p string) ([]string, bool) {
 	if p == "" || p[0] != '/' {
-		return false
+		return nil, false
 	}
 	if strings.ContainsRune(p, 0) || strings.Contains(p, "//") {
-		return false
+		return nil, false
 	}
 	p = normalize(p)
 	if p == "/" {
-		return true
+		return nil, true
 	}
-	for _, seg := range segments(p) {
+	segs := segments(p)
+	for _, seg := range segs {
 		if seg == "" || seg == "." || seg == ".." {
-			return false
+			return nil, false
 		}
 	}
-	return true
+	return segs, true
 }
 
 // ValidatePattern reports why a selector pattern cannot be evaluated, or nil.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/stringNameMahin/ALLSEER/internal/pipeline"
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
+	"github.com/stringNameMahin/ALLSEER/internal/risk"
 	"github.com/stringNameMahin/ALLSEER/internal/session"
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry/replay"
 	"github.com/stringNameMahin/ALLSEER/internal/validator"
@@ -68,12 +69,17 @@ func policyUsage(w io.Writer) {
 
 // dryRunResult is one event's trip through the pipeline.
 //
-// Deliberately not a decision.Decision. A Decision carries a RiskAssessment by
-// value, and emitting one with no risk stage in the pipeline would publish a
-// score of zero and a level of "" as though they had been assessed. Fabricating
-// the quiet half of an audit record is exactly the failure the rest of this
-// system is built to avoid, so dry-run reports its own shape and says plainly
-// which stages ran.
+// Deliberately not a decision.Decision. Dry-run reports the violation list and
+// whether the matched rule was terminal, neither of which a Decision carries,
+// and it must not publish an audit record for a session that was never governed.
+// Its own shape also lets it keep saying which stages ran, which is the whole
+// point of the summary's honesty section.
+//
+// Risk is now among them. The score is emitted as a pointer rather than a value
+// for the reason the type comment used to give for omitting it entirely: a zero
+// score with an empty level is what an unscored event looks like, and a consumer
+// has to be able to tell that from an event scored at zero. A nil Risk means the
+// stage did not run.
 type dryRunResult struct {
 	Sequence uint64 `json:"sequence"`
 	EventID  string `json:"event_id"`
@@ -83,6 +89,10 @@ type dryRunResult struct {
 
 	Verdict    decision.Verdict `json:"verdict"`
 	Violations []string         `json:"violations,omitempty"`
+
+	// Risk is the assessment that informed the action, or nil when no risk
+	// stage ran. Never a zero value standing in for an absent one.
+	Risk *dryRunRisk `json:"risk,omitempty"`
 
 	// RuleID is the rule that decided, or "default" when none matched.
 	RuleID string     `json:"rule_id"`
@@ -100,6 +110,25 @@ type dryRunResult struct {
 	Reasoning []decision.ReasoningStep `json:"reasoning,omitempty"`
 }
 
+// dryRunRisk is the reported half of a decision.RiskAssessment.
+//
+// The factor list is carried in full rather than summarized: an operator asking
+// why a risk-conditioned rule fired needs the decomposition, and a score with no
+// factors behind it is the opaque number the risk module was designed to avoid.
+type dryRunRisk struct {
+	Score      float64           `json:"score"`
+	Level      decision.Level    `json:"level"`
+	Confidence float64           `json:"confidence"`
+	Factors    []decision.Factor `json:"factors,omitempty"`
+}
+
+func riskOf(a *decision.RiskAssessment) *dryRunRisk {
+	if a == nil {
+		return nil
+	}
+	return &dryRunRisk{Score: a.Score, Level: a.Level, Confidence: a.Confidence, Factors: a.Factors}
+}
+
 func runPolicyDryRun(args []string) int {
 	fs := flag.NewFlagSet("policy dry-run", flag.ContinueOnError)
 	fs.Usage = func() {
@@ -113,6 +142,7 @@ func runPolicyDryRun(args []string) int {
 	var (
 		rulesPath    = fs.String("rules", "", "Path to a policy rule set (required)")
 		envelopePath = fs.String("envelope", "", "Path to the ECE the session was governed by, as JSON (required)")
+		sensPath     = fs.String("sensitivity", "", "Path to a resource sensitivity list (optional; see configs/sensitivity.default.yaml)")
 		modeName     = fs.String("mode", string(policy.ModeMonitor), "Enforcement mode to evaluate under: monitor, warn, interactive, enforce")
 		asJSON       = fs.Bool("json", false, "Emit results as JSONL rather than a table")
 		quiet        = fs.Bool("quiet", false, "Suppress the trailing summary")
@@ -181,7 +211,29 @@ func runPolicyDryRun(args []string) int {
 	}
 	defer func() { _ = src.Close() }()
 
-	st, results, evalErr := evaluateStream(ctx, src.Events(), env, engine, mode)
+	// Refused before anything is evaluated, like the rule set and the envelope
+	// before it. A sensitivity list that cannot load is a security claim the
+	// operator wrote and this run cannot honour, and proceeding without it
+	// would produce a quiet report that reads like a quiet session.
+	//
+	// Declared as the interface, not as *risk.PathOracle. A nil *PathOracle
+	// assigned into an interface parameter is a non-nil interface holding a nil
+	// pointer, so evaluateStream's "was a list supplied" check would answer yes
+	// and the run would report resources as rated against a list nobody passed.
+	// The oracle survives a nil receiver, so nothing would crash — the report
+	// would just quietly stop distinguishing "unrated" from "nobody looked",
+	// which is the one distinction this whole feature exists to keep.
+	var oracle risk.SensitivityOracle
+	if *sensPath != "" {
+		o, err := risk.LoadPathOracle(*sensPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "allseerctl policy dry-run: %v\n", err)
+			return 1
+		}
+		oracle = o
+	}
+
+	st, results, evalErr := evaluateStream(ctx, src.Events(), env, engine, mode, oracle)
 	if evalErr != nil {
 		fmt.Fprintf(os.Stderr, "allseerctl policy dry-run: %v\n", evalErr)
 		return 1
@@ -198,7 +250,7 @@ func runPolicyDryRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "\nallseerctl policy dry-run: %v\n", streamErr)
 	}
 	if !*quiet {
-		printDryRunSummary(os.Stderr, results, rs, env, st, mode, streamErr)
+		printDryRunSummary(os.Stderr, results, rs, env, st, mode, streamErr, *sensPath)
 	}
 	if streamErr != nil {
 		// A dry run over a truncated stream is a dry run over part of a
@@ -218,9 +270,11 @@ func runPolicyDryRun(args []string) int {
 // one more than can be kept in agreement, and the one in the CLI is the one
 // that would drift from what the daemon actually does.
 //
-// Risk is still absent — no stage exists for it — which is reported rather than
-// simulated, since a fabricated score would change which rules fire.
-func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Envelope, engine *policy.RuleEngine, mode policy.Mode) (*session.MemoryState, []dryRunResult, error) {
+// All three deterministic stages run: validate, score, decide. The risk stage
+// is the baseline scorer in internal/risk, the same one a daemon would run, so
+// the risk-conditioned rules in a rule set are evaluated here rather than
+// reported as unevaluable. What the run still cannot do is enforce.
+func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Envelope, engine *policy.RuleEngine, mode policy.Mode, oracle risk.SensitivityOracle) (*session.MemoryState, []dryRunResult, error) {
 	// Session state is accumulated rather than left nil, so grant budgets and
 	// session constraints are actually evaluated. StartedAt is deliberately
 	// unset: that puts elapsed time on the recording's own clock, so a dry run
@@ -228,11 +282,24 @@ func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Env
 	// the age of the file.
 	st := session.NewState(env.SessionID, env)
 
-	p, err := pipeline.New(pipeline.Config{
+	// With no -sensitivity flag the engine rates no resources, and the report
+	// says so rather than implying nothing was sensitive. NewEngineWithOracle
+	// refuses a nil oracle for exactly that reason, so the choice is made here
+	// where it is visible instead of by passing nil into a constructor.
+	riskEngine := risk.NewEngine()
+	if oracle != nil {
+		var err error
+		riskEngine, err = risk.NewEngineWithOracle(oracle)
+		if err != nil {
+			return nil, nil, fmt.Errorf("building risk engine: %w", err)
+		}
+	}
+
+	p, err := pipeline.NewWithRisk(pipeline.Config{
 		Session: pipeline.Session{Envelope: env, Mode: mode, State: st},
 		// No sink: a dry run audits nothing, and passing one would write
 		// records for a session that never happened.
-	}, validator.NewValidator(), engine)
+	}, validator.NewValidator(), riskEngine, engine)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building pipeline: %w", err)
 	}
@@ -262,6 +329,7 @@ func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Env
 			Target:       targetOf(&e),
 			Verdict:      pc.Validation.Verdict,
 			Violations:   violationNames(pc.Validation),
+			Risk:         riskOf(pc.Risk),
 			RuleID:       pc.Outcome.RuleID,
 			Action:       pc.Outcome.Action,
 			Terminal:     pc.Outcome.Terminal,
@@ -381,24 +449,37 @@ func printResultsJSON(results []dryRunResult) {
 
 func printResultsTable(results []dryRunResult) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SEQ\tCAPABILITY\tTARGET\tVERDICT\tRULE\tACTION\tENFORCED")
+	fmt.Fprintln(w, "SEQ\tCAPABILITY\tTARGET\tVERDICT\tRISK\tRULE\tACTION\tENFORCED")
 
 	for _, r := range results {
 		action := string(r.Action)
 		if r.Terminal {
 			action += " (terminal)"
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			r.Sequence,
 			r.Capability,
 			truncate(r.Target, 44),
 			r.Verdict,
+			formatRisk(r.Risk),
 			r.RuleID,
 			action,
 			formatEnforcement(r.WouldEnforce),
 		)
 	}
 	_ = w.Flush()
+}
+
+// formatRisk prints the score and level, or a dash when nothing scored it.
+//
+// A dash rather than "0 none", for the reason the nil pointer exists: an event
+// nobody scored and an event scored at zero are different findings, and a column
+// that showed them the same way would undo the distinction the type keeps.
+func formatRisk(r *dryRunRisk) string {
+	if r == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%.0f %s", r.Score, r.Level)
 }
 
 // formatEnforcement never prints a bare "yes". Nothing was enforced by this
@@ -413,7 +494,7 @@ func formatEnforcement(would bool) string {
 
 // printDryRunSummary reports what the run established and, as importantly,
 // what it could not.
-func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet, env *ece.Envelope, st *session.MemoryState, mode policy.Mode, streamErr error) {
+func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet, env *ece.Envelope, st *session.MemoryState, mode policy.Mode, streamErr error, sensPath string) {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "\n%d %s evaluated in %s mode; nothing was enforced\n",
@@ -449,12 +530,16 @@ func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet,
 	// each one changes which rules could have fired. Leaving them out would let
 	// a quiet dry run read as a quiet policy.
 	var caveats []string
-	if n := riskConditionedRules(rs); n > 0 {
+	if n := unscoredResults(results); n > 0 {
+		// Only reachable when a stage failure left an event unscored, since
+		// evaluateStream always builds the scored pipeline. Reported anyway:
+		// a risk-conditioned rule cannot fire on an event with no assessment,
+		// and an unexplained fall-through reads like a considered decision.
 		caveats = append(caveats, fmt.Sprintf(
-			"%d %s risk-conditioned and could not fire: no risk engine is linked into this build, "+
-				"and an unscored event never satisfies a score or confidence condition",
-			n, plural(n, "rule is", "rules are")))
+			"%d %s unscored, so no risk-conditioned rule could fire on %s",
+			n, plural(n, "event is", "events are"), plural(n, "it", "them")))
 	}
+
 	// Grant budgets and session constraints *are* evaluated now — the run
 	// accumulates session state as the daemon will. Duration is the one budget
 	// that can still go unchecked, and only for a specific reason: a recording
@@ -482,7 +567,47 @@ func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet,
 		}
 	}
 
+	// Separate from the caveats, because these stages *did* run and the
+	// qualification is about how far to trust them. Folding the two together
+	// would either overstate what was skipped or bury what the scorer cannot
+	// see, and the second is the one an operator tuning a threshold needs.
+	if n := riskConditionedRules(rs); n > 0 {
+		fmt.Fprintf(&b, "\nhow to read the risk column:\n"+
+			"  - %d %s risk-conditioned and %s evaluated against the baseline scorer in\n"+
+			"    internal/risk. It reads the verdict, the violation severity, the workspace\n"+
+			"    boundary, the session history, and the sensitivity list below.\n",
+			n, plural(n, "rule is", "rules are"), plural(n, "was", "were"))
+
+		// Which sensitivity list was in force is the most consequential thing
+		// about a risk column, and the absence of one is more consequential
+		// still: without it every resource is unrated, and unrated is not the
+		// same as unremarkable.
+		if sensPath == "" {
+			fmt.Fprintf(&b, "  - NO sensitivity list was supplied, so every resource in this run is\n"+
+				"    **unrated** — which is not the same as unremarkable. Nothing here can tell a\n"+
+				"    credential file from a toolchain header. Pass -sensitivity %s to rate them.\n",
+				"configs/sensitivity.default.yaml")
+		} else {
+			fmt.Fprintf(&b, "  - resources were rated against %s. Paths that list does not\n"+
+				"    cover are reported as unrated rather than as unremarkable.\n", sensPath)
+		}
+		fmt.Fprint(&b, "  - the scorer still has no host or executable ratings and no sequence\n"+
+			"    detection, so it cannot see credential access followed by egress.\n")
+	}
+
 	fmt.Fprint(w, b.String())
+}
+
+// unscoredResults counts events that reached policy with no assessment behind
+// them.
+func unscoredResults(results []dryRunResult) int {
+	var n int
+	for _, r := range results {
+		if r.Risk == nil {
+			n++
+		}
+	}
+	return n
 }
 
 func riskConditionedRules(rs *policy.RuleSet) int {

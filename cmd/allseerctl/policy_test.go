@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
+	"github.com/stringNameMahin/ALLSEER/internal/risk"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
 	"github.com/stringNameMahin/ALLSEER/pkg/ece"
 )
@@ -138,10 +139,12 @@ func TestDryRunOverRecordedSession(t *testing.T) {
 		// The carve-out: a write to CI configuration the envelope denied.
 		{"gt-008", decision.VerdictExplicitlyDenied, "envelope-explicit-denial", ece.ActionBlock},
 		// Reading an SSH key outside the workspace. The rule written for it,
-		// workspace-escape-read, is risk-conditioned and cannot fire without a
-		// risk engine, so this falls through to the posture — which is exactly
-		// what the summary's caveat exists to explain.
-		{"gt-009", decision.VerdictGrantExceeded, "default", ece.ActionWarn},
+		// workspace-escape-read, is risk-conditioned; it used to be unfirable
+		// and this event fell through to the posture. With the baseline scorer
+		// in the pipeline it scores 56, under the rule's max_risk_score of 60,
+		// so the rule its author wrote for exactly this case now decides it.
+		// The action is unchanged — what changed is that it can be attributed.
+		{"gt-009", decision.VerdictGrantExceeded, "workspace-escape-read", ece.ActionWarn},
 		{"gt-010", decision.VerdictWithinEnvelope, "within-envelope", ece.ActionAllow},
 	}
 
@@ -167,6 +170,172 @@ func TestDryRunOverRecordedSession(t *testing.T) {
 	}
 	if v := byEvent["gt-009"].Violations; len(v) != 2 || v[1] != "workspace_escape" {
 		t.Errorf("gt-009 violations = %v, want the mismatch and the escape", v)
+	}
+
+	// Every event carries an assessment, and it decomposes. A score with no
+	// factors behind it is the opaque number internal/risk was built to avoid,
+	// and an operator asking why a risk-conditioned rule fired reads this.
+	for _, r := range results {
+		if r.Risk == nil {
+			t.Errorf("%s: no risk assessment", r.EventID)
+			continue
+		}
+		if len(r.Risk.Factors) == 0 {
+			t.Errorf("%s: the score has no factors behind it", r.EventID)
+		}
+		if r.Risk.Score < 0 || r.Risk.Score > 100 {
+			t.Errorf("%s: score %v is outside [0,100]", r.EventID, r.Risk.Score)
+		}
+		if !decision.ValidLevel(r.Risk.Level) {
+			t.Errorf("%s: level %q is not one the risk engine can assign", r.EventID, r.Risk.Level)
+		}
+	}
+
+	// The two ends of the scale, checked against the model rather than against
+	// whatever the code happens to produce: an event a grant covered scores
+	// exactly zero, and the escape scores 25 (grant_exceeded) + 15 (the
+	// escape's high severity) + 10 (the escape) + 5 (a target new to the
+	// session) + 1 (one prior violation, gt-008's denial).
+	if got := byEvent["gt-001"].Risk; got.Score != 0 || got.Level != decision.LevelNone {
+		t.Errorf("gt-001 risk = %v/%q, want 0/none for an event the envelope covered", got.Score, got.Level)
+	}
+	if got := byEvent["gt-009"].Risk; got.Score != 56 {
+		t.Errorf("gt-009 score = %v, want 56 (factors %+v)", got.Score, got.Factors)
+	}
+}
+
+// --- sensitivity ------------------------------------------------------------
+
+// The same recording with the shipped sensitivity list in force. This is the
+// command-level proof of the milestone: a read of ~/.ssh/id_rsa stops being an
+// ordinary workspace escape and becomes the credential finding the shipped rule
+// set was written for.
+func TestDryRunWithSensitivityList(t *testing.T) {
+	env := writeFixture(t, "envelope.json", gitEnvelope)
+	list := filepath.Join("..", "..", "configs", "sensitivity.default.yaml")
+
+	results, code := dryRun(t, "-rules", defaultRules(), "-envelope", env, "-sensitivity", list, gitEvents)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+
+	byEvent := map[string]dryRunResult{}
+	for _, r := range results {
+		byEvent[r.EventID] = r
+	}
+
+	// The one event the list changes, and the one it was added for.
+	key := byEvent["gt-009"]
+	if key.RuleID != "credential-access-high-risk" || key.Action != ece.ActionRequestApproval {
+		t.Errorf("gt-009: %s/%s, want credential-access-high-risk/request_approval", key.RuleID, key.Action)
+	}
+	if key.Risk == nil || key.Risk.Score != 81 {
+		t.Errorf("gt-009 risk = %+v, want a score of 81 (56 unrated + 25 for a critical resource)", key.Risk)
+	}
+
+	// The reason the operator wrote in the list reaches the output, so "why did
+	// this score go up" is answered without opening the config.
+	var sens *decision.Factor
+	for i := range key.Risk.Factors {
+		if key.Risk.Factors[i].Name == risk.FactorSensitivePath {
+			sens = &key.Risk.Factors[i]
+		}
+	}
+	if sens == nil {
+		t.Fatal("gt-009 carries no sensitive_path factor")
+	}
+	if sens.Evidence[risk.EvidenceSensitivity] != "critical" {
+		t.Errorf("sensitivity = %q, want critical", sens.Evidence[risk.EvidenceSensitivity])
+	}
+	if sens.Evidence[risk.EvidenceReason] == "" {
+		t.Error("the factor raised the score without carrying the list's reason")
+	}
+
+	// Nothing else moved. The workspace-escape read in this recording is the
+	// only path the list covers, so every other verdict, rule, and action is
+	// what the unrated run produced.
+	unrated, code := dryRun(t, "-rules", defaultRules(), "-envelope", env, gitEvents)
+	if code != 0 {
+		t.Fatalf("unrated exit code = %d, want 0", code)
+	}
+	if len(unrated) != len(results) {
+		t.Fatalf("event counts differ: %d rated, %d unrated", len(results), len(unrated))
+	}
+	for i := range results {
+		r, u := results[i], unrated[i]
+		if r.Verdict != u.Verdict {
+			t.Errorf("%s: verdict %q rated, %q unrated — sensitivity must not reach validation",
+				r.EventID, r.Verdict, u.Verdict)
+		}
+		if r.EventID == "gt-009" {
+			continue
+		}
+		if r.RuleID != u.RuleID || r.Action != u.Action {
+			t.Errorf("%s: %s/%s rated, %s/%s unrated", r.EventID, r.RuleID, r.Action, u.RuleID, u.Action)
+		}
+		if r.Risk == nil || u.Risk == nil || r.Risk.Score != u.Risk.Score {
+			t.Errorf("%s: score moved without the list covering it", r.EventID)
+		}
+	}
+
+	// Every event carries a sensitivity finding, including the ones the list has
+	// never heard of — reported as unrated rather than omitted, so the record
+	// distinguishes "not on the list" from "nobody looked".
+	for _, r := range results {
+		var found bool
+		for _, f := range r.Risk.Factors {
+			if f.Name == risk.FactorSensitivePath {
+				found = true
+				if f.Evidence[risk.EvidenceSensitivity] == "" {
+					t.Errorf("%s: sensitivity factor with no grade recorded", r.EventID)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: no sensitivity factor in a run with a list in force", r.EventID)
+		}
+	}
+	// And with no list at all, none of them do.
+	for _, r := range unrated {
+		for _, f := range r.Risk.Factors {
+			if f.Name == risk.FactorSensitivePath {
+				t.Errorf("%s: a sensitivity factor with no list supplied", r.EventID)
+			}
+		}
+	}
+}
+
+// A sensitivity list that cannot load refuses the run rather than proceeding
+// without it. The list is a security claim the operator wrote, and a run that
+// silently ignored it would report a quiet session that was never assessed the
+// way they asked.
+func TestDryRunRefusesABadSensitivityList(t *testing.T) {
+	env := writeFixture(t, "envelope.json", gitEnvelope)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"unusable pattern", "name: t\npaths:\n  - patterns: [\"**/.ssh/**\"]\n    sensitivity: critical\n    reason: r\n"},
+		{"no reason", "name: t\npaths:\n  - patterns: [/etc/shadow]\n    sensitivity: critical\n"},
+		{"unknown grade", "name: t\npaths:\n  - patterns: [/etc/shadow]\n    sensitivity: severe\n    reason: r\n"},
+		{"empty list", "name: t\n"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			list := writeFixture(t, "sensitivity.yaml", c.body)
+			_, code := dryRun(t, "-rules", defaultRules(), "-envelope", env, "-sensitivity", list, gitEvents)
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1 for %s", code, c.name)
+			}
+		})
+	}
+
+	// A path that is not there at all is the same refusal.
+	missing := filepath.Join(t.TempDir(), "absent.yaml")
+	if _, code := dryRun(t, "-rules", defaultRules(), "-envelope", env, "-sensitivity", missing, gitEvents); code != 1 {
+		t.Errorf("exit code = %d for a missing list, want 1", code)
 	}
 }
 
