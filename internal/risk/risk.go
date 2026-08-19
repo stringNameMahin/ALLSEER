@@ -152,17 +152,18 @@ type Baseline interface {
 }
 
 // Done: BaselineEngine in score.go implements Engine as a deterministic,
-// explainable baseline. Nine factors — verdict, violation_severity,
+// explainable baseline. Ten factors — verdict, violation_severity,
 // sensitive_path, sensitive_host, uncorrelated_destination,
-// credential_access_egress, workspace_escape, novel_target, violation_history —
-// are summed as integer points and clamped to [0,100]; three of them are
-// present only when an oracle was supplied, and the two resource factors only
-// when the list actually grades that kind of resource.
-// uncorrelated_destination is in every engine, its evidence being telemetry
-// rather than configuration. It is still not the engine §3.6 describes: there is no learned
+// credential_access_egress, privilege_change, workspace_escape, novel_target,
+// violation_history — are summed as integer points and clamped to [0,100];
+// three of them are present only when an oracle was supplied, and the two
+// resource factors only when the list actually grades that kind of resource.
+// uncorrelated_destination and privilege_change are in every engine, their
+// evidence being telemetry and the capability catalog rather than
+// configuration. It is still not the engine §3.6 describes: there is no learned
 // baseline, no executable rating, and one sequence shape rather than a
 // behavioral model, and score.go says so at the top.
-// Done: four of the seven planned scorers exist, plus one the plan did not
+// Done: five of the seven planned scorers exist, plus two the plan did not
 // name. workspace_escape is WorkspaceEscapeScorer, violation_rate is
 // ViolationHistoryScorer — renamed because what it actually reads is a count
 // rather than a rate, and a rate would need a window there is no measurement to
@@ -170,7 +171,9 @@ type Baseline interface {
 // CredentialEgressScorer in sequence.go, narrowed to the one shape it can
 // prove: a successful read of a high-or-critical resource followed within a
 // bounded window by egress. The narrowing is in the name; "exfiltration" would
-// be a conclusion the evidence does not support.
+// be a conclusion the evidence does not support. privilege_change is
+// PrivilegeChangeScorer in privilege.go, scoped to what the event model can
+// support: see the Done note below.
 // Done: sensitive_host in host.go is the one the plan folded into
 // sensitive_path and that turned out to need its own factor. Host patterns are
 // not glob-shaped, so it reads its own section of the list through
@@ -185,11 +188,20 @@ type Baseline interface {
 // duplicate and UncorrelatedDestinationScorer in correlation.go was built
 // instead: the distinct network signal that analysis actually turned up, which
 // reads no history at all.
-// TODO(risk): the last planned scorer is privilege_change, which wants
-// ExecutableSensitivity. A standalone credential_access scorer is deliberately
-// not planned any more: the sequence detector charges the relationship,
-// sensitive_path charges the resource, and a third factor between them would
-// charge the same read twice.
+// Done: privilege_change is PrivilegeChangeScorer in privilege.go, and it does
+// not want ExecutableSensitivity after all — that method rates a binary, which
+// is a resource, and a privilege observation names no resource at all. It needs
+// no oracle and is therefore in every engine, like uncorrelated_destination.
+// Its points are the capability catalog's own BaselineSeverity for the kind,
+// read through sensitivityPoints; its evidence is PrivPayload, reported and
+// never charged, because no probe writes those fields and no vocabulary defines
+// them. The milestone's "capability set deltas" are not representable — the Go
+// payload carries an added-only name list and the C struct carries two absolute
+// bitmasks, with no before, no after, and no removal on either side — so the
+// factor labels what it has instead of pretending. A standalone
+// credential_access scorer is deliberately not planned any more: the sequence
+// detector charges the relationship, sensitive_path charges the resource, and a
+// third factor between them would charge the same read twice.
 // Done: the aggregation rule is BoundedSumAggregator, a plain clamped sum. The
 // weighted sum with a critical-factor floor was considered and deferred rather
 // than adopted: with seven factors and a heaviest contribution of 55, no

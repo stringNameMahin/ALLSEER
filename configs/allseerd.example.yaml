@@ -74,7 +74,13 @@ risk:
   # Keys are factor names as internal/risk emits them. Names that do not match a
   # shipped factor are inert, which is why this list tracks the scorer set: it
   # was written against the planned names and several of those changed as the
-  # scorers were built. privilege_change is still planned rather than shipped.
+  # scorers were built. Every name below now matches a shipped factor.
+  #
+  # privilege_change's own weight is already the capability catalog's grade for
+  # the kind — critical for priv.escalate, priv.setuid, priv.capset and
+  # priv.namespace, high for priv.seccomp — so a multiplier here scales a number
+  # the catalog chose. Raising it above 1.0 is a deployment saying its agents
+  # have even less business changing privilege than the catalog assumes.
   scorer_weights:
     sensitive_path: 1.0
     sensitive_host: 1.0

@@ -612,7 +612,7 @@ func TestLevelBoundaries(t *testing.T) {
 // --- 9. clamping ------------------------------------------------------------------------------
 
 func TestScoreClamps(t *testing.T) {
-	// The unrated model's theoretical maximum is 115 — every factor at its
+	// The unrated model's theoretical maximum is 140 — every factor at its
 	// ceiling — and it has to land on 100 rather than run off the scale a policy
 	// threshold is expressed on. Asserted as an inequality rather than a number,
 	// because what this test needs is that clamping is reachable at all.
@@ -928,11 +928,11 @@ func (unnamedScorer) Evaluate(context.Context, ScoreRequest) (*decision.Factor, 
 // Each scorer must produce what it claims to produce, or the factor names in an
 // audit record stop matching the scorer that wrote them.
 // The scorer set is domain-partitioned, so no single request can trigger every
-// scorer any more: an event has either a path or a destination and never both.
-// The check is therefore that each scorer fires on at least one of the two
-// shapes and agrees with its own metadata when it does — which is a stronger
-// claim than the single-request form it replaces, because it also asserts that
-// every scorer in the set is reachable at all.
+// scorer any more: an event has a path, a destination, or a privilege change,
+// and never two of them. The check is therefore that each scorer fires on at
+// least one of the three shapes and agrees with its own metadata when it does —
+// which is a stronger claim than the single-request form it replaces, because it
+// also asserts that every scorer in the set is reachable at all.
 func TestScorersAgreeWithTheirOwnMetadata(t *testing.T) {
 	req := ScoreRequest{
 		Event: fileEvent(capability.KindFileDelete, "/etc/shadow"),
@@ -953,9 +953,20 @@ func TestScorersAgreeWithTheirOwnMetadata(t *testing.T) {
 		History:  history().withViolations(100),
 	}
 
+	// The privilege counterpart: an ungranted privilege change, which is the
+	// only shape that reaches privilege_change. It carries no target at all, so
+	// it reaches nothing that reads one.
+	privReq := ScoreRequest{
+		Event: privEvent(capability.KindPrivEscalate, setuidPayload()),
+		Validation: result(decision.VerdictOutsideEnvelope,
+			viol(validator.ViolationUngrantedCapability, capability.SeverityCritical)),
+		Envelope: envelope(),
+		History:  history().withViolations(100),
+	}
+
 	for _, s := range NewEngine().Scorers() {
 		var fired bool
-		for _, r := range []ScoreRequest{req, netReq} {
+		for _, r := range []ScoreRequest{req, netReq, privReq} {
 			f, err := s.Evaluate(context.Background(), r)
 			if err != nil {
 				t.Fatalf("%s: %v", s.Name(), err)
@@ -975,8 +986,8 @@ func TestScorersAgreeWithTheirOwnMetadata(t *testing.T) {
 			}
 		}
 		if !fired {
-			t.Errorf("%s produced no factor on either a filesystem or a network departure; "+
-				"a scorer nothing can reach is a scorer nothing tests", s.Name())
+			t.Errorf("%s produced no factor on a filesystem, a network, or a privilege "+
+				"departure; a scorer nothing can reach is a scorer nothing tests", s.Name())
 		}
 	}
 

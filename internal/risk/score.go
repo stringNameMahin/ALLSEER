@@ -42,6 +42,7 @@ import (
 //	sensitive_host            the same table, for the destination reached   SensitivityOracle
 //	uncorrelated_destination  5 when a destination has no correlated name   Observation attributes
 //	credential_access_egress  30 for a proven sequence into this egress     History.RecentEvents
+//	privilege_change          the catalog's own grade for the kind          capability catalog
 //	workspace_escape          10 when the workspace boundary was crossed    validator.Violation
 //	novel_target              5 when this target is new to the session      History.TargetSeen
 //	violation_history         1 per prior violation, capped at 10           History.ViolationCount
@@ -54,9 +55,10 @@ import (
 // destination and a network event has no path. Each lives beside its own data
 // and its own admission check — see sensitivity.go, host.go, and sequence.go.
 //
-// uncorrelated_destination is in every engine, because its evidence is a field
-// the resolver already wrote rather than a list somebody has to author. See
-// correlation.go.
+// uncorrelated_destination and privilege_change are in every engine, because
+// their evidence is a field the resolver already wrote and a grade the catalog
+// already carries rather than a list somebody has to author. See correlation.go
+// and privilege.go.
 //
 // # Three rules the model follows without exception
 //
@@ -70,11 +72,11 @@ import (
 //
 //  3. **An expected event scores exactly zero.** A within-envelope verdict is a
 //     positive finding by the validator, not an absence, so LevelNone means
-//     "nothing departed" rather than "nothing was looked at". The four factors
+//     "nothing departed" rather than "nothing was looked at". The five factors
 //     that can still find something on a covered event — sensitive_path,
-//     sensitive_host, uncorrelated_destination, and credential_access_egress —
-//     report the finding and withhold the points, saying so with not_charged,
-//     rather than going silent about it.
+//     sensitive_host, uncorrelated_destination, credential_access_egress, and
+//     privilege_change — report the finding and withhold the points, saying so
+//     with not_charged, rather than going silent about it.
 //
 // # Calibration
 //
@@ -164,7 +166,10 @@ const (
 	FactorViolationHistory  = "violation_history"
 
 	// FactorSensitiveHost is declared in host.go, beside the vocabulary it
-	// reads. Named here so the factor vocabulary can be read in one place.
+	// reads, FactorUncorrelatedDestination in correlation.go,
+	// FactorCredentialEgress in sequence.go, and FactorPrivilegeChange in
+	// privilege.go. Named here so the factor vocabulary can be read in one
+	// place.
 
 	// FactorEvidenceBasis carries no points. It states which of the model's
 	// evidence inputs were actually available, and it is the only thing
@@ -378,6 +383,7 @@ func NewEngine() *BaselineEngine {
 			VerdictScorer{},
 			ViolationSeverityScorer{},
 			UncorrelatedDestinationScorer{},
+			PrivilegeChangeScorer{},
 			WorkspaceEscapeScorer{},
 			NovelTargetScorer{},
 			ViolationHistoryScorer{},
@@ -440,6 +446,7 @@ func NewEngineWithOracle(o SensitivityOracle) (*BaselineEngine, error) {
 	scorers = append(scorers,
 		UncorrelatedDestinationScorer{},
 		seq,
+		PrivilegeChangeScorer{},
 		WorkspaceEscapeScorer{},
 		NovelTargetScorer{},
 		ViolationHistoryScorer{},
@@ -899,9 +906,16 @@ func (s SensitivePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 	// every connection — a sentence about paths, on an event that touched none.
 	//
 	// The other unrateable dimensions stay here. executable, kernel, privilege
-	// and IPC have no list and no scorer of their own, and saying "unrated" for
-	// them is the honest report; they move out the day each gets one, as the
-	// network dimension just did.
+	// and IPC have no list, and saying "unrated" for them is the honest report;
+	// they move out the day each is rated by a scorer of its own, as the
+	// network dimension did.
+	//
+	// privilege_change does not move privilege out, and that is deliberate. It
+	// rates the act rather than a resource, and a privilege observation names
+	// no resource at all — telemetry.resolve leaves Target empty for the whole
+	// domain. "sensitive_path: unrated" on a privilege event remains the true
+	// statement: nothing here rates resources touched by privilege changes,
+	// because there are none to rate.
 	if dim == DimensionHost {
 		return decision.Factor{}, false, nil
 	}
@@ -991,6 +1005,9 @@ func dimensionFor(k capability.Kind) string {
 	default:
 		// Kernel, privilege, and IPC have no oracle method. Saying "unrated"
 		// is better than implying a lookup happened and came back clean.
+		// privilege_change scores the privilege domain, but it rates the act
+		// rather than a resource and consults no oracle, so this answer is
+		// unchanged by it.
 		return DimensionUnrated
 	}
 }
@@ -1178,11 +1195,12 @@ func (EvidenceBasisScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, error)
 // scorer set is large enough for dilution to be possible, and adding it now
 // would be a mechanism with no failure to prevent.
 //
-// Clamping rather than rescaling: the theoretical maximum is 115 for the
-// unrated scorer set and 195 with an oracle behind it, and rescaling by either
+// Clamping rather than rescaling: the theoretical maximum is 140 for the
+// unrated scorer set and 220 with an oracle behind it, and rescaling by either
 // would mean adding a scorer silently moved every existing score. A policy
 // threshold an operator set last week has to keep meaning what it meant — which
-// is exactly what adding the sequence detector would otherwise have broken.
+// is exactly what adding the sequence detector, and then privilege_change,
+// would otherwise have broken.
 type BoundedSumAggregator struct{}
 
 var _ Aggregator = BoundedSumAggregator{}

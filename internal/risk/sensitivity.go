@@ -498,8 +498,13 @@ func (o *ResourceOracle) HostSensitivityReason(hostOrIP string) (capability.Seve
 // something different from a compiler in an agent context, and nothing here
 // knows that yet.
 //
-// TODO(risk): executable sensitivity arrives with the privilege_change and
-// exfiltration_pattern scorers, which are the ones that would read it.
+// TODO(risk): executable sensitivity has no consumer, and privilege_change
+// turned out not to be one. This method rates a *resource* — a binary path —
+// and a privilege observation names no resource at all: telemetry.resolve
+// leaves Target empty for the whole domain. A factor that rated
+// Process.Executable would be rating the *actor* rather than the act, which
+// nothing in the model does yet and which would be a scorer of its own with a
+// name of its own. Whoever adds one decides what it means first.
 func (o *ResourceOracle) ExecutableSensitivity(_ string) capability.Severity {
 	return SensitivityUnknown
 }
