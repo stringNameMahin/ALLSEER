@@ -152,27 +152,37 @@ type Baseline interface {
 }
 
 // Done: BaselineEngine in score.go implements Engine as a deterministic,
-// explainable baseline. Five factors — verdict, violation_severity,
-// workspace_escape, novel_target, violation_history — are summed as integer
-// points and clamped to [0,100]. It is the first real risk stage rather than
-// the engine §3.6 describes: there is no sensitivity oracle, no learned
-// baseline and no sequence detection, and score.go says so at the top.
-// Done: two of the seven planned scorers exist. workspace_escape is
-// WorkspaceEscapeScorer, and violation_rate is ViolationHistoryScorer, renamed
-// because what it actually reads is a count rather than a rate — a rate would
-// need a window and there is no measured window to choose.
-// TODO(risk): the remaining five need a SensitivityOracle, which none of them
-// can be written without: sensitive_path, novel_network_destination,
-// privilege_change, credential_access, exfiltration_pattern. Until then the
-// baseline cannot tell a private key from a system header, which is pinned by
-// TestBaselineScorerCannotSeeSensitivity in internal/pipeline so the claim
-// fails the day it stops being true.
+// explainable baseline. Seven factors — verdict, violation_severity,
+// sensitive_path, credential_access_egress, workspace_escape, novel_target,
+// violation_history — are summed as integer points and clamped to [0,100]; the
+// last two of the first four are present only when an oracle was supplied. It
+// is still not the engine §3.6 describes: there is no learned baseline, no host
+// or executable rating, and one sequence shape rather than a behavioral model,
+// and score.go says so at the top.
+// Done: four of the seven planned scorers exist. workspace_escape is
+// WorkspaceEscapeScorer, violation_rate is ViolationHistoryScorer — renamed
+// because what it actually reads is a count rather than a rate, and a rate
+// would need a window there is no measurement to choose — sensitive_path is
+// SensitivePathScorer, and exfiltration_pattern is CredentialEgressScorer in
+// sequence.go, narrowed to the one shape it can prove: a successful read of a
+// high-or-critical resource followed within a bounded window by egress. The
+// narrowing is in the name; "exfiltration" would be a conclusion the evidence
+// does not support.
+// TODO(risk): the remaining three need ratings this build does not have.
+// novel_network_destination and the egress half of the sequence detector both
+// want HostSensitivity; privilege_change wants ExecutableSensitivity. A
+// standalone credential_access scorer is deliberately not planned any more: the
+// sequence detector charges the relationship, sensitive_path charges the
+// resource, and a third factor between them would charge the same read twice.
 // Done: the aggregation rule is BoundedSumAggregator, a plain clamped sum. The
 // weighted sum with a critical-factor floor was considered and deferred rather
-// than adopted: with five factors and a heaviest contribution of 55, no
+// than adopted: with seven factors and a heaviest contribution of 55, no
 // accumulation of small factors can bury a large one, so the floor would be a
 // mechanism with no failure to prevent. It becomes worth adding when the scorer
-// set is large enough for dilution to be possible.
+// set is large enough for dilution to be possible; the sequence detector's 30
+// points moved the oracle-backed ceiling from 135 to 165, and the clamp rather
+// than a rescale is what keeps an operator's existing threshold meaning what it
+// meant.
 // TODO(risk): the point values are calibrated against the shipped rule set's
 // own stated bands, not measured. They are a documented starting point; the
 // labeled corpus below is what turns them into a tuned result.
@@ -185,8 +195,19 @@ type Baseline interface {
 // TODO(risk): assemble a labeled evaluation set of benign and malicious
 // sessions. Tuning without measurement produces a system that is either ignored
 // or distrusted.
-// TODO(risk): define the credential-access-then-egress sequence detector, the
-// highest-value pattern for this threat model.
+// Done: the credential-access-then-egress sequence detector is
+// CredentialEgressScorer in sequence.go. It is the first factor that reads more
+// than the event under judgment, and the ordering it depends on is the
+// pipeline's: history is read before the event is committed, so an egress event
+// cannot be its own antecedent. Its window is an event count it owns rather
+// than the ring depth it happens to coincide with, and the distance between the
+// two halves is recorded on every finding so the window can eventually be
+// measured rather than argued about.
+// TODO(risk): the detector proves a temporal relationship and claims nothing
+// stronger. It cannot connect the bytes read to the bytes sent — payload
+// inspection is out of scope — so "sensitive resource access followed by
+// egress" is the whole finding, and neither the factor name nor the record may
+// grow into "exfiltration" without evidence that does not exist here.
 // TODO(risk): decide whether Baseline learning ships in v1 at all. It is
 // valuable for the research contribution but adds a poisoning surface: an
 // attacker who can shape the baseline can normalize their own behavior.

@@ -385,14 +385,20 @@ func (o *PathOracle) ExecutableSensitivity(_ string) capability.Severity {
 	return SensitivityUnknown
 }
 
-// TODO(risk): prefilter the scan if a deployment's list grows past a few dozen
-// entries. Scoring an unrated path is 982 ns against a 2.5 us pipeline today,
-// which is proportionate; the cheap next step is a required-literal-segment
-// index — every pattern in the shipped list has at least one literal segment
-// (".ssh", "shadow", "environ"), and a path whose segment set contains none of
-// them cannot match that pattern at all. Deliberately not built yet: the right
-// prefilter depends on what real lists look like, and guessing produces an
-// index tuned for a list nobody wrote.
+// TODO(risk): prefilter the scan. This was deferred on the grounds that scoring
+// one unrated path costs 982 ns against a 2.5 µs pipeline, which is
+// proportionate — and that reasoning no longer covers the whole picture.
+// CredentialEgressScorer calls PathSensitivity once per retained successful
+// read when it evaluates an egress event, so the same lookup runs up to 256
+// times for one syscall: 340 µs at the engine level, 120 µs end to end (see the
+// measurements in sequence.go). The cheap next step is unchanged — a
+// required-literal-segment index, since every pattern in the shipped list has
+// at least one literal segment (".ssh", "shadow", "environ") and a path whose
+// segment set contains none of them cannot match that pattern at all, with the
+// extension-shaped patterns (/**/*.pem) falling into a small always-check
+// residue. Still not built here, because it belongs to this file's own
+// milestone rather than to the detector's, but it now has a measurement behind
+// it rather than a guess.
 
 // severityRank orders grades. Local to this file rather than shared with
 // score.go's point table, because ordering and weighting are different

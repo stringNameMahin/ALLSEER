@@ -44,11 +44,18 @@ func (h *fakeHistory) TargetSeen(k capability.Kind, target string) bool {
 
 func (h *fakeHistory) ViolationCount() int { return h.violations }
 
+// RecentEvents mirrors session.MemoryState's contract rather than approximating
+// it: up to the last n events, oldest first. A fake that returned the *first* n
+// would let a sequence test pass against a scorer that walks history the wrong
+// way round, which is the one thing those tests exist to catch.
 func (h *fakeHistory) RecentEvents(n int) []event.Event {
+	if n <= 0 || len(h.recent) == 0 {
+		return nil
+	}
 	if n > len(h.recent) {
 		n = len(h.recent)
 	}
-	return h.recent[:n]
+	return h.recent[len(h.recent)-n:]
 }
 
 func (h *fakeHistory) SessionDurationSeconds() float64 { return h.duration }
@@ -70,6 +77,13 @@ func (h *fakeHistory) withSeen(k capability.Kind, target string) *fakeHistory {
 
 func (h *fakeHistory) withViolations(n int) *fakeHistory {
 	h.violations = n
+	return h
+}
+
+// withRecent sets the session's event history, oldest first — the order
+// RecentEvents promises and the order a sequence is only recognizable in.
+func (h *fakeHistory) withRecent(events ...event.Event) *fakeHistory {
+	h.recent = events
 	return h
 }
 

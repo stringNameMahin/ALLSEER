@@ -14,35 +14,40 @@ import (
 
 // This file is the first real risk stage: a deterministic, explainable baseline
 // scorer. It is deliberately not the engine the handbook's §3.6 describes.
-// There is no sensitivity oracle, no baseline learning, no sequence detection
-// and no behavioral model here. What there is, is a scorer that turns evidence
-// the pipeline already produces into a bounded score, so that the
-// risk-conditioned rules in configs/rules.default.yaml stop being inert.
+// There is no baseline learning and no behavioral model here. What there is, is
+// a scorer that turns evidence the pipeline already produces into a bounded
+// score, so that the risk-conditioned rules in configs/rules.default.yaml stop
+// being inert. Two of its factors are fed by configuration rather than by
+// observation and live in their own files beside their own data: sensitive_path
+// in sensitivity.go, and the credential-access-to-egress sequence detector in
+// sequence.go.
 //
 // # The model, in one paragraph
 //
-// A score is a bounded sum of integer points contributed by five independent
-// factors, clamped to [0,100]. Four of the five read the validator's answer
-// about *this* event; the fifth reads the session history, which the pipeline
+// A score is a bounded sum of integer points contributed by independent
+// factors, clamped to [0,100]. Most read the validator's answer about *this*
+// event; the three that do not read the session history, which the pipeline
 // guarantees is the history *before* this event is committed. Nothing is
 // multiplied, averaged, or weighed against a learned distribution, because
 // every one of those makes a score harder to explain and none of them is
 // justified by evidence this build actually has.
 //
-//	factor               points                                       source
-//	-------------------  -------------------------------------------  ----------------------
-//	verdict              0 / 20 / 25 / 25 / 30 / 55 by classification  validator.Result
-//	violation_severity   0 / 5 / 10 / 15 / 30 by highest severity      validator.Violation
-//	sensitive_path       0 / 0 / 8 / 15 / 25 by the oracle's grade     SensitivityOracle
-//	workspace_escape     10 when the workspace boundary was crossed    validator.Violation
-//	novel_target         5 when this target is new to the session      History.TargetSeen
-//	violation_history    1 per prior violation, capped at 10           History.ViolationCount
+//	factor                    points                                       source
+//	------------------------  -------------------------------------------  ----------------------
+//	verdict                   0 / 20 / 25 / 25 / 30 / 55 by classification  validator.Result
+//	violation_severity        0 / 5 / 10 / 15 / 30 by highest severity      validator.Violation
+//	sensitive_path            0 / 0 / 8 / 15 / 25 by the oracle's grade     SensitivityOracle
+//	credential_access_egress  30 for a proven sequence into this egress     History.RecentEvents
+//	workspace_escape          10 when the workspace boundary was crossed    validator.Violation
+//	novel_target              5 when this target is new to the session      History.TargetSeen
+//	violation_history         1 per prior violation, capped at 10           History.ViolationCount
 //
-// sensitive_path is present only when an engine was built with a
-// SensitivityOracle; NewEngine has none, and the difference is visible in the
-// factor list rather than hidden in a zero. It is the one factor whose input is
-// configuration rather than observation, which is why it lives beside its own
-// data file and its own admission check — see sensitivity.go.
+// sensitive_path and credential_access_egress are present only when an engine
+// was built with a SensitivityOracle; NewEngine has neither, and the absence is
+// visible in the factor list rather than hidden in a zero. They are the two
+// factors whose input is configuration rather than observation, which is why
+// each lives beside its own data file and its own admission check — see
+// sensitivity.go and sequence.go.
 //
 // # Three rules the model follows without exception
 //
@@ -56,9 +61,10 @@ import (
 //
 //  3. **An expected event scores exactly zero.** A within-envelope verdict is a
 //     positive finding by the validator, not an absence, so LevelNone means
-//     "nothing departed" rather than "nothing was looked at". This is also what
-//     keeps the common path cheap: the two history-reading factors do not apply
-//     to an event the envelope covered, so that path reads no history at all.
+//     "nothing departed" rather than "nothing was looked at". The two factors
+//     that can still find something on a covered event — sensitive_path and
+//     credential_access_egress — report the finding and withhold the points,
+//     saying so with not_charged, rather than going silent about it.
 //
 // # Calibration
 //
@@ -210,8 +216,15 @@ const (
 //
 // ConfidenceCeiling is below 1.0 deliberately and permanently for this scorer.
 // Full confidence would claim the model saw everything worth seeing, and this
-// model has no sensitivity oracle, no baseline and no sequence detection.
-// Reserving the top of the scale leaves room for an engine that has them.
+// model has no learned baseline, no host or executable ratings, and exactly one
+// sequence shape rather than a behavioral model. Reserving the top of the scale
+// leaves room for an engine that has them.
+//
+// Adding the sequence detector did not move the ceiling, and deliberately does
+// not touch confidence at all. Confidence counts *inputs available*, and the
+// detector's input — the session history — is already one of the three the
+// basis factor names. A scorer that raised confidence because it happened to
+// find something would be reporting its own conclusion twice.
 const (
 	ConfidencePerBasis = 0.3
 	ConfidenceCeiling  = 0.9
@@ -360,14 +373,24 @@ func NewEngine() *BaselineEngine {
 	}
 }
 
-// NewEngineWithOracle returns the baseline engine with sensitivity scoring.
+// NewEngineWithOracle returns the baseline engine with sensitivity scoring and
+// the credential-access-to-egress sequence detector.
 //
-// The scorer is inserted after violation_severity and before workspace_escape,
-// which groups the two consequence factors — how bad the departure is, how
-// consequential the resource is — ahead of the two contextual ones. The order
-// is presentational, since the aggregation is a sum, but the factor list is
-// what a human reads to check a score by hand and it should read in the order
-// the reasoning goes.
+// sensitive_path is inserted after violation_severity and before
+// workspace_escape, which groups the two consequence factors — how bad the
+// departure is, how consequential the resource is — ahead of the two contextual
+// ones. credential_access_egress follows it, because it is the factor that
+// reasons *about* a sensitivity grade and reads as a continuation of it. The
+// order is presentational, since the aggregation is a sum, but the factor list
+// is what a human reads to check a score by hand and it should read in the
+// order the reasoning goes.
+//
+// Both extra scorers arrive together because both are defined in terms of the
+// oracle: the sequence detector's first half is "a read the list grades high or
+// above", which is unaskable without a list. An engine with a list is therefore
+// an engine that can see the sequence, and splitting them into two
+// constructors would let a caller configure the evidence without the finding
+// it exists to support.
 //
 // A nil oracle is refused rather than defaulted away. Accepting one would
 // produce an engine that silently rates nothing while looking configured, which
@@ -377,11 +400,16 @@ func NewEngineWithOracle(o SensitivityOracle) (*BaselineEngine, error) {
 		return nil, errors.New("risk: sensitivity oracle is required; " +
 			"use NewEngine for an engine that deliberately rates no resources")
 	}
+	seq, err := NewCredentialEgressScorer(o)
+	if err != nil {
+		return nil, err
+	}
 	return &BaselineEngine{
 		scorers: []Scorer{
 			VerdictScorer{},
 			ViolationSeverityScorer{},
 			SensitivePathScorer{oracle: o},
+			seq,
 			WorkspaceEscapeScorer{},
 			NovelTargetScorer{},
 			ViolationHistoryScorer{},
@@ -497,11 +525,13 @@ func scoreOne(ctx context.Context, s Scorer, sc *scoreCtx, out *decision.Factor)
 // ScoreSession assesses the session as a whole.
 //
 // Deliberately narrow, and narrower than the event scorer: it reads the
-// accumulated violations and the session's violation count, and nothing else. It
-// cannot see sequences — credential access followed by egress, the pattern this
-// threat model most wants — because no sequence detector exists yet, and a
-// session score that quietly omitted the one pattern it was built for would be
-// worse than an obviously partial one.
+// accumulated violations and the session's violation count, and nothing else.
+// It still cannot see sequences — credential access followed by egress — even
+// though CredentialEgressScorer now can, because SessionScoreRequest hands it a
+// violation list rather than the event stream. Inferring a sequence from
+// violations would be a second and weaker implementation of a detector that
+// already exists, and the two would drift. The event scorer reports the
+// sequence on the egress event, which is where it is provable.
 //
 // Its confidence therefore tops out at 0.6 rather than 0.9: two evidence inputs
 // where event scoring has three, and no per-event classification behind it.
@@ -1087,9 +1117,11 @@ func (EvidenceBasisScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, error)
 // scorer set is large enough for dilution to be possible, and adding it now
 // would be a mechanism with no failure to prevent.
 //
-// Clamping rather than rescaling: the theoretical maximum is 110, and rescaling
-// by that would mean adding a sixth scorer silently moved every existing score.
-// A policy threshold an operator set last week has to keep meaning what it meant.
+// Clamping rather than rescaling: the theoretical maximum is 110 for the
+// unrated scorer set and 165 with an oracle behind it, and rescaling by either
+// would mean adding a scorer silently moved every existing score. A policy
+// threshold an operator set last week has to keep meaning what it meant — which
+// is exactly what adding the sequence detector would otherwise have broken.
 type BoundedSumAggregator struct{}
 
 var _ Aggregator = BoundedSumAggregator{}
