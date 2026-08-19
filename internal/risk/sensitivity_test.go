@@ -19,9 +19,9 @@ func defaultListPath() string {
 	return filepath.Join("..", "..", "configs", "sensitivity.default.yaml")
 }
 
-func defaultOracle(t *testing.T) *PathOracle {
+func defaultOracle(t *testing.T) *ResourceOracle {
 	t.Helper()
-	o, err := LoadPathOracle(defaultListPath())
+	o, err := LoadResourceOracle(defaultListPath())
 	if err != nil {
 		t.Fatalf("loading the shipped sensitivity list: %v", err)
 	}
@@ -34,15 +34,15 @@ func listYAML(entries string) []byte {
 	return []byte("name: t\nversion: \"1\"\npaths:\n" + entries)
 }
 
-func oracleFrom(t *testing.T, entries string) *PathOracle {
+func oracleFrom(t *testing.T, entries string) *ResourceOracle {
 	t.Helper()
 	list, err := ParseSensitivityList(listYAML(entries), "test")
 	if err != nil {
 		t.Fatalf("ParseSensitivityList: %v", err)
 	}
-	o, err := NewPathOracle(list)
+	o, err := NewResourceOracle(list)
 	if err != nil {
-		t.Fatalf("NewPathOracle: %v", err)
+		t.Fatalf("NewResourceOracle: %v", err)
 	}
 	return o
 }
@@ -312,16 +312,27 @@ func TestNoOracleMeansNobodyAsked(t *testing.T) {
 func TestEveryOracleDimensionIsConsulted(t *testing.T) {
 	e := engineWith(t, defaultOracle(t))
 
+	// Each domain reports through the factor that owns it. The network domain
+	// moved to sensitive_host when host ratings arrived, which is the shape the
+	// executable dimension will take when it gets a list of its own: a
+	// dimension with knowledge behind it gets its own factor, and the ones
+	// without knowledge stay on sensitive_path saying "unrated".
 	cases := []struct {
-		name    string
-		kind    capability.Kind
-		target  string
-		wantDim string
-		wantGr  string
+		name       string
+		kind       capability.Kind
+		target     string
+		wantFactor string
+		wantDim    string
+		wantGr     string
 	}{
-		{"filesystem rates the path", capability.KindFileRead, "/etc/shadow", DimensionPath, string(capability.SeverityCritical)},
-		{"network is unrated in this build", capability.KindNetConnect, "evil.example:443", DimensionHost, SensitivityUnknownLabel},
-		{"process is unrated in this build", capability.KindProcessExec, "/bin/sh", DimensionExecutable, SensitivityUnknownLabel},
+		{"filesystem rates the path", capability.KindFileRead, "/etc/shadow",
+			FactorSensitivePath, DimensionPath, string(capability.SeverityCritical)},
+		{"network rates the destination", capability.KindNetConnect, "169.254.169.254:80",
+			FactorSensitiveHost, DimensionHost, string(capability.SeverityCritical)},
+		{"network says unknown for a host it has never heard of", capability.KindNetConnect, "evil.example:443",
+			FactorSensitiveHost, DimensionHost, SensitivityUnknownLabel},
+		{"process is unrated in this build", capability.KindProcessExec, "/bin/sh",
+			FactorSensitivePath, DimensionExecutable, SensitivityUnknownLabel},
 	}
 
 	for _, c := range cases {
@@ -332,30 +343,40 @@ func TestEveryOracleDimensionIsConsulted(t *testing.T) {
 				Envelope:   envelope(),
 				History:    history().withSeen(c.kind, c.target),
 			})
-			g, dim, _, ok := sensitivityOf(a)
-			if !ok {
-				t.Fatal("no sensitive_path factor")
+
+			f := factor(a, c.wantFactor)
+			if f == nil {
+				t.Fatalf("no %s factor; factors were %v", c.wantFactor, names(a))
 			}
-			if dim != c.wantDim {
-				t.Errorf("dimension = %q, want %q", dim, c.wantDim)
+			if got := f.Evidence[EvidenceDimension]; got != c.wantDim {
+				t.Errorf("dimension = %q, want %q", got, c.wantDim)
 			}
-			if g != c.wantGr {
-				t.Errorf("sensitivity = %q, want %q", g, c.wantGr)
+			if got := f.Evidence[EvidenceSensitivity]; got != c.wantGr {
+				t.Errorf("sensitivity = %q, want %q", got, c.wantGr)
+			}
+
+			// Exactly one of the two resource factors speaks per event. Both
+			// would make an operator read two lines to learn one thing, and
+			// would leave a sentence about paths on an event that touched none.
+			other := FactorSensitivePath
+			if c.wantFactor == FactorSensitivePath {
+				other = FactorSensitiveHost
+			}
+			if factor(a, other) != nil {
+				t.Errorf("%s also reported on a %s event", other, c.kind)
 			}
 		})
 	}
 
-	// The oracle answers those two dimensions the same way when asked directly,
-	// so the interface is implemented rather than three-quarters implemented.
+	// The one dimension still without a list of its own answers explicitly
+	// unknown when asked directly, so the interface is implemented rather than
+	// two-thirds implemented.
 	o := defaultOracle(t)
-	if got := o.HostSensitivity("registry.npmjs.org"); got != SensitivityUnknown {
-		t.Errorf("HostSensitivity = %q, want unknown", got)
-	}
 	if got := o.ExecutableSensitivity("/usr/bin/curl"); got != SensitivityUnknown {
 		t.Errorf("ExecutableSensitivity = %q, want unknown", got)
 	}
-	if KnownSensitivity(o.HostSensitivity("anything")) {
-		t.Error("an unrated host reported as a known grade")
+	if KnownSensitivity(o.ExecutableSensitivity("/anything")) {
+		t.Error("an unrated executable reported as a known grade")
 	}
 }
 
@@ -602,11 +623,19 @@ func TestACoveredEventKeepsItsZeroButNotItsSilence(t *testing.T) {
 }
 
 // Clamping still holds with the oracle-backed factors in play. The ceiling is
-// 165: the unrated engine's 110, plus 25 for sensitive_path and 30 for
-// credential_access_egress, both of which arrive with an oracle. It is asserted
-// as an exact number so that adding a scorer is a deliberate act — the scale is
-// clamped rather than rescaled precisely so a new factor cannot silently move
-// every existing score, and this is where that stays true.
+// 190: the unrated engine's 110, plus 25 for sensitive_path, 30 for
+// credential_access_egress, and 25 for sensitive_host, all three of which
+// arrive with an oracle. It is asserted as an exact number so that adding a
+// scorer is a deliberate act — the scale is clamped rather than rescaled
+// precisely so a new factor cannot silently move every existing score, and this
+// is where that stays true.
+//
+// The declared ceiling is not reachable, and deliberately overstates: a single
+// event has either a path or a destination, never both, so sensitive_path and
+// sensitive_host cannot contribute together. Summing the declared weights is
+// still the right check, because Weight() is each scorer's own promise about
+// what it can contribute and the clamp has to hold against the sum of the
+// promises rather than against a case analysis of which co-occur.
 func TestSensitivityDoesNotEscapeTheScale(t *testing.T) {
 	e := engineWith(t, defaultOracle(t))
 
@@ -614,8 +643,8 @@ func TestSensitivityDoesNotEscapeTheScale(t *testing.T) {
 	for _, s := range e.Scorers() {
 		ceiling += s.Weight()
 	}
-	if ceiling != 165 {
-		t.Errorf("scorer ceiling = %v, want 165", ceiling)
+	if ceiling != 190 {
+		t.Errorf("scorer ceiling = %v, want 190", ceiling)
 	}
 
 	esc := viol(validator.ViolationWorkspaceEscape, capability.SeverityHigh)
@@ -758,7 +787,7 @@ func TestSensitivityListRejections(t *testing.T) {
 // The oracle re-validates rather than trusting a programmatically built list,
 // since the admission rule has to hold whether or not the loader was involved.
 func TestOracleRefusesAnUnvalidatedList(t *testing.T) {
-	_, err := NewPathOracle(&SensitivityList{
+	_, err := NewResourceOracle(&SensitivityList{
 		Paths: []SensitivityEntry{{Patterns: []string{"**/.ssh/**"}, Sensitivity: capability.SeverityCritical, Reason: "r"}},
 	})
 	if err == nil {
@@ -768,7 +797,7 @@ func TestOracleRefusesAnUnvalidatedList(t *testing.T) {
 		t.Errorf("error = %v, want the pattern named", err)
 	}
 
-	if _, err := NewPathOracle(nil); err == nil {
+	if _, err := NewResourceOracle(nil); err == nil {
 		t.Error("the oracle accepted a nil list")
 	}
 }
@@ -789,10 +818,10 @@ func TestEngineRefusesANilOracle(t *testing.T) {
 		t.Error("a scorer with no oracle produced a factor")
 	}
 
-	// And a nil *PathOracle reads as knowing nothing rather than panicking,
+	// And a nil *ResourceOracle reads as knowing nothing rather than panicking,
 	// which is what session.MemoryState's nil handling established as the house
 	// rule for absent state.
-	var nilOracle *PathOracle
+	var nilOracle *ResourceOracle
 	if got := nilOracle.PathSensitivity("/etc/shadow"); got != SensitivityUnknown {
 		t.Errorf("a nil oracle reported %q, want unknown", got)
 	}
@@ -830,7 +859,7 @@ func TestSensitiveScorerAgreesWithItsMetadata(t *testing.T) {
 // unknown answer must not cost an allocation, since it is what an oracle says
 // about almost every event.
 func BenchmarkScoreWithOracleUnrated(b *testing.B) {
-	o, err := LoadPathOracle(defaultListPath())
+	o, err := LoadResourceOracle(defaultListPath())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -858,7 +887,7 @@ func BenchmarkScoreWithOracleUnrated(b *testing.B) {
 // The expensive answer: a rated critical path, which scans to a match and
 // builds evidence carrying the reason.
 func BenchmarkScoreWithOracleRated(b *testing.B) {
-	o, err := LoadPathOracle(defaultListPath())
+	o, err := LoadResourceOracle(defaultListPath())
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -76,9 +76,9 @@ func buildScored(t *testing.T, env *ece.Envelope, st State, rs *policy.RuleSet) 
 // shippedOracle loads configs/sensitivity.default.yaml — the list the project
 // actually ships, not a fixture. The defaults are a security claim, and a claim
 // exercised only against a test-local list is a claim nothing checks.
-func shippedOracle(t *testing.T) *risk.PathOracle {
+func shippedOracle(t *testing.T) *risk.ResourceOracle {
 	t.Helper()
-	o, err := risk.LoadPathOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
+	o, err := risk.LoadResourceOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
 	if err != nil {
 		t.Fatalf("loading the shipped sensitivity list: %v", err)
 	}
@@ -818,9 +818,9 @@ func BenchmarkProcessRated(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewEngine: %v", err)
 	}
-	o, err := risk.LoadPathOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
+	o, err := risk.LoadResourceOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
 	if err != nil {
-		b.Fatalf("LoadPathOracle: %v", err)
+		b.Fatalf("LoadResourceOracle: %v", err)
 	}
 	re, err := risk.NewEngineWithOracle(o)
 	if err != nil {

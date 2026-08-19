@@ -502,9 +502,9 @@ func BenchmarkProcessWithSequenceDetector(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewEngine: %v", err)
 	}
-	o, err := risk.LoadPathOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
+	o, err := risk.LoadResourceOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
 	if err != nil {
-		b.Fatalf("LoadPathOracle: %v", err)
+		b.Fatalf("LoadResourceOracle: %v", err)
 	}
 	re, err := risk.NewEngineWithOracle(o)
 	if err != nil {
@@ -542,9 +542,9 @@ func BenchmarkProcessEgressOverAFullWindow(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewEngine: %v", err)
 	}
-	o, err := risk.LoadPathOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
+	o, err := risk.LoadResourceOracle(filepath.Join("..", "..", "configs", "sensitivity.default.yaml"))
 	if err != nil {
-		b.Fatalf("LoadPathOracle: %v", err)
+		b.Fatalf("LoadResourceOracle: %v", err)
 	}
 	re, err := risk.NewEngineWithOracle(o)
 	if err != nil {

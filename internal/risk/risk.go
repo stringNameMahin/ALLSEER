@@ -152,46 +152,54 @@ type Baseline interface {
 }
 
 // Done: BaselineEngine in score.go implements Engine as a deterministic,
-// explainable baseline. Seven factors — verdict, violation_severity,
-// sensitive_path, credential_access_egress, workspace_escape, novel_target,
-// violation_history — are summed as integer points and clamped to [0,100]; the
-// last two of the first four are present only when an oracle was supplied. It
-// is still not the engine §3.6 describes: there is no learned baseline, no host
-// or executable rating, and one sequence shape rather than a behavioral model,
-// and score.go says so at the top.
-// Done: four of the seven planned scorers exist. workspace_escape is
-// WorkspaceEscapeScorer, violation_rate is ViolationHistoryScorer — renamed
-// because what it actually reads is a count rather than a rate, and a rate
-// would need a window there is no measurement to choose — sensitive_path is
-// SensitivePathScorer, and exfiltration_pattern is CredentialEgressScorer in
-// sequence.go, narrowed to the one shape it can prove: a successful read of a
-// high-or-critical resource followed within a bounded window by egress. The
-// narrowing is in the name; "exfiltration" would be a conclusion the evidence
-// does not support.
-// TODO(risk): the remaining three need ratings this build does not have.
-// novel_network_destination and the egress half of the sequence detector both
-// want HostSensitivity; privilege_change wants ExecutableSensitivity. A
-// standalone credential_access scorer is deliberately not planned any more: the
-// sequence detector charges the relationship, sensitive_path charges the
-// resource, and a third factor between them would charge the same read twice.
+// explainable baseline. Eight factors — verdict, violation_severity,
+// sensitive_path, sensitive_host, credential_access_egress, workspace_escape,
+// novel_target, violation_history — are summed as integer points and clamped to
+// [0,100]; the three middle ones are present only when an oracle was supplied,
+// and the two resource factors only when the list actually grades that kind of
+// resource. It is still not the engine §3.6 describes: there is no learned
+// baseline, no executable rating, and one sequence shape rather than a
+// behavioral model, and score.go says so at the top.
+// Done: four of the seven planned scorers exist, plus one the plan did not
+// name. workspace_escape is WorkspaceEscapeScorer, violation_rate is
+// ViolationHistoryScorer — renamed because what it actually reads is a count
+// rather than a rate, and a rate would need a window there is no measurement to
+// choose — sensitive_path is SensitivePathScorer, and exfiltration_pattern is
+// CredentialEgressScorer in sequence.go, narrowed to the one shape it can
+// prove: a successful read of a high-or-critical resource followed within a
+// bounded window by egress. The narrowing is in the name; "exfiltration" would
+// be a conclusion the evidence does not support.
+// Done: sensitive_host in host.go is the one the plan folded into
+// sensitive_path and that turned out to need its own factor. Host patterns are
+// not glob-shaped, so it reads its own section of the list through
+// validator.MatchHost rather than through the path matcher — different
+// configuration, different vocabulary, different matcher, and therefore a
+// factor of its own rather than a dimension of another one.
+// TODO(risk): the remaining two are novel_network_destination, which host
+// ratings have just unblocked, and privilege_change, which wants
+// ExecutableSensitivity. A standalone credential_access scorer is deliberately
+// not planned any more: the sequence detector charges the relationship,
+// sensitive_path charges the resource, and a third factor between them would
+// charge the same read twice.
 // Done: the aggregation rule is BoundedSumAggregator, a plain clamped sum. The
 // weighted sum with a critical-factor floor was considered and deferred rather
 // than adopted: with seven factors and a heaviest contribution of 55, no
 // accumulation of small factors can bury a large one, so the floor would be a
 // mechanism with no failure to prevent. It becomes worth adding when the scorer
 // set is large enough for dilution to be possible; the sequence detector's 30
-// points moved the oracle-backed ceiling from 135 to 165, and the clamp rather
-// than a rescale is what keeps an operator's existing threshold meaning what it
-// meant.
+// points and sensitive_host's 25 moved the oracle-backed ceiling from 135 to
+// 190, and the clamp rather than a rescale is what keeps an operator's existing
+// threshold meaning what it meant.
 // TODO(risk): the point values are calibrated against the shipped rule set's
 // own stated bands, not measured. They are a documented starting point; the
 // labeled corpus below is what turns them into a tuned result.
 // TODO(risk): score a destination known only by address above one reached by a
 // correlated name. capability.AttrHostnameCorrelated already records the
-// distinction and enrichment already writes it, so this is evidence in hand
-// that the baseline does not read — left out only to keep the first model to
-// five factors. It is the cheapest of the remaining signals and needs no
-// oracle.
+// distinction, enrichment already writes it, and sensitive_host now *reports*
+// it on every network event without charging for it — deliberately, because
+// charging it there would put two unrelated findings under one factor name.
+// This is novel_network_destination's signal, it needs no configuration, and it
+// is the cheapest remaining scorer as a result.
 // TODO(risk): assemble a labeled evaluation set of benign and malicious
 // sessions. Tuning without measurement produces a system that is either ignored
 // or distrusted.
@@ -203,6 +211,13 @@ type Baseline interface {
 // than the ring depth it happens to coincide with, and the distance between the
 // two halves is recorded on every finding so the window can eventually be
 // measured rather than argued about.
+// Done: host sensitivity is ResourceOracle's HostSensitivity plus
+// SensitiveHostScorer in host.go, over a hosts section of the same list file.
+// The vocabulary is validator.ValidateHostPattern and MatchHost rather than a
+// second one, so an entry means exactly what an identically written network
+// grant means, and the name/address boundary of docs/network-matching.md §1
+// holds inside sensitivity too: a destination is rated by the identity the
+// observation carries, and a list meaning to cover both spellings writes both.
 // TODO(risk): the detector proves a temporal relationship and claims nothing
 // stronger. It cannot connect the bytes read to the bytes sent — payload
 // inspection is out of scope — so "sensitive resource access followed by

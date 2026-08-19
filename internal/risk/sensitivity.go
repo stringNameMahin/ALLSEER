@@ -41,12 +41,25 @@ import (
 //
 // # Unknown is a third state, and it is load-bearing
 //
-// PathSensitivity returns SensitivityUnknown for a path no entry covers. That
-// is not SeverityInfo. "We have never heard of this file" and "we looked at
-// this file and it is unremarkable" are different findings, and collapsing them
-// would make the list's silence indistinguishable from its approval — which is
-// how a list becomes the single thing standing between a credential read and a
-// warning, with everything it has not been taught about silently safe.
+// PathSensitivity returns SensitivityUnknown for a path no entry covers, and
+// HostSensitivity does the same for a destination. That is not SeverityInfo.
+// "We have never heard of this file" and "we looked at this file and it is
+// unremarkable" are different findings, and collapsing them would make the
+// list's silence indistinguishable from its approval — which is how a list
+// becomes the single thing standing between a credential read and a warning,
+// with everything it has not been taught about silently safe.
+//
+// The state above that one is kept too: a *section* that grades nothing means
+// nothing rates that kind of resource at all, which RatesPaths and RatesHosts
+// report so the scorer set can leave the factor out entirely rather than emit a
+// permanent "unknown" claiming somebody looked.
+//
+// # Two sections, one file, two vocabularies
+//
+// `paths` takes filesystem globs and `hosts` takes the validator's host
+// patterns. Each is validated by its own matcher at admission, so a glob under
+// `hosts` is refused rather than silently matching nothing. The host half lives
+// in host.go, beside the vocabulary it reads.
 //
 // # The list may only raise
 //
@@ -85,12 +98,29 @@ func KnownSensitivity(s capability.Severity) bool { return severityRank(s) >= 0 
 // from the oracle so the file can be loaded, linted, and printed without
 // standing up matching, the same split internal/policy makes between RuleSet
 // and RuleEngine.
+//
+// Two sections rather than two files. What counts as sensitive is one question
+// an operator answers about a deployment, and splitting it across files would
+// mean two loaders, two admission checks, and two CLI flags for one decision —
+// with the standing possibility of a daemon running with half of it. The
+// sections keep the vocabularies apart by naming them: `paths` takes filesystem
+// globs, `hosts` takes the validator's host patterns, and each is validated by
+// its own matcher so a glob written under `hosts` is refused at admission
+// rather than silently matching nothing.
 type SensitivityList struct {
 	Name        string `yaml:"name" json:"name"`
 	Version     string `yaml:"version" json:"version"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 
 	Paths []SensitivityEntry `yaml:"paths" json:"paths"`
+
+	// Hosts grades network destinations. Optional: a list that grades only
+	// paths is the shape this file had before host sensitivity existed, and it
+	// still loads and still means exactly what it meant. An absent section is
+	// not an empty one — an oracle built from it reports that it rates no
+	// hosts, so no host-sensitivity factor is produced at all, rather than a
+	// factor claiming somebody asked.
+	Hosts []HostSensitivityEntry `yaml:"hosts,omitempty" json:"hosts,omitempty"`
 }
 
 // SensitivityEntry grades a set of path patterns, with the reason written down.
@@ -177,8 +207,18 @@ func ParseSensitivityList(data []byte, source string) (*SensitivityList, error) 
 // All three produce a list that loads, runs, and protects less than its author
 // believes — the specific failure this project refuses to let happen quietly.
 func validateSensitivityList(list *SensitivityList, source string) error {
-	if len(list.Paths) == 0 {
+	// The file must grade *something*. The rule is unchanged in intent from
+	// when `paths` was the only section — an empty list is the claim that
+	// nothing is sensitive, and a daemon that started with one would score
+	// every credential read as ordinary — and it is now stated over both
+	// sections, so a list that grades only hosts is legal. A list that grades
+	// only paths was legal before and still is.
+	if len(list.Paths) == 0 && len(list.Hosts) == 0 {
 		return fmt.Errorf("%w: %s", ErrNoSensitivityEntries, source)
+	}
+
+	if err := validateHostEntries(list.Hosts, source); err != nil {
+		return err
 	}
 
 	for i, e := range list.Paths {
@@ -215,14 +255,19 @@ func validateSensitivityList(list *SensitivityList, source string) error {
 
 // --- the oracle -------------------------------------------------------------------
 
-// PathOracle implements SensitivityOracle over a configured path list.
+// ResourceOracle implements SensitivityOracle over a configured list.
 //
-// It rates paths and nothing else. HostSensitivity and ExecutableSensitivity
-// are implemented — the whole interface is, rather than three-quarters of it —
-// and both report SensitivityUnknown for everything, which is the truthful
-// answer for a build with no host or executable list. See their comments: the
-// alternative, returning SeverityInfo, would be a fabricated "this is fine" for
-// every destination the agent connects to.
+// It rates paths and hosts from the two sections of one file.
+// ExecutableSensitivity is implemented — the whole interface is, rather than
+// two-thirds of it — and reports SensitivityUnknown for everything, which is
+// the truthful answer for a build with no executable list. The alternative,
+// returning SeverityInfo, would be a fabricated "this is fine" for every binary
+// the agent runs.
+//
+// It was named PathOracle when paths were all it rated. The rename came with
+// the hosts section rather than after it: a type that rates two kinds of
+// resource and is named after one of them is a comment that lies, and the
+// interface it implements has always been about resources.
 //
 // # Shape, and why it is flat
 //
@@ -240,7 +285,7 @@ func validateSensitivityList(list *SensitivityList, source string) error {
 //     2.5 µs. Through a compiled set it is one allocation.
 //
 // Immutable after construction and safe for concurrent use.
-type PathOracle struct {
+type ResourceOracle struct {
 	set *validator.PatternSet
 
 	// grades and reasons are parallel to set, in the same highest-grade-first
@@ -249,17 +294,23 @@ type PathOracle struct {
 	grades  []capability.Severity
 	reasons []string
 
+	// hosts is the host section compiled to scan order, highest grade first.
+	// A slice scanned through validator.MatchHost rather than a compiled set,
+	// for the reason host.go gives: MatchHost owns the name/address boundary
+	// and a shortcut here would be free to drift from it.
+	hosts []hostRule
+
 	list *SensitivityList
 }
 
-var _ SensitivityOracle = (*PathOracle)(nil)
+var _ SensitivityOracle = (*ResourceOracle)(nil)
 
-// NewPathOracle builds an oracle from a validated list.
+// NewResourceOracle builds an oracle from a validated list.
 //
 // The list is re-validated rather than trusted, because a caller can construct
 // a SensitivityList programmatically without going through the loader and the
 // admission rule has to hold either way.
-func NewPathOracle(list *SensitivityList) (*PathOracle, error) {
+func NewResourceOracle(list *SensitivityList) (*ResourceOracle, error) {
 	if list == nil {
 		return nil, errors.New("risk: sensitivity list is required")
 	}
@@ -303,20 +354,26 @@ func NewPathOracle(list *SensitivityList) (*PathOracle, error) {
 		return nil, fmt.Errorf("risk: compiling sensitivity patterns: %w", err)
 	}
 
-	return &PathOracle{set: set, grades: grades, reasons: reasons, list: list}, nil
+	return &ResourceOracle{
+		set:     set,
+		grades:  grades,
+		reasons: reasons,
+		hosts:   compileHostRules(list.Hosts),
+		list:    list,
+	}, nil
 }
 
-// LoadPathOracle reads a list from disk and builds an oracle from it.
-func LoadPathOracle(path string) (*PathOracle, error) {
+// LoadResourceOracle reads a list from disk and builds an oracle from it.
+func LoadResourceOracle(path string) (*ResourceOracle, error) {
 	list, err := LoadSensitivityList(path)
 	if err != nil {
 		return nil, err
 	}
-	return NewPathOracle(list)
+	return NewResourceOracle(list)
 }
 
 // List returns the list this oracle was built from, for reporting.
-func (o *PathOracle) List() *SensitivityList { return o.list }
+func (o *ResourceOracle) List() *SensitivityList { return o.list }
 
 // PathSensitivity rates a filesystem path.
 //
@@ -330,7 +387,7 @@ func (o *PathOracle) List() *SensitivityList { return o.list }
 //
 // Highest grade wins when several entries match. A narrower entry added later
 // can therefore only raise a path's grade.
-func (o *PathOracle) PathSensitivity(path string) capability.Severity {
+func (o *ResourceOracle) PathSensitivity(path string) capability.Severity {
 	grade, _ := o.PathSensitivityReason(path)
 	return grade
 }
@@ -340,7 +397,7 @@ func (o *PathOracle) PathSensitivity(path string) capability.Severity {
 // The reason is what reaches the audit record, so that "why did this score go
 // up" is answered by the sentence the list's author wrote rather than by a
 // glob the reader has to interpret.
-func (o *PathOracle) PathSensitivityReason(path string) (capability.Severity, string) {
+func (o *ResourceOracle) PathSensitivityReason(path string) (capability.Severity, string) {
 	if o == nil || path == "" {
 		return SensitivityUnknown, ""
 	}
@@ -353,23 +410,85 @@ func (o *PathOracle) PathSensitivityReason(path string) (capability.Severity, st
 	return o.grades[i], o.reasons[i]
 }
 
-// HostSensitivity rates a network destination, and this build cannot.
+// RatesPaths reports whether this oracle was given any path knowledge.
 //
-// It reports SensitivityUnknown for every host, which is the truth: no host
-// list exists and no scorer consumes one yet. The interface is implemented in
-// full rather than left out so that a caller cannot mistake a missing method
-// for a missing risk — and the answer is explicitly unknown rather than
-// SeverityInfo, because "not rated" and "rated harmless" are the distinction
-// this whole file exists to keep, and returning the latter would assert that
-// every destination an agent connects to is fine.
+// Read by the scorer set, so an oracle built from a list with no `paths`
+// section produces no sensitive_path factor at all rather than one reading
+// "unknown" on every file. Both are silence about a particular file; only the
+// second claims somebody looked.
+func (o *ResourceOracle) RatesPaths() bool {
+	return o != nil && o.set.Len() > 0
+}
+
+// RatesHosts reports whether this oracle was given any host knowledge.
 //
-// TODO(risk): host sensitivity needs its own list and its own vocabulary —
-// validator.ValidateHostPattern and MatchHost are the matching half and already
-// exist. It is deliberately not added here because no scorer reads it yet, and
-// configuration nothing consumes is configuration that lies about what it does.
-// It arrives with novel_network_destination.
-func (o *PathOracle) HostSensitivity(_ string) capability.Severity {
-	return SensitivityUnknown
+// The counterpart of RatesPaths, and the reason a list that grades only paths
+// keeps behaving exactly as it did before host sensitivity existed: it rates no
+// hosts, so no host factor is produced, so nothing about a network event's
+// record changes.
+func (o *ResourceOracle) RatesHosts() bool {
+	return o != nil && len(o.hosts) > 0
+}
+
+// HostSensitivity rates a network destination.
+//
+// Takes a **bare host**, never "host:port" — the same contract
+// validator.MatchHost states, because this is a thin ordering wrapper around
+// it. The caller splits; SensitiveHostScorer is the caller.
+//
+// Returns SensitivityUnknown when no entry covers the destination, and also
+// when the destination is not something the matcher can compare: an empty
+// target, a malformed name, a value that is neither. That is the same refusal
+// PathSensitivity makes about an unresolved path, and for the same reason — an
+// uninterpretable destination must never be the cheapest way to look
+// unremarkable.
+//
+// Highest grade wins when several entries match, so a narrower entry added
+// later can only ever raise a destination's grade.
+func (o *ResourceOracle) HostSensitivity(hostOrIP string) capability.Severity {
+	grade, _ := o.HostSensitivityReason(hostOrIP)
+	return grade
+}
+
+// HostSensitivityReason returns the grade and the written reason for a host.
+//
+// The reason is what reaches the audit record, so that "why did this score go
+// up" is answered by the sentence the list's author wrote rather than by a
+// pattern the reader has to interpret.
+//
+// The scan is linear and stops at the first match, which is the highest-grade
+// match because the rules were ordered that way at construction. Every
+// comparison goes through validator.MatchHost, so the name/address boundary,
+// wildcard label counting, case folding, and IPv4-mapped unmapping are the
+// validator's rather than a second opinion.
+func (o *ResourceOracle) HostSensitivityReason(hostOrIP string) (capability.Severity, string) {
+	if o == nil || hostOrIP == "" {
+		return SensitivityUnknown, ""
+	}
+	// The observation is classified once, here, rather than once per pattern
+	// inside MatchHost. It buys two things: an observation that is neither a
+	// name nor an address is refused explicitly rather than by falling off the
+	// end of the scan, and the boundary check below can skip whole rules
+	// without asking.
+	observed := validator.ClassifyHost(hostOrIP)
+	switch observed {
+	case validator.HostKindName, validator.HostKindIP:
+	default:
+		return SensitivityUnknown, ""
+	}
+
+	for _, r := range o.hosts {
+		// Skipping, never deciding. canCompare rejects exactly the pairs
+		// MatchHost would reject on the name/address boundary, so the answer is
+		// unchanged and the work is not done twice.
+		if !canCompare(r.kind, observed) {
+			continue
+		}
+		if validator.MatchHost(r.pattern, hostOrIP) {
+			return r.grade, r.reason
+		}
+	}
+	return SensitivityUnknown, ""
 }
 
 // ExecutableSensitivity rates a binary, and this build cannot.
@@ -381,7 +500,7 @@ func (o *PathOracle) HostSensitivity(_ string) capability.Severity {
 //
 // TODO(risk): executable sensitivity arrives with the privilege_change and
 // exfiltration_pattern scorers, which are the ones that would read it.
-func (o *PathOracle) ExecutableSensitivity(_ string) capability.Severity {
+func (o *ResourceOracle) ExecutableSensitivity(_ string) capability.Severity {
 	return SensitivityUnknown
 }
 

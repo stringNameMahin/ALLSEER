@@ -216,7 +216,7 @@ func runPolicyDryRun(args []string) int {
 	// operator wrote and this run cannot honour, and proceeding without it
 	// would produce a quiet report that reads like a quiet session.
 	//
-	// Declared as the interface, not as *risk.PathOracle. A nil *PathOracle
+	// Declared as the interface, not as *risk.ResourceOracle. A nil *ResourceOracle
 	// assigned into an interface parameter is a non-nil interface holding a nil
 	// pointer, so evaluateStream's "was a list supplied" check would answer yes
 	// and the run would report resources as rated against a list nobody passed.
@@ -225,7 +225,7 @@ func runPolicyDryRun(args []string) int {
 	// which is the one distinction this whole feature exists to keep.
 	var oracle risk.SensitivityOracle
 	if *sensPath != "" {
-		o, err := risk.LoadPathOracle(*sensPath)
+		o, err := risk.LoadResourceOracle(*sensPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "allseerctl policy dry-run: %v\n", err)
 			return 1
@@ -588,11 +588,15 @@ func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet,
 				"    credential file from a toolchain header. Pass -sensitivity %s to rate them.\n",
 				"configs/sensitivity.default.yaml")
 		} else {
-			fmt.Fprintf(&b, "  - resources were rated against %s. Paths that list does not\n"+
-				"    cover are reported as unrated rather than as unremarkable.\n", sensPath)
+			fmt.Fprintf(&b, "  - resources were rated against %s — files against its\n"+
+				"    `paths` section, network destinations against its `hosts` section. Anything\n"+
+				"    neither section covers is reported as unrated rather than as unremarkable.\n", sensPath)
 		}
-		fmt.Fprint(&b, "  - the scorer still has no host or executable ratings and no sequence\n"+
-			"    detection, so it cannot see credential access followed by egress.\n")
+		fmt.Fprint(&b, "  - a destination is rated by the identity the observation carries: the\n"+
+			"    correlated name when DNS correlation succeeded, the address when it did not.\n"+
+			"    A name entry never rates an address and an address entry never rates a name.\n"+
+			"  - the scorer still has no executable ratings, so it cannot tell curl from a\n"+
+			"    compiler, and it detects one behavioral sequence rather than a behavioral model.\n")
 	}
 
 	fmt.Fprint(w, b.String())

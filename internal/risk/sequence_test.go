@@ -745,7 +745,7 @@ func TestOnlyAnOracleBackedEngineCarriesTheDetector(t *testing.T) {
 // every event a session produces, and the detector must cost it one comparison
 // and no history read at all.
 func BenchmarkScoreSequenceNonEgress(b *testing.B) {
-	o, err := LoadPathOracle(defaultListPath())
+	o, err := LoadResourceOracle(defaultListPath())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -831,7 +831,7 @@ func BenchmarkScoreSequenceEgressHit(b *testing.B) {
 func benchmarkSequenceEgress(b *testing.B, h *fakeHistory) {
 	b.Helper()
 
-	o, err := LoadPathOracle(defaultListPath())
+	o, err := LoadResourceOracle(defaultListPath())
 	if err != nil {
 		b.Fatal(err)
 	}

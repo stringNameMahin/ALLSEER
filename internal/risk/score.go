@@ -17,10 +17,10 @@ import (
 // There is no baseline learning and no behavioral model here. What there is, is
 // a scorer that turns evidence the pipeline already produces into a bounded
 // score, so that the risk-conditioned rules in configs/rules.default.yaml stop
-// being inert. Two of its factors are fed by configuration rather than by
+// being inert. Three of its factors are fed by configuration rather than by
 // observation and live in their own files beside their own data: sensitive_path
-// in sensitivity.go, and the credential-access-to-egress sequence detector in
-// sequence.go.
+// in sensitivity.go, sensitive_host in host.go, and the
+// credential-access-to-egress sequence detector in sequence.go.
 //
 // # The model, in one paragraph
 //
@@ -37,17 +37,19 @@ import (
 //	verdict                   0 / 20 / 25 / 25 / 30 / 55 by classification  validator.Result
 //	violation_severity        0 / 5 / 10 / 15 / 30 by highest severity      validator.Violation
 //	sensitive_path            0 / 0 / 8 / 15 / 25 by the oracle's grade     SensitivityOracle
+//	sensitive_host            the same table, for the destination reached   SensitivityOracle
 //	credential_access_egress  30 for a proven sequence into this egress     History.RecentEvents
 //	workspace_escape          10 when the workspace boundary was crossed    validator.Violation
 //	novel_target              5 when this target is new to the session      History.TargetSeen
 //	violation_history         1 per prior violation, capped at 10           History.ViolationCount
 //
-// sensitive_path and credential_access_egress are present only when an engine
-// was built with a SensitivityOracle; NewEngine has neither, and the absence is
-// visible in the factor list rather than hidden in a zero. They are the two
-// factors whose input is configuration rather than observation, which is why
-// each lives beside its own data file and its own admission check — see
-// sensitivity.go and sequence.go.
+// The three configuration-fed factors are present only when an engine was built
+// with a SensitivityOracle; NewEngine has none, and the absence is visible in
+// the factor list rather than hidden in a zero. The two resource factors are
+// admitted independently, on whether the list actually grades that kind of
+// resource, and exactly one of them speaks per event: a filesystem event has no
+// destination and a network event has no path. Each lives beside its own data
+// and its own admission check — see sensitivity.go, host.go, and sequence.go.
 //
 // # Three rules the model follows without exception
 //
@@ -61,10 +63,10 @@ import (
 //
 //  3. **An expected event scores exactly zero.** A within-envelope verdict is a
 //     positive finding by the validator, not an absence, so LevelNone means
-//     "nothing departed" rather than "nothing was looked at". The two factors
-//     that can still find something on a covered event — sensitive_path and
-//     credential_access_egress — report the finding and withhold the points,
-//     saying so with not_charged, rather than going silent about it.
+//     "nothing departed" rather than "nothing was looked at". The three factors
+//     that can still find something on a covered event — sensitive_path,
+//     sensitive_host, and credential_access_egress — report the finding and
+//     withhold the points, saying so with not_charged, rather than going silent.
 //
 // # Calibration
 //
@@ -152,6 +154,9 @@ const (
 	FactorSensitivePath     = "sensitive_path"
 	FactorNovelTarget       = "novel_target"
 	FactorViolationHistory  = "violation_history"
+
+	// FactorSensitiveHost is declared in host.go, beside the vocabulary it
+	// reads. Named here so the factor vocabulary can be read in one place.
 
 	// FactorEvidenceBasis carries no points. It states which of the model's
 	// evidence inputs were actually available, and it is the only thing
@@ -404,19 +409,50 @@ func NewEngineWithOracle(o SensitivityOracle) (*BaselineEngine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &BaselineEngine{
-		scorers: []Scorer{
-			VerdictScorer{},
-			ViolationSeverityScorer{},
-			SensitivePathScorer{oracle: o},
-			seq,
-			WorkspaceEscapeScorer{},
-			NovelTargetScorer{},
-			ViolationHistoryScorer{},
-			EvidenceBasisScorer{},
-		},
-		agg: BoundedSumAggregator{},
-	}, nil
+
+	// The two resource scorers are admitted independently, on whether the
+	// oracle actually holds knowledge of that kind. A list that grades only
+	// paths produces no sensitive_host factor, and a list that grades only
+	// hosts produces no sensitive_path factor — which is the first of the three
+	// states the module keeps apart: no factor means nothing rates this kind of
+	// resource in this build, while a factor reading "unknown" means somebody
+	// asked about this particular one. Emitting a permanent "unknown" for a
+	// dimension nobody was ever taught would collapse them.
+	scorers := []Scorer{
+		VerdictScorer{},
+		ViolationSeverityScorer{},
+	}
+	if ratesPaths(o) {
+		scorers = append(scorers, SensitivePathScorer{oracle: o})
+	}
+	if ratesHosts(o) {
+		scorers = append(scorers, SensitiveHostScorer{oracle: o})
+	}
+	scorers = append(scorers,
+		seq,
+		WorkspaceEscapeScorer{},
+		NovelTargetScorer{},
+		ViolationHistoryScorer{},
+		EvidenceBasisScorer{},
+	)
+
+	return &BaselineEngine{scorers: scorers, agg: BoundedSumAggregator{}}, nil
+}
+
+// ratesPaths reports whether an oracle has any path knowledge to offer.
+//
+// The counterpart of ratesHosts in host.go, with the same default: an oracle
+// that cannot state its own emptiness is assumed to rate paths, because a
+// factor reporting whatever it actually said is true of any oracle we genuinely
+// queried.
+func ratesPaths(o SensitivityOracle) bool {
+	if o == nil {
+		return false
+	}
+	if r, ok := o.(interface{ RatesPaths() bool }); ok {
+		return r.RatesPaths()
+	}
+	return true
 }
 
 // NewEngineWith returns an engine over a specific scorer set and aggregator.
@@ -845,6 +881,21 @@ func (s SensitivePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 	}
 
 	dim := dimensionFor(sc.kind)
+
+	// The network domain belongs to SensitiveHostScorer, which reads the same
+	// oracle through its own list, its own matcher, and its own factor. Two
+	// factors reporting on one destination would make an operator read both to
+	// learn one thing, and would leave a permanent "sensitive_path: unknown" on
+	// every connection — a sentence about paths, on an event that touched none.
+	//
+	// The other unrateable dimensions stay here. executable, kernel, privilege
+	// and IPC have no list and no scorer of their own, and saying "unrated" for
+	// them is the honest report; they move out the day each gets one, as the
+	// network dimension just did.
+	if dim == DimensionHost {
+		return decision.Factor{}, false, nil
+	}
+
 	grade := s.rate(dim, sc.target)
 
 	// Only the *empty* grade takes the unknown branch. A non-empty grade this
