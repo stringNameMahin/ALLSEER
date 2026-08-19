@@ -612,9 +612,10 @@ func TestLevelBoundaries(t *testing.T) {
 // --- 9. clamping ------------------------------------------------------------------------------
 
 func TestScoreClamps(t *testing.T) {
-	// The model's theoretical maximum is 110 — every factor at its ceiling — and
-	// it has to land on 100 rather than run off the scale a policy threshold is
-	// expressed on.
+	// The unrated model's theoretical maximum is 115 — every factor at its
+	// ceiling — and it has to land on 100 rather than run off the scale a policy
+	// threshold is expressed on. Asserted as an inequality rather than a number,
+	// because what this test needs is that clamping is reachable at all.
 	var ceiling float64
 	for _, s := range NewEngine().Scorers() {
 		ceiling += s.Weight()
@@ -926,6 +927,12 @@ func (unnamedScorer) Evaluate(context.Context, ScoreRequest) (*decision.Factor, 
 
 // Each scorer must produce what it claims to produce, or the factor names in an
 // audit record stop matching the scorer that wrote them.
+// The scorer set is domain-partitioned, so no single request can trigger every
+// scorer any more: an event has either a path or a destination and never both.
+// The check is therefore that each scorer fires on at least one of the two
+// shapes and agrees with its own metadata when it does — which is a stronger
+// claim than the single-request form it replaces, because it also asserts that
+// every scorer in the set is reachable at all.
 func TestScorersAgreeWithTheirOwnMetadata(t *testing.T) {
 	req := ScoreRequest{
 		Event: fileEvent(capability.KindFileDelete, "/etc/shadow"),
@@ -936,22 +943,40 @@ func TestScorersAgreeWithTheirOwnMetadata(t *testing.T) {
 		History:  history().withViolations(100),
 	}
 
+	// The network counterpart: an ungranted connection to an address no name was
+	// correlated to, which is what reaches the destination-scoped scorers.
+	netReq := ScoreRequest{
+		Event: uncorrelatedEvent(capability.KindNetConnect, "203.0.113.10:8443"),
+		Validation: result(decision.VerdictOutsideEnvelope,
+			viol(validator.ViolationUngrantedCapability, capability.SeverityHigh)),
+		Envelope: envelope(),
+		History:  history().withViolations(100),
+	}
+
 	for _, s := range NewEngine().Scorers() {
-		f, err := s.Evaluate(context.Background(), req)
-		if err != nil {
-			t.Fatalf("%s: %v", s.Name(), err)
+		var fired bool
+		for _, r := range []ScoreRequest{req, netReq} {
+			f, err := s.Evaluate(context.Background(), r)
+			if err != nil {
+				t.Fatalf("%s: %v", s.Name(), err)
+			}
+			if f == nil {
+				continue
+			}
+			fired = true
+			if f.Name != s.Name() {
+				t.Errorf("scorer %q produced a factor named %q", s.Name(), f.Name)
+			}
+			if f.Weight > s.Weight() {
+				t.Errorf("scorer %q contributed %v, above its declared ceiling of %v", s.Name(), f.Weight, s.Weight())
+			}
+			if f.Description == "" {
+				t.Errorf("scorer %q produced a factor with no description", s.Name())
+			}
 		}
-		if f == nil {
-			t.Fatalf("%s produced no factor on a request that triggers every one", s.Name())
-		}
-		if f.Name != s.Name() {
-			t.Errorf("scorer %q produced a factor named %q", s.Name(), f.Name)
-		}
-		if f.Weight > s.Weight() {
-			t.Errorf("scorer %q contributed %v, above its declared ceiling of %v", s.Name(), f.Weight, s.Weight())
-		}
-		if f.Description == "" {
-			t.Errorf("scorer %q produced a factor with no description", s.Name())
+		if !fired {
+			t.Errorf("%s produced no factor on either a filesystem or a network departure; "+
+				"a scorer nothing can reach is a scorer nothing tests", s.Name())
 		}
 	}
 

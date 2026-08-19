@@ -623,16 +623,17 @@ func TestACoveredEventKeepsItsZeroButNotItsSilence(t *testing.T) {
 }
 
 // Clamping still holds with the oracle-backed factors in play. The ceiling is
-// 190: the unrated engine's 110, plus 25 for sensitive_path, 30 for
-// credential_access_egress, and 25 for sensitive_host, all three of which
-// arrive with an oracle. It is asserted as an exact number so that adding a
+// 195: the unrated engine's 115 — which already includes
+// uncorrelated_destination's 5, since that scorer needs no oracle — plus 25 for
+// sensitive_path, 30 for credential_access_egress, and 25 for sensitive_host,
+// all three of which arrive with an oracle. It is asserted as an exact number so that adding a
 // scorer is a deliberate act — the scale is clamped rather than rescaled
 // precisely so a new factor cannot silently move every existing score, and this
 // is where that stays true.
 //
 // The declared ceiling is not reachable, and deliberately overstates: a single
-// event has either a path or a destination, never both, so sensitive_path and
-// sensitive_host cannot contribute together. Summing the declared weights is
+// event has either a path or a destination, never both, so sensitive_path
+// cannot contribute alongside sensitive_host or uncorrelated_destination. Summing the declared weights is
 // still the right check, because Weight() is each scorer's own promise about
 // what it can contribute and the clamp has to hold against the sum of the
 // promises rather than against a case analysis of which co-occur.
@@ -643,8 +644,8 @@ func TestSensitivityDoesNotEscapeTheScale(t *testing.T) {
 	for _, s := range e.Scorers() {
 		ceiling += s.Weight()
 	}
-	if ceiling != 190 {
-		t.Errorf("scorer ceiling = %v, want 190", ceiling)
+	if ceiling != 195 {
+		t.Errorf("scorer ceiling = %v, want 195", ceiling)
 	}
 
 	esc := viol(validator.ViolationWorkspaceEscape, capability.SeverityHigh)

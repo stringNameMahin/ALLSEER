@@ -152,12 +152,14 @@ type Baseline interface {
 }
 
 // Done: BaselineEngine in score.go implements Engine as a deterministic,
-// explainable baseline. Eight factors — verdict, violation_severity,
-// sensitive_path, sensitive_host, credential_access_egress, workspace_escape,
-// novel_target, violation_history — are summed as integer points and clamped to
-// [0,100]; the three middle ones are present only when an oracle was supplied,
-// and the two resource factors only when the list actually grades that kind of
-// resource. It is still not the engine §3.6 describes: there is no learned
+// explainable baseline. Nine factors — verdict, violation_severity,
+// sensitive_path, sensitive_host, uncorrelated_destination,
+// credential_access_egress, workspace_escape, novel_target, violation_history —
+// are summed as integer points and clamped to [0,100]; three of them are
+// present only when an oracle was supplied, and the two resource factors only
+// when the list actually grades that kind of resource.
+// uncorrelated_destination is in every engine, its evidence being telemetry
+// rather than configuration. It is still not the engine §3.6 describes: there is no learned
 // baseline, no executable rating, and one sequence shape rather than a
 // behavioral model, and score.go says so at the top.
 // Done: four of the seven planned scorers exist, plus one the plan did not
@@ -175,8 +177,15 @@ type Baseline interface {
 // validator.MatchHost rather than through the path matcher — different
 // configuration, different vocabulary, different matcher, and therefore a
 // factor of its own rather than a dimension of another one.
-// TODO(risk): the remaining two are novel_network_destination, which host
-// ratings have just unblocked, and privilege_change, which wants
+// Closed: novel_network_destination will not be built. docs/milestones.md
+// specifies it as "using risk.History.TargetSeen", and NovelTargetScorer
+// implements exactly that, is domain-agnostic, and already fires on network
+// events — registry.npmjs.org alone produces three separate novelty findings in
+// the npm recording, one per capability that touched it. It was closed as a
+// duplicate and UncorrelatedDestinationScorer in correlation.go was built
+// instead: the distinct network signal that analysis actually turned up, which
+// reads no history at all.
+// TODO(risk): the last planned scorer is privilege_change, which wants
 // ExecutableSensitivity. A standalone credential_access scorer is deliberately
 // not planned any more: the sequence detector charges the relationship,
 // sensitive_path charges the resource, and a third factor between them would
@@ -187,19 +196,19 @@ type Baseline interface {
 // accumulation of small factors can bury a large one, so the floor would be a
 // mechanism with no failure to prevent. It becomes worth adding when the scorer
 // set is large enough for dilution to be possible; the sequence detector's 30
-// points and sensitive_host's 25 moved the oracle-backed ceiling from 135 to
-// 190, and the clamp rather than a rescale is what keeps an operator's existing
-// threshold meaning what it meant.
+// points, sensitive_host's 25, and uncorrelated_destination's 5 moved the
+// oracle-backed ceiling from 135 to 195, and the clamp rather than a rescale is
+// what keeps an operator's existing threshold meaning what it meant.
 // TODO(risk): the point values are calibrated against the shipped rule set's
 // own stated bands, not measured. They are a documented starting point; the
 // labeled corpus below is what turns them into a tuned result.
-// TODO(risk): score a destination known only by address above one reached by a
-// correlated name. capability.AttrHostnameCorrelated already records the
-// distinction, enrichment already writes it, and sensitive_host now *reports*
-// it on every network event without charging for it — deliberately, because
-// charging it there would put two unrelated findings under one factor name.
-// This is novel_network_destination's signal, it needs no configuration, and it
-// is the cheapest remaining scorer as a result.
+// Done: a destination known only by address now scores above one reached by a
+// correlated name. UncorrelatedDestinationScorer in correlation.go charges the
+// gap capability.AttrHostnameCorrelated has recorded since enrichment was
+// written, and which sensitive_host reports without charging — deliberately,
+// because charging it there would have put two unrelated findings under one
+// factor name. It reads no history, no list, and no envelope, and it costs a
+// non-network event nothing measurable.
 // TODO(risk): assemble a labeled evaluation set of benign and malicious
 // sessions. Tuning without measurement produces a system that is either ignored
 // or distrusted.

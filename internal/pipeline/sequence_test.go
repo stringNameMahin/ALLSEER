@@ -195,11 +195,15 @@ func TestTheSequenceFixtureThroughTheRealPipeline(t *testing.T) {
 
 		// The event the detector is for. 20 for indeterminate, 15 for the
 		// unresolvable violation's severity, 5 for novelty, 3 for the prior
-		// violations, and 30 for the sequence: 73, which is above the shipped
-		// rule set's own 50 boundary between its two indeterminate rules.
+		// violations, 30 for the sequence, and 5 for the destination being
+		// reached by address with no correlated hostname: 78, which is above the
+		// shipped rule set's own 50 boundary between its two indeterminate
+		// rules. It was 73 before uncorrelated_destination existed; the rule,
+		// the action, and the level are unchanged by those five points, which is
+		// the intended character of the smallest contribution in the model.
 		{EventID: "ex-009", Verdict: decision.VerdictIndeterminate,
 			Rule: "indeterminate-high-risk", Action: ece.ActionRequestApproval,
-			Score: 73, Level: decision.LevelHigh,
+			Score: 78, Level: decision.LevelHigh,
 			SequenceAccess: "ex-003", SequencePoints: 30},
 
 		{EventID: "ex-010", Verdict: decision.VerdictWithinEnvelope,

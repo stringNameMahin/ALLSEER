@@ -20,7 +20,9 @@ import (
 // being inert. Three of its factors are fed by configuration rather than by
 // observation and live in their own files beside their own data: sensitive_path
 // in sensitivity.go, sensitive_host in host.go, and the
-// credential-access-to-egress sequence detector in sequence.go.
+// credential-access-to-egress sequence detector in sequence.go. A fourth,
+// uncorrelated_destination in correlation.go, is fed by telemetry alone and
+// needs no configuration at all.
 //
 // # The model, in one paragraph
 //
@@ -38,6 +40,7 @@ import (
 //	violation_severity        0 / 5 / 10 / 15 / 30 by highest severity      validator.Violation
 //	sensitive_path            0 / 0 / 8 / 15 / 25 by the oracle's grade     SensitivityOracle
 //	sensitive_host            the same table, for the destination reached   SensitivityOracle
+//	uncorrelated_destination  5 when a destination has no correlated name   Observation attributes
 //	credential_access_egress  30 for a proven sequence into this egress     History.RecentEvents
 //	workspace_escape          10 when the workspace boundary was crossed    validator.Violation
 //	novel_target              5 when this target is new to the session      History.TargetSeen
@@ -51,6 +54,10 @@ import (
 // destination and a network event has no path. Each lives beside its own data
 // and its own admission check — see sensitivity.go, host.go, and sequence.go.
 //
+// uncorrelated_destination is in every engine, because its evidence is a field
+// the resolver already wrote rather than a list somebody has to author. See
+// correlation.go.
+//
 // # Three rules the model follows without exception
 //
 //  1. **Absence of evidence is never evidence of safety.** A factor that cannot
@@ -63,10 +70,11 @@ import (
 //
 //  3. **An expected event scores exactly zero.** A within-envelope verdict is a
 //     positive finding by the validator, not an absence, so LevelNone means
-//     "nothing departed" rather than "nothing was looked at". The three factors
+//     "nothing departed" rather than "nothing was looked at". The four factors
 //     that can still find something on a covered event — sensitive_path,
-//     sensitive_host, and credential_access_egress — report the finding and
-//     withhold the points, saying so with not_charged, rather than going silent.
+//     sensitive_host, uncorrelated_destination, and credential_access_egress —
+//     report the finding and withhold the points, saying so with not_charged,
+//     rather than going silent about it.
 //
 // # Calibration
 //
@@ -369,6 +377,7 @@ func NewEngine() *BaselineEngine {
 		scorers: []Scorer{
 			VerdictScorer{},
 			ViolationSeverityScorer{},
+			UncorrelatedDestinationScorer{},
 			WorkspaceEscapeScorer{},
 			NovelTargetScorer{},
 			ViolationHistoryScorer{},
@@ -429,6 +438,7 @@ func NewEngineWithOracle(o SensitivityOracle) (*BaselineEngine, error) {
 		scorers = append(scorers, SensitiveHostScorer{oracle: o})
 	}
 	scorers = append(scorers,
+		UncorrelatedDestinationScorer{},
 		seq,
 		WorkspaceEscapeScorer{},
 		NovelTargetScorer{},
@@ -1168,8 +1178,8 @@ func (EvidenceBasisScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, error)
 // scorer set is large enough for dilution to be possible, and adding it now
 // would be a mechanism with no failure to prevent.
 //
-// Clamping rather than rescaling: the theoretical maximum is 110 for the
-// unrated scorer set and 165 with an oracle behind it, and rescaling by either
+// Clamping rather than rescaling: the theoretical maximum is 115 for the
+// unrated scorer set and 195 with an oracle behind it, and rescaling by either
 // would mean adding a scorer silently moved every existing score. A policy
 // threshold an operator set last week has to keep meaning what it meant — which
 // is exactly what adding the sequence detector would otherwise have broken.

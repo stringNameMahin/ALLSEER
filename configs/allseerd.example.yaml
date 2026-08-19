@@ -71,14 +71,19 @@ envelope:
 risk:
   # Empty means all registered scorers.
   enabled_scorers: []
+  # Keys are factor names as internal/risk emits them. Names that do not match a
+  # shipped factor are inert, which is why this list tracks the scorer set: it
+  # was written against the planned names and several of those changed as the
+  # scorers were built. privilege_change is still planned rather than shipped.
   scorer_weights:
     sensitive_path: 1.0
+    sensitive_host: 1.0
+    uncorrelated_destination: 1.0
+    credential_access_egress: 2.0
     workspace_escape: 0.8
-    novel_network_destination: 1.0
+    novel_target: 0.6
+    violation_history: 0.6
     privilege_change: 1.5
-    credential_access: 2.0
-    exfiltration_pattern: 2.0
-    violation_rate: 0.6
   # Deployment-specific additions to the built-in list.
   sensitive_paths:
     - /etc/shadow
@@ -88,6 +93,10 @@ risk:
     - ~/.kube/config
     - "**/.env"
     - "**/.env.*"
+  # Both lists are deployment-specific *additions*. The shipped baseline lives
+  # in configs/sensitivity.default.yaml, which has a `paths` section and a
+  # `hosts` section; host patterns follow docs/network-matching.md's vocabulary
+  # and are not filesystem globs.
   sensitive_hosts: []
   thresholds:
     low: 20
