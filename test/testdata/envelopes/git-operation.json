@@ -1,0 +1,69 @@
+{
+  "$comment": "The envelope a `git commit -am` session would have been sealed with, governing test/testdata/replay/git-operation.jsonl. Written the way an honest one would be: filesystem access across the workspace, the one binary the task runs, and a denial carving CI configuration back out of the broad write grant. Nothing here was arranged to make a finding appear.",
+
+  "schema_version": "allseer.dev/ece/v1alpha1",
+  "id": "11111111-2222-3333-4444-555555555555",
+  "session_id": "s-git",
+  "created_at": "2026-03-02T12:00:00Z",
+
+  "intent": {
+    "raw_prompt": "commit the staged changes",
+    "summary": "Run git commit in the project.",
+    "task_type": "git-operation",
+    "analyzer": "rules:v1",
+    "confidence": 0.9
+  },
+
+  "grants": [
+    {
+      "kind": "fs.read",
+      "domain": "filesystem",
+      "selector": {"path_patterns": ["/home/dev/project/**"]},
+      "rationale": "git reads the index, the object store, and the files being committed."
+    },
+    {
+      "kind": "fs.write",
+      "domain": "filesystem",
+      "selector": {"path_patterns": ["/home/dev/project/**"]},
+      "rationale": "A commit writes the index and new objects."
+    },
+    {
+      "kind": "fs.create",
+      "domain": "filesystem",
+      "selector": {"path_patterns": ["/home/dev/project/**"]},
+      "rationale": "New loose objects and lock files are created under .git/."
+    },
+    {
+      "kind": "fs.rename",
+      "domain": "filesystem",
+      "selector": {"path_patterns": ["/home/dev/project/**"]},
+      "rationale": "git writes through a lock file and renames it into place."
+    },
+    {
+      "kind": "process.exec",
+      "domain": "process",
+      "selector": {"executables": ["/usr/bin/git"]},
+      "rationale": "The task is a git invocation."
+    },
+    {
+      "kind": "process.exit",
+      "domain": "process",
+      "selector": {"executables": ["/usr/bin/git"]},
+      "rationale": "Exit is observed for the same binary."
+    }
+  ],
+
+  "denials": [
+    {
+      "kind": "fs.write",
+      "domain": "filesystem",
+      "selector": {"path_patterns": ["/home/dev/project/.github/**"]},
+      "rationale": "CI configuration is supply-chain surface. The workspace-wide write grant would otherwise swallow it, and a denial is the only thing that wins over a grant."
+    }
+  ],
+
+  "constraints": {"workspace_root": "/home/dev/project"},
+
+  "default_action": "request_approval",
+  "sealed": true
+}

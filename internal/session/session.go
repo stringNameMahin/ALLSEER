@@ -39,6 +39,17 @@ type Session struct {
 
 	WorkspaceRoot string `json:"workspace_root"`
 
+	// CreatedAt is when the session was registered, which is the only time a
+	// session that never started has. Added when the lifecycle state machine
+	// was built: List orders and filters on it, and doing either on StartedAt
+	// would silently hide the sessions that failed before they began — exactly
+	// the ones a time-window query most wants to find.
+	CreatedAt time.Time `json:"created_at"`
+
+	// StartedAt is when the agent began running under supervision. Zero until
+	// Start, and distinct from CreatedAt because the gap between them is
+	// approval latency, which is the number that decides whether interactive
+	// mode is usable.
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 
@@ -60,6 +71,18 @@ const (
 	// may start.
 	StateAwaitingApproval State = "awaiting_approval"
 
+	// StateReady: sealed, approved if approval was required, and not yet
+	// started.
+	//
+	// Added when the lifecycle state machine was built, because the Manager
+	// interface implied this state without naming it. Seal is documented as
+	// moving to "StateAwaitingApproval or StateActive", and StateActive means
+	// "the agent is running" — which it is not, since Start is what supplies
+	// the root PID. Without a name for the gap, a sealed and approved session
+	// would be indistinguishable from one just created, and Start would have no
+	// state to guard against.
+	StateReady State = "ready"
+
 	// StateActive: the agent is running and being governed.
 	StateActive State = "active"
 
@@ -80,6 +103,16 @@ const (
 
 // Outcome describes how a session ended.
 type Outcome struct {
+	// Result is the terminal state to land in: completed, terminated, or
+	// failed. Empty means completed, the ordinary case.
+	//
+	// Carried here rather than derived, because Manager.End takes only an
+	// Outcome and the three terminal states are three different findings about
+	// three different subjects — the agent finished, policy stopped it, our own
+	// telemetry failed. Inferring which from Reason would make the audit record
+	// depend on how somebody worded a sentence.
+	Result State `json:"result"`
+
 	Reason string `json:"reason"`
 
 	ViolationCount int `json:"violation_count"`
@@ -142,7 +175,19 @@ type Manager interface {
 
 // CreateRequest is the input to session creation.
 type CreateRequest struct {
-	// Prompt is the user request that motivates this session.
+	// Envelope governs the session. Required.
+	//
+	// Caller-supplied, because deriving one from Prompt is intent analysis (M8)
+	// plus envelope generation (M9) and neither exists. MemoryManager refuses a
+	// request without one rather than inventing a capability set, which would be
+	// granting capabilities nobody authorized. Its SessionID is the session's
+	// identity: one identifier for one governed execution, and a generated one
+	// would make a replayed session produce a different record every run.
+	Envelope *ece.Envelope
+
+	// Prompt is the user request that motivates this session. Descriptive
+	// today; it becomes load-bearing at M8, where it is what an analyzer reads
+	// to produce the envelope above.
 	Prompt string
 
 	WorkspaceRoot string

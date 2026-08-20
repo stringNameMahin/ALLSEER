@@ -119,12 +119,20 @@ type MemoryState struct {
 
 	now func() time.Time
 
-	// hostClock selects what measures elapsed time; see ElapsedSeconds.
-	hostClock bool
-
 	maxSeenTargets int
 
 	// --- counters: written by the owner, readable from any goroutine ---------
+	//
+	// One exception, and it is here rather than buried at the field: startNanos
+	// and hostClock are also written by SetStartedAt, which the session
+	// lifecycle manager calls from whichever goroutine drives the lifecycle —
+	// not the event writer. Both are atomic and the write happens once, guarded
+	// by a compare-and-swap, so the two writers cannot interleave into a
+	// half-set start. Nothing else here has a second writer.
+
+	// hostClock selects what measures elapsed time; see ElapsedSeconds. Set at
+	// construction from Config.StartedAt, or later by SetStartedAt.
+	hostClock atomic.Bool
 
 	startNanos  atomic.Int64
 	latestNanos atomic.Int64
@@ -248,7 +256,6 @@ func NewStateWith(cfg Config) *MemoryState {
 		sessionID:      cfg.SessionID,
 		envelope:       cfg.Envelope,
 		now:            now,
-		hostClock:      !cfg.StartedAt.IsZero(),
 		maxSeenTargets: maxTargets,
 		grantUses:      make([]atomic.Int64, grants),
 		capabilityUses: make(map[capability.Kind]*atomic.Int64, len(capability.AllKinds())),
@@ -264,7 +271,8 @@ func NewStateWith(cfg Config) *MemoryState {
 		s.capabilityUses[k] = new(atomic.Int64)
 	}
 
-	if s.hostClock {
+	if !cfg.StartedAt.IsZero() {
+		s.hostClock.Store(true)
 		s.startNanos.Store(cfg.StartedAt.UnixNano())
 	}
 	return s
@@ -452,13 +460,40 @@ func (s *MemoryState) ElapsedSeconds() float64 {
 	}
 
 	end := s.latestNanos.Load()
-	if s.hostClock {
+	if s.hostClock.Load() {
 		end = s.now().UnixNano()
 	}
 	if end <= start {
 		return 0
 	}
 	return float64(end-start) / float64(time.Second)
+}
+
+// SetStartedAt fixes the session's start on the host clock.
+//
+// The lifecycle manager calls this at Start, so that elapsed time in a session
+// constraint and elapsed time in the lifecycle record are the same measurement
+// rather than two clocks started moments apart. A state constructed with a zero
+// Config.StartedAt is on the *stream* clock — elapsed time derived from the
+// events themselves — which is what a replay wants and what a session that has
+// not begun should report; this switches it to the host clock at the moment the
+// agent actually starts.
+//
+// Ignored for a zero time, and ignored once a start is already fixed. A session
+// starts once: allowing a second call would let a long-running session have its
+// duration reset, and a duration that can decrease is a spent time budget that
+// can come back.
+//
+// Safe from any goroutine, unlike most of the writes here — the manager calls
+// it from whichever goroutine drives the lifecycle, which is not the session's
+// event writer.
+func (s *MemoryState) SetStartedAt(t time.Time) {
+	if s == nil || t.IsZero() {
+		return
+	}
+	if s.startNanos.CompareAndSwap(0, t.UnixNano()) {
+		s.hostClock.Store(true)
+	}
 }
 
 // SeenTargets reports whether this session already touched target with kind.

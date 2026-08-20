@@ -107,6 +107,15 @@ lint: ## Run golangci-lint if installed
 test: ## Run unit tests
 	$(GO) test -race -count=1 ./...
 
+.PHONY: golden
+golden: ## Regenerate the committed golden decision streams, then review the diff
+	@echo "Regenerating test/testdata/golden/ from the real pipeline..."
+	$(GO) test ./test/golden/ -run 'TestGolden$$' -update -count=1 -v
+	@echo ""
+	@echo "Golden streams rewritten. Review the diff before committing:"
+	@echo "  git diff -- test/testdata/golden/"
+	@echo "A change here is a change in what the system concludes about a session."
+
 .PHONY: cover
 cover: ## Run tests and open an HTML coverage report
 	$(GO) test -race -count=1 -coverprofile=coverage.out ./...
