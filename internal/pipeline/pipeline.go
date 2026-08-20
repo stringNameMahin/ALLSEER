@@ -261,11 +261,19 @@ type ErrorHandler interface {
 // ordinary stage error and travels the same route to an indeterminate decision,
 // so one scorer mishandling one malformed path cannot end governance for the
 // session, or for every session sharing the process.
-// TODO(pipeline): cross-session parallelism, keyed by session ID. Deliberately
-// not here: dispatching an event to the right envelope and state is
-// session.Manager's job, and a pipeline that looked sessions up would be a
-// session registry with a stage list attached. Builder.WithConcurrency refuses
-// anything above one rather than accepting a number it would ignore.
+// Done, in the half that could be built: cross-session *dispatch* — routing an
+// event to the pipeline governing its session — is session.Dispatcher. It is
+// not here for the reason it never was: a pipeline that looked sessions up
+// would be a session registry with a stage list attached, and it reaches this
+// package through a one-method EventProcessor interface it declares itself, so
+// internal/session depends on nothing here.
+// TODO(pipeline): cross-session *parallelism*, keyed by session ID, remains
+// unbuilt and is a different thing from dispatch. It needs a queue and a worker
+// per session, and a bounded queue needs an overflow policy, which is the
+// backpressure decision below. session.Dispatcher is therefore serial — one
+// stream on one goroutine — which is also what keeps each session's
+// single-writer guarantee true by construction. Builder.WithConcurrency still
+// refuses anything above one rather than accepting a number it would ignore.
 // TODO(pipeline): define the backpressure policy end to end, from the kernel
 // ring buffer through to the audit sink, and document where events can be lost.
 // Nothing here buffers yet — Process is synchronous and Run holds no queue —

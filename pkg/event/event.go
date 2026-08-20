@@ -273,8 +273,11 @@ type Filter interface {
 	Allow(e *Event) bool
 }
 
-// TODO(event): generate the Go decoder from the shared C struct layout so
-// kernel and user space cannot drift.
+// Done: the Go view of the C struct layout is generated, by
+// internal/telemetry/abigen into internal/telemetry/abi, so kernel and user
+// space cannot drift without a test failing. It stops at the ABI shape and
+// produces no Event; turning a decoded record into this type is
+// telemetry.Decoder's job, which is where the capability catalog lives.
 // TODO(event): decide the boot-time offset strategy for WallClock. Sampling
 // once at startup drifts under suspend; re-sampling periodically is more work.
 // TODO(event): specify backpressure policy. Leaning toward a bounded channel

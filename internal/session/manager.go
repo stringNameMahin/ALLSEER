@@ -47,8 +47,12 @@ import (
 // session would be the "session registry with a stage list attached" that
 // internal/pipeline explicitly refused to become; the caller builds a pipeline
 // for a session and asks the manager for that session's State_ to wire into it.
-// Cross-session event dispatch — routing an event to the right pipeline — is
-// the next thing to build on top of this, and is deliberately not here.
+//
+// Cross-session event dispatch — routing an event to the right pipeline — now
+// exists, and is still not here. It is Dispatcher in dispatch.go, a separate
+// type that reads this manager through the one-method Registry interface. All
+// this file contributes is Binding, which answers "what governs this session,
+// and is it accepting events"; it neither builds nor holds a processor.
 
 // Action is a lifecycle transition request.
 //
@@ -303,7 +307,10 @@ type managed struct {
 	state *MemoryState
 }
 
-var _ Manager = (*MemoryManager)(nil)
+var (
+	_ Manager  = (*MemoryManager)(nil)
+	_ Registry = (*MemoryManager)(nil)
+)
 
 // NewManager returns an empty session manager.
 func NewManager(cfg ManagerConfig) *MemoryManager {
@@ -707,6 +714,38 @@ func (m *MemoryManager) State(sessionID string) (State_, bool) {
 	return rec.state, true
 }
 
+// Binding returns what routing an event to this session requires: the envelope
+// governing it, the mode it runs under, the tracking state it records into, and
+// the lifecycle position that decides whether it accepts events at all.
+//
+// This is the manager's whole contribution to cross-session dispatch, and it is
+// deliberately the *only* one. It answers a question; it does not route, own a
+// pipeline, or know that a Dispatcher exists. See dispatch.go for why that
+// separation is the point rather than an accident.
+//
+// Cheap by construction, because it is consulted once per event: one read lock,
+// one map read, and no copying. Nothing here allocates.
+//
+// The envelope is shared rather than copied, on the same grounds Session.clone
+// shares it — it is sealed and read only by the time a session accepts events.
+// State_ is shared because sharing it is the point; see State.
+func (m *MemoryManager) Binding(sessionID string) (Binding, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	rec, ok := m.sessions[sessionID]
+	if !ok {
+		return Binding{}, false
+	}
+	return Binding{
+		SessionID: rec.session.ID,
+		Envelope:  rec.session.Envelope,
+		Mode:      rec.session.Mode,
+		State:     rec.state,
+		Lifecycle: rec.session.State,
+	}, true
+}
+
 // Len reports how many sessions the manager holds, terminal ones included.
 //
 // A manager never forgets. Nothing here evicts an ended session, because the
@@ -785,10 +824,14 @@ func (s *Session) clone() Session {
 // than pretend: the first needs M8 and M9, the second and third need a
 // Supervisor that is M7 and M11. Approve is on the concrete type only, because
 // awaiting_approval would otherwise be a state nothing but End can leave.
-// TODO(session): cross-session event dispatch — routing an event to the
-// pipeline governing its session. This manager is the registry that made it
-// possible; it is a separate change because a manager that also owned pipelines
-// would be the shape internal/pipeline refused to become.
+// Done: cross-session event dispatch is Dispatcher in dispatch.go. It routes
+// each event on one multi-session stream to the processor governing that
+// event's session, reading this manager through the one-method Registry
+// interface — so the manager stayed a registry and did not become the "session
+// registry with a stage list attached" internal/pipeline refused to be. Binding
+// is the whole of this file's contribution. AcceptsEvents, beside the
+// transition table in spirit, is where the lifecycle states that may receive
+// events are declared once: active and suspended, and nothing else.
 // TODO(session): implement the supervisor with pre-exec registration. On Linux
 // that likely means fork, register the child PID, then exec, closing the window
 // between fork and exec.

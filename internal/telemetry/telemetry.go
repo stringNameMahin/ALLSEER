@@ -214,8 +214,18 @@ type Config struct {
 // kprobes: a stable ABI is worth more than coverage while the design moves.
 // TODO(telemetry): implement kernel-side cgroup filtering via a BPF map, so
 // untracked processes cost nothing instead of being filtered in user space.
-// TODO(telemetry): generate the Go decoder from the shared C struct definition.
-// Hand-written decoders drift, and the failure mode is silent corruption.
+// Done, in its first half: the Go view of the ABI is generated from
+// bpf/include/allseer_event.h by internal/telemetry/abigen into
+// internal/telemetry/abi. Sizes, offsets, the event-type enum, the struct
+// mirrors, and the byte-level decode functions are all derived; nothing about
+// the layout is written down twice. TestGeneratedFileIsNotStale fails when the
+// header and the generated file disagree, and `make gen` regenerates.
+// TODO(telemetry): implement Decoder.Decode and EventSize on top of
+// internal/telemetry/abi, mapping each allseer_event_type onto a
+// capability.Kind through the M1 catalog. The abi package deliberately stops at
+// the ABI shape: it imports neither pkg/event nor pkg/capability, because
+// deciding what a record *means* is a judgment and the generated layer must
+// stay free of judgments it would have to regenerate.
 // TODO(telemetry): decide the path resolution strategy. Full dentry walking in
 // the kernel is expensive and bounded by the verifier's loop limits; resolving
 // in user space races with rename. Neither is clean.

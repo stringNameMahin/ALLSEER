@@ -1,6 +1,4 @@
 # --- Secrets
-.claude/settings.json
-.claude/settings.local.json
 .env
 .env.*
 !.env.example
@@ -19,11 +17,15 @@
 # --- eBPF artifacts
 *.bpf.o
 /bpf/**/vmlinux.h
+/bpf/*.o
 
 # --- Go
 *.test
 *.out
 coverage.*
+*.prof
+*.pprof
+__debug_bin*
 /vendor/
 go.work
 go.work.sum
@@ -35,8 +37,11 @@ go.work.sum
 .agents/
 skills-lock.json
 *.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # --- Runtime state
 /var/
@@ -52,5 +57,7 @@ future_work.md
 # --- WIP DOCS
 docs/
 LICENSE
-devRead.md
-STATUS.md
+
+# --- Merge / patch leftovers
+*.orig
+*.rej

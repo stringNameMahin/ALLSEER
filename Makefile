@@ -127,6 +127,35 @@ tidy: ## Tidy and verify go.mod / go.sum
 	$(GO) mod tidy
 	$(GO) mod verify
 
+##@ Codegen
+
+# The Go view of the kernel/user ABI is derived from bpf/include/allseer_event.h
+# rather than written down twice. The header's own preamble states why: a
+# mismatch between the two sides "does not produce a clean error; it produces
+# plausible garbage that flows straight into governance decisions".
+#
+# Note that `make test` already enforces staleness, through
+# TestGeneratedFileIsNotStale in internal/telemetry/abi. That is the stronger
+# check of the two, because it runs anywhere `go test` runs — including hosts
+# with no make at all. These targets exist so the check is also invocable by
+# name, which is what the milestone issue asks for.
+
+ABI_HEADER := $(BPF_DIR)/include/allseer_event.h
+ABI_OUT    := internal/telemetry/abi/layout_gen.go
+
+.PHONY: gen
+gen: ## Regenerate the Go ABI from bpf/include/allseer_event.h
+	$(GO) generate ./internal/telemetry/abi/
+	@echo ""
+	@echo "Review the diff before committing:"
+	@echo "  git diff -- $(ABI_OUT)"
+	@echo "A change here is a change in how kernel bytes are read."
+
+.PHONY: gen-check
+gen-check: ## Fail if the generated ABI is stale relative to the header
+	$(GO) run ./internal/telemetry/abigen/cmd/abigen \
+		-header $(ABI_HEADER) -out $(ABI_OUT) -package abi -check
+
 ##@ Schemas
 
 .PHONY: schema-check
