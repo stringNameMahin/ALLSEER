@@ -56,6 +56,75 @@ var fixtures = []struct {
 		wantGaps:    0,
 		wantDropped: 0,
 	},
+	{
+		// The sequence recording. Clean, because the claim it supports is about
+		// the *relationship* between two events: a hole in this stream would
+		// mean the detector could be reasoning across records it never saw, and
+		// that is a separate concern with its own fixture.
+		name:        "credential-egress",
+		file:        "credential-egress.jsonl",
+		sessionID:   "s-exfil",
+		events:      10,
+		wantGaps:    0,
+		wantDropped: 0,
+	},
+}
+
+// The sequence fixture is only useful if it still contains the near-misses it
+// was written around. Asserted here, beside the other structural claims, so a
+// well-meaning edit that "tidied" the failed read or re-graded the /etc/passwd
+// event fails in the corpus rather than silently weakening a detector test one
+// package away.
+func TestCredentialEgressFixtureKeepsItsNearMisses(t *testing.T) {
+	s := Open(filepath.Join(fixtureDir, "credential-egress.jsonl"))
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	got := map[string]struct {
+		kind      capability.Kind
+		target    string
+		succeeded bool
+	}{}
+	for _, e := range drain(t, s) {
+		got[e.ID] = struct {
+			kind      capability.Kind
+			target    string
+			succeeded bool
+		}{e.Capability, e.Observation.Target, e.Result.Succeeded}
+	}
+
+	for _, c := range []struct {
+		id        string
+		kind      capability.Kind
+		target    string
+		succeeded bool
+		why       string
+	}{
+		{"ex-003", capability.KindFileRead, "/home/dev/.aws/credentials", true,
+			"the only qualifying antecedent in the stream"},
+		{"ex-004", capability.KindFileRead, "/etc/passwd", true,
+			"a medium-graded read that must not qualify"},
+		{"ex-005", capability.KindFileRead, "/home/dev/.ssh/id_ed25519", false,
+			"a critical-graded read that failed and so must not qualify"},
+		{"ex-006", capability.KindNetDNS, "registry.npmjs.org", true,
+			"a lookup, which is not egress"},
+		{"ex-007", capability.KindNetConnect, "registry.npmjs.org:443", true,
+			"granted egress, where the sequence is reported and charges nothing"},
+		{"ex-009", capability.KindNetConnect, "198.51.100.77:8443", true,
+			"the uncorrelated egress the detector moves across a policy boundary"},
+	} {
+		e, ok := got[c.id]
+		if !ok {
+			t.Errorf("%s is gone from the fixture; it was %s", c.id, c.why)
+			continue
+		}
+		if e.kind != c.kind || e.target != c.target || e.succeeded != c.succeeded {
+			t.Errorf("%s is now %s on %q (succeeded=%v), want %s on %q (succeeded=%v): it is %s",
+				c.id, e.kind, e.target, e.succeeded, c.kind, c.target, c.succeeded, c.why)
+		}
+	}
 }
 
 func TestFixturesAreWellFormed(t *testing.T) {

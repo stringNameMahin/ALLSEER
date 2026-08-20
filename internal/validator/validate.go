@@ -163,6 +163,7 @@ func (v *DefaultValidator) Validate(_ context.Context, req ValidateRequest) (*Re
 		resolution := ResolvePrecedence(grants, nil)
 		winner := resolution.Winner
 		res.MatchedGrant = winner.Grant
+		res.MatchedGrantIndex = winner.Index
 		res.Reasoning = append(res.Reasoning, step("grant matched", "%s", resolution.Reason))
 
 		if exceeded, used, limit := budgetExhausted(winner, req.State); exceeded {
@@ -358,11 +359,11 @@ func (v *DefaultValidator) sessionConstraint(env *ece.Envelope, obs capability.O
 	}
 
 	switch {
-	case c.MaxProcesses > 0 && spawnsProcess(obs.Kind) && st.ProcessCount() >= c.MaxProcesses:
+	case c.MaxProcesses > 0 && SpawnsProcess(obs.Kind) && st.ProcessCount() >= c.MaxProcesses:
 		return sessionViolation(obs.Kind, "process count",
 			fmt.Sprint(c.MaxProcesses), fmt.Sprint(st.ProcessCount())), true
 
-	case c.MaxFileWrites > 0 && modifiesFilesystem(obs.Kind) && st.FileWriteCount() >= c.MaxFileWrites:
+	case c.MaxFileWrites > 0 && ModifiesFilesystem(obs.Kind) && st.FileWriteCount() >= c.MaxFileWrites:
 		return sessionViolation(obs.Kind, "file writes",
 			fmt.Sprint(c.MaxFileWrites), fmt.Sprint(st.FileWriteCount())), true
 
@@ -374,14 +375,28 @@ func (v *DefaultValidator) sessionConstraint(env *ece.Envelope, obs capability.O
 	return Violation{}, false
 }
 
-// modifiesFilesystem reports whether a capability changes the filesystem, and
-// so draws on the write budget.
+// ModifiesFilesystem reports whether a capability changes the filesystem, and
+// so draws on the session's write budget.
 //
-// TODO(session): the session manager must count the same set into
-// FileWriteCount, or an event will be blamed for a budget it never contributed
-// to. The two definitions want to live in one place once the session manager
-// exists.
-func modifiesFilesystem(k capability.Kind) bool {
+// Done: this is the single definition. It is exported because the session
+// manager must count exactly this set into SessionState.FileWriteCount, and two
+// definitions — one deciding when the budget is breached, one deciding when it
+// is spent — would disagree the first time a Kind was added to only one of
+// them. The disagreement would be silent in both directions: a budget that
+// never runs out, or an event blamed for a budget it never contributed to. The
+// definition lives here, beside the check that consumes it, and
+// internal/session calls it rather than restating it.
+//
+// Deliberately a function of Kind alone. A failed write still counts: a failed
+// action is a governance signal in its own right (pkg/event.Result), and
+// filtering on the syscall return here would make the counted set different
+// from the set this predicate names everywhere else it is used.
+//
+// fs.chmod, fs.chown, and fs.mount are absent on purpose. They change metadata
+// or topology rather than file content, the budget an envelope writes as
+// max_file_writes is about content, and each has its own capability a grant can
+// name directly.
+func ModifiesFilesystem(k capability.Kind) bool {
 	switch k {
 	case capability.KindFileWrite, capability.KindFileCreate, capability.KindFileDelete,
 		capability.KindFileRename, capability.KindFileTruncate, capability.KindFileLink:
@@ -390,7 +405,15 @@ func modifiesFilesystem(k capability.Kind) bool {
 	return false
 }
 
-func spawnsProcess(k capability.Kind) bool {
+// SpawnsProcess reports whether a capability starts a new process, and so draws
+// on the session's process budget.
+//
+// Exported for the same reason ModifiesFilesystem is: SessionState.ProcessCount
+// has to be a count of exactly these events. Note that it counts processes
+// *started*, not processes alive — MaxProcesses is a budget on how much the
+// session spawned, and reclaiming budget on exit would make the limit depend on
+// when children happened to be reaped.
+func SpawnsProcess(k capability.Kind) bool {
 	return k == capability.KindProcessExec || k == capability.KindProcessFork
 }
 

@@ -39,6 +39,17 @@ type Session struct {
 
 	WorkspaceRoot string `json:"workspace_root"`
 
+	// CreatedAt is when the session was registered, which is the only time a
+	// session that never started has. Added when the lifecycle state machine
+	// was built: List orders and filters on it, and doing either on StartedAt
+	// would silently hide the sessions that failed before they began — exactly
+	// the ones a time-window query most wants to find.
+	CreatedAt time.Time `json:"created_at"`
+
+	// StartedAt is when the agent began running under supervision. Zero until
+	// Start, and distinct from CreatedAt because the gap between them is
+	// approval latency, which is the number that decides whether interactive
+	// mode is usable.
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 
@@ -60,6 +71,18 @@ const (
 	// may start.
 	StateAwaitingApproval State = "awaiting_approval"
 
+	// StateReady: sealed, approved if approval was required, and not yet
+	// started.
+	//
+	// Added when the lifecycle state machine was built, because the Manager
+	// interface implied this state without naming it. Seal is documented as
+	// moving to "StateAwaitingApproval or StateActive", and StateActive means
+	// "the agent is running" — which it is not, since Start is what supplies
+	// the root PID. Without a name for the gap, a sealed and approved session
+	// would be indistinguishable from one just created, and Start would have no
+	// state to guard against.
+	StateReady State = "ready"
+
 	// StateActive: the agent is running and being governed.
 	StateActive State = "active"
 
@@ -80,6 +103,16 @@ const (
 
 // Outcome describes how a session ended.
 type Outcome struct {
+	// Result is the terminal state to land in: completed, terminated, or
+	// failed. Empty means completed, the ordinary case.
+	//
+	// Carried here rather than derived, because Manager.End takes only an
+	// Outcome and the three terminal states are three different findings about
+	// three different subjects — the agent finished, policy stopped it, our own
+	// telemetry failed. Inferring which from Reason would make the audit record
+	// depend on how somebody worded a sentence.
+	Result State `json:"result"`
+
 	Reason string `json:"reason"`
 
 	ViolationCount int `json:"violation_count"`
@@ -142,7 +175,19 @@ type Manager interface {
 
 // CreateRequest is the input to session creation.
 type CreateRequest struct {
-	// Prompt is the user request that motivates this session.
+	// Envelope governs the session. Required.
+	//
+	// Caller-supplied, because deriving one from Prompt is intent analysis (M8)
+	// plus envelope generation (M9) and neither exists. MemoryManager refuses a
+	// request without one rather than inventing a capability set, which would be
+	// granting capabilities nobody authorized. Its SessionID is the session's
+	// identity: one identifier for one governed execution, and a generated one
+	// would make a replayed session produce a different record every run.
+	Envelope *ece.Envelope
+
+	// Prompt is the user request that motivates this session. Descriptive
+	// today; it becomes load-bearing at M8, where it is what an analyzer reads
+	// to produce the envelope above.
 	Prompt string
 
 	WorkspaceRoot string
@@ -168,6 +213,14 @@ type Filter struct {
 // owns the better name. It satisfies validator.SessionState and risk.History,
 // so those modules read what they need through their own narrow interfaces
 // without depending on this package's concrete type.
+//
+// Implemented by MemoryState in state.go. Every method here is a write, and all
+// of them belong to one goroutine per session; the ownership rules and what the
+// read side may assume are documented there.
+//
+// Callers must record *after* validating and deciding an event, never before.
+// The counters a validator reads describe the session up to but excluding the
+// event under judgment, which is what keeps an inclusive limit inclusive.
 type State_ interface {
 	// RecordEvent updates counters and history. The single writer for a
 	// session's mutable state.
@@ -176,7 +229,8 @@ type State_ interface {
 	// RecordDecision updates decision counters.
 	RecordDecision(d *decision.Decision)
 
-	// RecordGrantUse marks a grant as exercised, supporting MaxCount.
+	// RecordGrantUse marks a grant as exercised, supporting MaxCount. The index
+	// is validator.Result.MatchedGrantIndex, valid when MatchedGrant is set.
 	RecordGrantUse(grantIndex int)
 
 	// Snapshot returns an immutable view for reporting.
@@ -223,10 +277,21 @@ type Store interface {
 	List(ctx context.Context, f Filter) ([]*Session, error)
 }
 
-// TODO(session): implement the in-memory State_ with counters, a bounded event
-// ring for history, and a seen-targets set.
-// TODO(session): decide the history retention bound. Unbounded history leaks on
-// long sessions; too short and sequence detection stops working.
+// Done: the in-memory State_ is MemoryState in state.go — atomic counters, a
+// bounded event ring, and a bounded seen-targets set, satisfying
+// validator.SessionState and risk.History. It has exactly one writer per
+// session and takes no lock on the hot path, because per-session serial
+// processing is an architectural guarantee rather than a hope; counter reads
+// are still safe from any goroutine, which is what a daemon status query needs.
+// The filesystem and process budgets are charged through
+// validator.ModifiesFilesystem and validator.SpawnsProcess, so the counted set
+// and the checked set are one definition rather than two that can drift.
+// Done: the history retention bound is DefaultHistorySize, 256 events, with the
+// reasoning recorded at the constant: the window has to be long enough for the
+// credential-access-then-egress detector to see both ends across a build's file
+// traffic, and short enough that memory is not a function of how long the user
+// waited. The seen-targets set is bounded separately and saturates toward
+// "novel" rather than toward "familiar".
 // TODO(session): implement the supervisor with pre-exec registration. On Linux
 // that likely means fork, register the child PID, then exec, closing the window
 // between fork and exec.

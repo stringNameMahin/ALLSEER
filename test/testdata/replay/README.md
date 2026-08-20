@@ -18,6 +18,7 @@ allowed so a hand-written fixture can explain itself.
 | `go-build.jsonl` | `s-gobuild` | 13 | Benign baseline. Clean capture, no loss. |
 | `npm-install.jsonl` | `s-npm` | 10 | Network and hostname correlation. Contains real ring buffer loss. |
 | `git-operation.jsonl` | `s-git` | 10 | Denial-over-grant precedence, and a failed syscall. |
+| `credential-egress.jsonl` | `s-exfil` | 10 | The credential-access → egress sequence, with every near-miss beside it. |
 
 ### `go-build.jsonl`
 
@@ -75,11 +76,56 @@ the broad grant would otherwise swallow both.
   to open credential material is more alarming than one that succeeds once, so
   the stream carries failures rather than only successes.
 
+### `credential-egress.jsonl`
+
+The sequence [`internal/risk`](../../../internal/risk/sequence.go)'s
+`credential_access_egress` detector exists for: a successful read of credential
+material followed by network egress.
+
+It was added because the corpus could not test a *relationship*. `git-operation`
+holds a credential read that **failed**, `npm-install` holds connections with no
+credential read behind them, and each is one end of the pattern in a different
+recording. This one is the pattern, with every near-miss placed beside it so a
+rule that stopped being applied changes an assertion rather than passing quietly:
+
+- **`ex-003`** reads `~/.aws/credentials` and **succeeds**. Rated `critical`.
+  The only qualifying antecedent in the stream.
+- **`ex-004`** reads `/etc/passwd` and succeeds. Rated `medium` — identity, and
+  read constantly through `getpwnam` — so it must **not** qualify. A detector
+  whose first half fired here would fire on most sessions that touch the network.
+- **`ex-005`** reads `~/.ssh/id_ed25519` and **fails** with `ENOENT`. Rated
+  `critical`, and it must **not** qualify: an `ENOENT` disclosed nothing, so
+  there is nothing that could subsequently leave. Note that `sensitive_path`
+  still charges the grade on this event — the resource was reached for — while
+  the sequence detector rejects it. The two factors ask different questions and
+  this is where the difference is visible.
+- **`ex-006`** is a DNS lookup. Egress is `net.connect` and `net.send`; a name
+  resolution is not a channel out of the host.
+- **`ex-007`** and **`ex-008`** are egress the envelope **granted**. The sequence
+  is found and reported on both and contributes **zero points**, with
+  `not_charged` saying why, because an event a grant covered scores exactly zero.
+- **`ex-009`** connects to an address no DNS answer covers, against an envelope
+  granting `net.connect` by hostname. The validator cannot tell whether the
+  address *is* the granted host, so the verdict is `indeterminate` rather than a
+  mismatch. This is the event the detector moves: without it the event scores 43
+  and warns under `indeterminate-low-risk`; with it, 73 and
+  `indeterminate-high-risk` asks a human.
+
+The addresses are documentation-range (RFC 5737).
+
 ## Provenance
 
-These three are **hand-authored**, not captured from a live kernel. Phase 2
+All four are **hand-authored**, not captured from a live kernel. Phase 2
 delivers the daemon's event recorder, at which point real captures replace them
 and this section should say so.
+
+`credential-egress.jsonl` is the one to be most careful with. It is a
+hand-authored recording of the exact behavior the system most wants to catch,
+which makes it excellent for pinning that the detector's *rules* are applied and
+useless for measuring whether the detector *works on real agents*. A
+hand-authored positive measures the author's expectations, and the window it
+implies (`distance_events` of 6 between the halves) is one author's guess rather
+than a distribution.
 
 They are written to be structurally faithful. Field shapes, timestamp
 monotonicity, sequence density, `ancestry_depth`, and payload selection all

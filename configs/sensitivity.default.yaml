@@ -1,0 +1,403 @@
+# ALLSEER default resource sensitivity list.
+#
+# This file is a security claim. Every entry below asserts "this location should
+# be treated as consequential", and ALLSEER ships that assertion rather than
+# leaving the list empty — because an empty list is not neutral. An empty list
+# says nothing is sensitive, which is a claim too, and a false one.
+#
+# What the list does, precisely: `internal/risk`'s sensitive_path scorer adds
+# points to an event's risk score when the *file* it touched matches a `paths`
+# entry, and its sensitive_host scorer does the same when the *destination* it
+# reached matches a `hosts` entry. It only ever *raises* a score. There is no
+# entry, and no grading, that can lower one — a list that could lower a score
+# would make "add a path here" a way to launder access, and would make a missing
+# entry indistinguishable from an exemption.
+#
+# What matching an entry does NOT do: it does not block, deny, or decide. That
+# is policy's job (configs/rules.default.yaml), and it reads the score this list
+# contributes to. Sensitivity is evidence; the rule set is the judgment.
+#
+# ---------------------------------------------------------------------------
+# Path vocabulary
+# ---------------------------------------------------------------------------
+#
+# This vocabulary governs the `paths` section only. The `hosts` section has its
+# own, documented further down, and the two are deliberately not interchangeable:
+# a filesystem glob written under `hosts` is refused at load, and so is a
+# hostname written under `paths`.
+#
+# Patterns are matched by internal/validator's GlobPathMatcher — the same
+# matcher an envelope's grants and denials use, called rather than
+# reimplemented, so an entry here cannot come to mean something different from
+# an identically written grant. That fixes the vocabulary:
+#
+#   - Patterns MUST be absolute. `**/.ssh/**` is rejected at load; write
+#     `/**/.ssh/**`.
+#   - `**` spans whole path segments and only whole segments. `/a**b` is an
+#     error, not a lenient wildcard.
+#   - `*` matches within one segment.
+#   - Matching is byte-exact and patterns match dotfiles.
+#   - Paths are compared **resolved**. A symlink into a sensitive directory is
+#     matched on where it lands, not on what it was called.
+#
+# There is deliberately no `~`. The daemon governs a session for some user whose
+# home directory it does not necessarily know when this file is loaded, so home
+# locations are written as `/**/.ssh/**` rather than `~/.ssh/**`. The cost is
+# stated plainly: `/**/.ssh/**` also matches `/tmp/anything/.ssh/`. Under the
+# raise-only rule that is a false positive on an unusual path and never a hole,
+# which is the direction this list is allowed to be wrong in.
+#
+# ---------------------------------------------------------------------------
+# Grades
+# ---------------------------------------------------------------------------
+#
+#   critical  Credential material that grants access to something else, that the
+#             agent cannot rotate, and whose disclosure is not undoable.
+#   high      Credentials scoped to one service, or material that reveals the
+#             shape of an account or infrastructure.
+#   medium    Identity and history: useful to an attacker, routinely read by
+#             ordinary tooling.
+#   low       Configuration whose *modification* redirects behavior, but whose
+#             reading is unremarkable.
+#   info      Explicitly rated as unremarkable. This is not the same as absent:
+#             an unlisted path is *unknown*, and the record says so. Rating a
+#             location `info` is how the list states "we looked, and this is the
+#             ordinary toolchain traffic every build produces".
+#
+# `info` and `low` contribute zero points. They exist so the audit record can
+# distinguish "known and unremarkable" from "never heard of it", which is the
+# distinction the whole module refuses to collapse.
+#
+# When several entries match one path, the **highest** grade wins. Adding a
+# narrower entry can therefore only ever raise a path's grade, never lower it.
+#
+# ---------------------------------------------------------------------------
+# Editing this file
+# ---------------------------------------------------------------------------
+#
+# `reason` is required and must say why the location is consequential, not what
+# it is. "SSH keys" is not a reason; "a credential granting access to other
+# hosts that the agent cannot rotate" is. An entry nobody can review is an entry
+# nobody will remove when it turns out to be wrong.
+#
+# Every pattern is validated at load. An unusable pattern **refuses the whole
+# file** rather than being skipped, because a sensitivity entry that matches
+# nothing protects nothing and does it silently.
+
+name: default
+version: "1"
+description: >
+  Conservative baseline sensitivity list for governing AI coding agents. Rates
+  credential material, identity, and the locations an attacker reaches for;
+  rates the network destinations that vend credentials or lead inward; and
+  explicitly rates the toolchain traffic and package registries an ordinary
+  build produces, so that known-benign is distinguishable from unrecognized.
+
+paths:
+  # --- critical: credentials that reach other systems -----------------------
+
+  - patterns:
+      - /**/.ssh/id_*
+      - /**/.ssh/*_key
+      - /**/.ssh/*_ed25519
+      - /**/.ssh/*_rsa
+    sensitivity: critical
+    reason: >
+      Private SSH keys authenticate to other hosts. Disclosure grants lateral
+      movement the agent's own privileges do not, cannot be undone by deleting
+      anything locally, and cannot be rotated by the agent that leaked it.
+      Public halves match these patterns too; over-rating a `.pub` read costs a
+      false positive on an operation that is rare anyway, and separating them
+      would need per-file exclusion this matcher deliberately does not have.
+
+  - patterns: [/etc/shadow, /etc/gshadow]
+    sensitivity: critical
+    reason: >
+      Password hashes for every local account. A coding task has no reason to
+      read them, and an agent that does is either enumerating credentials or
+      running as something it should not be.
+
+  - patterns: [/etc/sudoers, /etc/sudoers.d/**]
+    sensitivity: critical
+    reason: >
+      Defines who may escalate privilege. Reading it maps the escalation
+      surface; writing it is the escalation.
+
+  - patterns: [/**/.aws/credentials, /**/.aws/config]
+    sensitivity: critical
+    reason: >
+      Long-lived cloud access keys. Disclosure grants access to infrastructure
+      that outlives the session, and the blast radius is whatever the account
+      can reach rather than whatever the workspace contains.
+
+  - patterns: [/**/.kube/config, /**/.docker/config.json]
+    sensitivity: critical
+    reason: >
+      Cluster and registry credentials. Both grant the ability to run code
+      elsewhere, which makes them a route out of any sandbox around the agent.
+
+  - patterns: [/**/.netrc, /**/.pgpass, /**/.git-credentials]
+    sensitivity: critical
+    reason: >
+      Plaintext credential stores, by format. Nothing in them is encrypted and
+      nothing in them is scoped to this session.
+
+  - patterns: [/**/.gnupg/**]
+    sensitivity: critical
+    reason: >
+      Private signing and encryption keys. Disclosure lets an attacker sign
+      artifacts as the user, which survives revocation of everything else.
+
+  - patterns: [/**/*.pem, /**/*.p12, /**/*.pfx]
+    sensitivity: critical
+    reason: >
+      Certificate and private-key containers, identified by format rather than
+      location because they are routinely placed anywhere. A test fixture with
+      this extension will be over-rated; that raises a score on a departing
+      read and never lowers one.
+
+  # --- high: service-scoped credentials and account shape -------------------
+
+  - patterns: [/**/.ssh/**]
+    sensitivity: high
+    reason: >
+      The rest of an SSH directory — config, known_hosts, authorized_keys.
+      Reading it enumerates the hosts the user reaches and the identities they
+      use; writing authorized_keys is a persistence mechanism.
+
+  - patterns: [/**/.env, /**/.env.*]
+    sensitivity: high
+    reason: >
+      The conventional home of service tokens in application repositories.
+      Frequently present inside a workspace, which is precisely why reading one
+      is worth scoring rather than assuming benign because it is nearby.
+
+  - patterns: [/**/.npmrc, /**/.pypirc, /**/.gem/credentials]
+    sensitivity: high
+    reason: >
+      Package registry publish tokens. Disclosure allows publishing under the
+      user's identity, which is a supply-chain compromise rather than a local
+      one.
+
+  - patterns: [/**/.config/gh/**, /**/.config/gcloud/**, /**/.azure/**]
+    sensitivity: high
+    reason: >
+      CLI credential stores for source hosting and cloud providers. They hold
+      refresh tokens, so disclosure survives the session that leaked them.
+
+  - patterns: [/proc/*/environ, /proc/*/mem, /proc/*/maps]
+    sensitivity: high
+    reason: >
+      Another process's environment and memory. Environment variables routinely
+      carry credentials, and reading another process's memory is how a running
+      agent or the governing daemon itself is looted.
+
+  # --- medium: identity and history -----------------------------------------
+
+  - patterns: [/etc/passwd, /etc/group]
+    sensitivity: medium
+    reason: >
+      Account enumeration. Read constantly by ordinary tooling through
+      getpwnam, so this is graded to be visible in a departure without being
+      alarming on its own.
+
+  - patterns: [/**/.bash_history, /**/.zsh_history, /**/.psql_history]
+    sensitivity: medium
+    reason: >
+      Shell history frequently contains credentials typed on a command line,
+      and always contains a map of what the user does and where.
+
+  # --- low: configuration whose modification redirects behavior -------------
+
+  - patterns: [/etc/hosts, /etc/resolv.conf, /etc/nsswitch.conf]
+    sensitivity: low
+    reason: >
+      Name resolution configuration. Reading it is unremarkable; modifying it
+      redirects every subsequent connection, which is why it is on the list at
+      all rather than left unknown.
+
+  # --- info: explicitly unremarkable ----------------------------------------
+  #
+  # These entries add nothing to a score. They exist so the audit record can say
+  # "rated, and unremarkable" rather than "unrecognized" for the traffic that
+  # dominates every build — which is the difference this module refuses to
+  # collapse, and the reason the oracle has an unknown state at all.
+
+  - patterns: [/usr/include/**, /usr/share/**, /usr/lib/**, /usr/local/include/**]
+    sensitivity: info
+    reason: >
+      System headers, shared data, and libraries. Read continuously by
+      compilers, linkers, and package tooling, and outside any plausible
+      workspace root, so they are the most common cause of a workspace escape
+      that means nothing.
+
+  - patterns: [/etc/ssl/certs/**, /etc/pki/tls/certs/**]
+    sensitivity: info
+    reason: >
+      Public CA trust stores. Read by anything that opens a TLS connection.
+      Named explicitly because a path under /etc/ssl looks alarming and is not;
+      the private counterparts live elsewhere and are rated critical above.
+
+# ===========================================================================
+# hosts — network destinations
+# ===========================================================================
+#
+# Read by `internal/risk`'s sensitive_host scorer, which rates the destination
+# of every network event. Same grades, same raise-only rule, same three states:
+# an unlisted destination is **unknown**, not unremarkable.
+#
+# ---------------------------------------------------------------------------
+# Host vocabulary — NOT the path vocabulary
+# ---------------------------------------------------------------------------
+#
+# Patterns here go through internal/validator's ValidateHostPattern and
+# MatchHost — the same functions an envelope's network grants use — so an entry
+# means exactly what an identically written grant means. See
+# docs/network-matching.md, which is the normative specification.
+#
+#   api.github.com     an exact name. Compared case-insensitively, with the
+#                      root's trailing dot ignored, on WHOLE names. It does not
+#                      cover evil-github.com, notgithub.com, or
+#                      api.github.com.attacker.tld — careless suffix matching is
+#                      the classic way an attacker-registered domain slips past
+#                      a host list.
+#   *.github.com       a wildcard domain covering EXACTLY ONE additional label,
+#                      the TLS certificate convention. It covers
+#                      api.github.com; it does NOT cover a.b.github.com, and it
+#                      does NOT cover the apex github.com. Where both the apex
+#                      and its subdomains are meant, list both.
+#   169.254.169.254    a literal address, compared as a parsed address, so every
+#                      spelling of it is it. IPv4-mapped IPv6 is unmapped, so
+#                      ::ffff:169.254.169.254 is the same destination.
+#   169.254.0.0/16     a CIDR block. Host bits are masked away, so 10.1.2.3/8 is
+#                      the 10/8 block rather than an unmatchable pattern.
+#
+# There is deliberately **no filesystem-style globbing**. `*` is only ever a
+# whole leading label: `api-*.github.com`, `*.*.github.com`, `**.github.com`,
+# and a bare `*` are all refused at load. Names are ASCII only — an envelope or
+# a list carrying a Cyrillic lookalike of `github.com` would grant a host that
+# can never be observed, and rejecting removes the homoglyph problem outright.
+# Ports do not belong in a pattern: `github.com:443` is refused.
+#
+# ---------------------------------------------------------------------------
+# A name and an address are never assumed to be the same thing
+# ---------------------------------------------------------------------------
+#
+# The kernel observes addresses; DNS correlation recovers the name when it can,
+# and it is best-effort by construction — DNS-over-HTTPS, a hardcoded address,
+# and an expired cache entry all defeat it. The matcher never bridges that gap,
+# so **a destination is rated by the identity the observation carries**: a name
+# entry can only rate an observed name, and an address or block entry can only
+# rate an observed address.
+#
+# The practical consequence for whoever edits this file: where a destination is
+# reachable both ways, list BOTH spellings. That is why the metadata service
+# below appears as a name and as an address. An entry that names only the
+# hostname is silent on every connection that skipped DNS, which is precisely
+# the connection worth seeing.
+#
+# ---------------------------------------------------------------------------
+# What "sensitive" means for a destination
+# ---------------------------------------------------------------------------
+#
+# Not "malicious". This is not a blocklist and it carries no threat
+# intelligence: a list of bad domains goes stale the week it is written, and
+# ALLSEER's threat model does not include knowing who the attacker is. What a
+# grade says is how consequential *reaching this destination* is, independent
+# of what was sent — because payload inspection is explicitly out of scope.
+#
+#   critical  Reaching it hands out credentials, or hands over control of the
+#             host, to whoever asked.
+#   high      Reaching it crosses a trust boundary the task did not declare:
+#             inward to a private network, or outward to somewhere that can run
+#             code on the user's behalf.
+#   medium    Reaching it is meaningful but ordinary in some tasks.
+#   low       Unremarkable to reach, worth naming so it is not unknown.
+#   info      Explicitly rated as ordinary traffic. This is NOT the same as
+#             absent: an unlisted destination is *unknown*, and the record says
+#             so.
+
+hosts:
+  # --- critical: destinations that vend credentials -------------------------
+
+  - patterns:
+      - 169.254.169.254
+      - fd00:ec2::254
+      - metadata.google.internal
+      - metadata.goog
+    sensitivity: critical
+    reason: >
+      Cloud instance metadata services. A plain unauthenticated HTTP request to
+      one returns credentials for the role the machine runs as, which is why
+      they are the single most valuable destination on a cloud host and the
+      target every SSRF write-up ends at. A coding task has no reason to reach
+      one. Both the address and the name are listed because the address is what
+      an agent that skips DNS will use, and the two are matched separately by
+      design.
+
+  - patterns: [169.254.0.0/16, fe80::/10]
+    sensitivity: critical
+    reason: >
+      Link-local ranges, which is where metadata services live and where
+      nothing a coding task legitimately talks to lives. Rated as a block so a
+      provider-specific metadata address this file has never heard of is still
+      caught.
+
+  # --- high: destinations that cross a trust boundary -----------------------
+
+  - patterns: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7]
+    sensitivity: high
+    reason: >
+      Private address space. An agent reaching into the internal network is
+      doing something its task almost certainly did not describe, and it is the
+      first step of lateral movement. Rated high rather than critical because
+      corporate proxies, internal registries, and local development services
+      genuinely live here, so this is a departure worth surfacing rather than
+      an act with no benign reading.
+
+  # --- medium: identity and control surfaces --------------------------------
+
+  - patterns:
+      - 127.0.0.0/8
+      - ::1
+    sensitivity: medium
+    reason: >
+      Loopback. Ordinary for a dev server or a test suite, and also how an
+      agent reaches an unauthenticated daemon listening only to localhost — a
+      container runtime socket over TCP, a debugger, a language server. Graded
+      to be visible in a departure without being alarming on its own.
+
+  # --- low: named, and unremarkable to reach --------------------------------
+
+  - patterns: [github.com, "*.github.com", gitlab.com, "*.gitlab.com"]
+    sensitivity: low
+    reason: >
+      Source hosting. Reaching it is the ordinary business of a coding task, so
+      this contributes nothing to a score. It is listed rather than left unknown
+      because a connection here is worth distinguishing in a record from a
+      connection to somewhere nobody has ever heard of. Both the apex and the
+      wildcard appear because a wildcard does not cover the apex.
+
+  # --- info: explicitly ordinary build traffic ------------------------------
+  #
+  # These add nothing to a score. They exist so the audit record can say
+  # "rated, and unremarkable" rather than "unrecognized" for the destinations
+  # that dominate every build — the same reason /usr/include/** is rated info
+  # above, and the reason the oracle has an unknown state at all.
+
+  - patterns:
+      - registry.npmjs.org
+      - "*.npmjs.org"
+      - proxy.golang.org
+      - sum.golang.org
+      - pypi.org
+      - files.pythonhosted.org
+      - crates.io
+      - static.crates.io
+    sensitivity: info
+    reason: >
+      Public package registries. Every dependency install talks to one, so a
+      connection here is the single most common network event a coding agent
+      produces. Named explicitly so that an ordinary install is distinguishable
+      in the record from a connection to an unrecognized host, which is a
+      distinction a score alone cannot carry.

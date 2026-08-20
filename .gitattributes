@@ -1,0 +1,32 @@
+# ALLSEER line-ending policy.
+#
+# Deliberately narrow. Everything not named here keeps falling back to the
+# developer's core.autocrlf, which is the behavior this repository already had
+# and which is fine for source: Go files are read by a compiler that does not
+# care, and gofmt-clean is asserted after normalizing line endings.
+#
+# The golden decision streams are different in kind. They are not source, they
+# are **committed output**: the exact bytes internal/audit.JSONLSink produces
+# for a replayed session, compared byte for byte by test/golden. The sink emits
+# LF and nothing else — one decision per line, terminated with "\n" by
+# encoding/json's Encoder — because the audit format is a wire contract with
+# external tooling, and "one JSON object per line" has to mean the same thing on
+# every host that reads the log.
+#
+# Left to core.autocrlf, a Windows checkout smudges these files to CRLF and the
+# golden test fails on a fresh clone: the bytes on disk stop matching the bytes
+# the writer produces. That is the test correctly reporting a real divergence,
+# so the fix belongs here rather than in the test or in the sink.
+#
+# `text eol=lf` rather than `-text`, for two reasons:
+#
+#   - It is self-healing. An editor or a tool that rewrites one of these files
+#     with CRLF has the change normalized back to LF on the way into the index,
+#     so the canonical form cannot be lost by accident. `-text` would commit
+#     whatever bytes happened to be on disk and break every other platform.
+#   - It keeps them diffable. `-text` marks a file binary for diff purposes, and
+#     `git diff -- test/testdata/golden/` reporting "Binary files differ" would
+#     destroy the entire review workflow these files exist for: a golden that
+#     changes is a change in what the system concludes about a session, and a
+#     human has to read that diff and approve it.
+test/testdata/golden/*.jsonl text eol=lf
