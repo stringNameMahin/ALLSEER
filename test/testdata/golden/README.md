@@ -69,6 +69,70 @@ produces a reproducible record". Zero is the honest value for a replay: the
 number that field reports is the delay charged to a live agent's syscall, and a
 replay charges none.
 
+## Line endings: LF, on every platform
+
+These files are **LF-terminated and must stay that way**, on Windows as much as
+anywhere else. `.gitattributes` at the repository root pins it:
+
+```
+test/testdata/golden/*.jsonl text eol=lf
+```
+
+### Why
+
+They are not source. They are committed *output* — the exact bytes
+[`internal/audit.JSONLSink`](../../../internal/audit/) writes to a live audit
+log — and `TestGolden` compares them byte for byte. The sink emits LF and
+nothing else, because the audit format is a wire contract with external tooling
+and "one JSON object per line" has to mean the same thing on every host that
+reads the log. A golden file with CRLF in it would no longer be a record of what
+the writer produces.
+
+This repository is developed on Windows with `core.autocrlf=true`, which is
+right for source and wrong for these. Without the rule above, a fresh clone
+smudges them to CRLF and the golden suite fails on a clean checkout:
+
+```
+--- FAIL: TestGoldenStreamIsWellFormed/git-operation
+    the stream contains a carriage return; the audit writer emits LF only
+```
+
+That failure is **correct**, and it is why the fix belongs in `.gitattributes`
+rather than anywhere else. Three things were deliberately *not* done:
+
+- **The test was not taught to normalize CRLF.** It exists to enforce the
+  canonical byte representation. A test that accepted either ending would stop
+  detecting the one thing it is for.
+- **The sink was not changed.** Emitting CRLF on Windows would make the audit
+  format platform-dependent, which is precisely what a wire contract must not
+  be.
+- **No per-OS golden files.** Two goldens for one pipeline is two things to keep
+  in agreement, and the whole point is that the deterministic core produces one
+  answer.
+
+### Why `text eol=lf` rather than `-text`
+
+`-text` would also stop the conversion, and it is the wrong tool twice over:
+
+- `text eol=lf` is **self-healing**. An editor or a tool that rewrites one of
+  these files with CRLF has it normalized back on the way into the index, so the
+  canonical form cannot be lost by accident. `-text` commits whatever bytes are
+  on disk, which would break every other platform silently.
+- `-text` marks a file **binary for diff**. `git diff -- test/testdata/golden/`
+  reporting "Binary files differ" would destroy the review workflow these files
+  exist for: a changed golden is a change in what the system concludes about a
+  session, and a human has to read that diff and approve it.
+
+### Checking
+
+```
+git check-attr -a test/testdata/golden/git-operation.decisions.jsonl
+    # text: set
+    # eol: lf
+```
+
+and, on the working copy, `tr -cd '\r' < <file> | wc -c` must print `0`.
+
 ## Adding a case
 
 Only for behavior nothing here already covers. A golden file is a maintenance
