@@ -220,12 +220,23 @@ type Config struct {
 // mirrors, and the byte-level decode functions are all derived; nothing about
 // the layout is written down twice. TestGeneratedFileIsNotStale fails when the
 // header and the generated file disagree, and `make gen` regenerates.
-// TODO(telemetry): implement Decoder.Decode and EventSize on top of
-// internal/telemetry/abi, mapping each allseer_event_type onto a
-// capability.Kind through the M1 catalog. The abi package deliberately stops at
-// the ABI shape: it imports neither pkg/event nor pkg/capability, because
-// deciding what a record *means* is a judgment and the generated layer must
-// stay free of judgments it would have to regenerate.
+// Done, in its second half: Decoder.Decode and EventSize are implemented in
+// decode.go as EventDecoder, over internal/telemetry/abi. Each
+// allseer_event_type maps to a capability.Kind and the Kind's domain comes from
+// the M1 catalog, never from a second table. ALLSEER_EVT_FILE_OPEN is the one
+// type whose kind the payload decides — the open flags separate fs.read,
+// fs.write, and fs.create, which is the mapping docs/dataflow.md already traces.
+// Two declared types are refused rather than guessed at: ALLSEER_EVT_UNKNOWN,
+// which states no operation, and ALLSEER_EVT_PRIV_CHANGE, whose `operation`
+// field has no enumerators in the header and so cannot be told apart from four
+// other privilege kinds the shipped rule set treats differently.
+// The abi package deliberately stops at the ABI shape: it imports neither
+// pkg/event nor pkg/capability, because deciding what a record *means* is a
+// judgment and the generated layer must stay free of judgments it would have to
+// regenerate.
+// TODO(telemetry): add an `enum allseer_priv_op` to the header so
+// ALLSEER_EVT_PRIV_CHANGE becomes decodable. A C edit, and one for the Linux
+// host, alongside the version field already open above.
 // TODO(telemetry): decide the path resolution strategy. Full dentry walking in
 // the kernel is expensive and bounded by the verifier's loop limits; resolving
 // in user space races with rename. Neither is clean.

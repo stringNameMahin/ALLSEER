@@ -277,9 +277,21 @@ type Filter interface {
 // internal/telemetry/abigen into internal/telemetry/abi, so kernel and user
 // space cannot drift without a test failing. It stops at the ABI shape and
 // produces no Event; turning a decoded record into this type is
-// telemetry.Decoder's job, which is where the capability catalog lives.
+// telemetry.Decoder's job, which is where the capability catalog lives, and
+// telemetry.EventDecoder now does it.
 // TODO(event): decide the boot-time offset strategy for WallClock. Sampling
 // once at startup drifts under suspend; re-sampling periodically is more work.
+// Until it is decided, the decoder leaves WallClock zero rather than building
+// one on an unmeasured offset: a synthesized wall time reads as observed.
+// TODO(event): carry truncation. Every string a probe reports lives in a
+// fixed-size field, and one that filled its field lost the rest — the ABI
+// header states such a value "must be treated as an enrichment failure, never
+// as a complete path". Nothing on FilePayload or ExecPayload can say so, so
+// telemetry.EventDecoder refuses those records outright rather than hand an
+// enricher a prefix that looks whole. A `Truncated bool` on both payloads, plus
+// the argument count that ExecPayload also cannot express, would let them be
+// carried as unevaluable instead of dropped. It is a wire-format change and
+// touches api/schema/event.v1alpha1.schema.json with it.
 // TODO(event): specify backpressure policy. Leaning toward a bounded channel
 // with newest-wins and an explicit drop counter, since stalling the ring buffer
 // reader loses events anyway, just without counting them.

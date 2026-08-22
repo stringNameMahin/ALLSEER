@@ -525,9 +525,10 @@ func TestCStringReportsTruncation(t *testing.T) {
 // or produces a different answer on a second run.
 //
 // Note that this is not the fuzz target M5 asks for. That one targets
-// telemetry.Decoder.Decode, which does not exist yet — it is the next issue,
-// and it adds the capability-catalog mapping this layer deliberately has none
-// of. This target covers what this change actually ships.
+// telemetry.Decoder.Decode and lives beside it as telemetry.FuzzDecode, where
+// the capability-catalog mapping this layer deliberately has none of can be
+// asserted. This target covers the layout half: for any input, either an error
+// or a record, and never a panic.
 func FuzzDecodeRecord(f *testing.F) {
 	f.Add(make([]byte, RecordSize))
 	f.Add(make([]byte, 0))
