@@ -23,6 +23,21 @@ type Header struct {
 type Define struct {
 	Name  string
 	Value int
+
+	// UsedAsBound reports whether some array in the header is declared with
+	// this define as its bound.
+	//
+	// Recorded because the two kinds of define mean different things and the
+	// generated file should not describe them as one. A bound is a cap on what
+	// a probe can report — exceed it and the value is truncated. A define no
+	// array uses is a value the kernel and user sides compare, and calling it a
+	// limit in the emitted comment would be a plain misstatement about the
+	// contract, in the one file nobody is supposed to edit by hand.
+	//
+	// Derived from use rather than from the name. A rule that read a suffix
+	// like _MAX would be a second, weaker copy of the header's meaning, and it
+	// would be wrong the first time somebody named a bound differently.
+	UsedAsBound bool
 }
 
 // Enum is a C enum with every member explicitly valued.
@@ -429,11 +444,13 @@ func resolveBound(b string, h *Header) (int, error) {
 		}
 		return n, nil
 	}
-	for _, d := range h.Defines {
+	for i := range h.Defines {
+		d := &h.Defines[i]
 		if d.Name == b {
 			if d.Value <= 0 {
 				return 0, fmt.Errorf("array bound %s resolves to %d, which is not positive", b, d.Value)
 			}
+			d.UsedAsBound = true
 			return d.Value, nil
 		}
 	}

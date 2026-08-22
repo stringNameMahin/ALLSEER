@@ -19,6 +19,22 @@
 #ifndef __ALLSEER_EVENT_H
 #define __ALLSEER_EVENT_H
 
+/* The layout version, written into every record and compared against the
+ * reader's own copy of this number.
+ *
+ * Bumped whenever anything in this file changes the bytes on the wire: a field
+ * added, removed, reordered or retyped, or a bound changed. It is not a release
+ * number and not a feature flag. It answers exactly one question — "was the
+ * loaded object compiled against the layout this binary was generated from" —
+ * and the answer has to become no the moment the two layouts differ.
+ *
+ * It earns its place because the cheap check cannot cover the dangerous case. A
+ * reader can compare record lengths, and that catches a layout that changed
+ * size. It does not catch a layout that stayed the same size and changed
+ * meaning: a field retyped, two fields swapped, a bound moved from one array to
+ * another. Those records decode without complaint into confident nonsense. */
+#define ALLSEER_ABI_VERSION  1
+
 /* Bounded because eBPF stack space is limited to 512 bytes and the verifier
  * rejects unbounded copies. These caps are a real constraint on what a probe
  * can report, and long paths will be truncated. The user-space enricher must
@@ -104,6 +120,19 @@ struct allseer_priv_payload {
 
 /* The record written to the ring buffer.
  *
+ * version sits in the fixed header, ahead of proc and the payload union, and
+ * must never move or change type. That position is the whole point of it: a
+ * version a reader has to already know the layout to find cannot tell that
+ * reader the layout is wrong. Everything up to and including this field is the
+ * part of the record whose position is promised across versions; everything
+ * after it is only meaningful once the version has been agreed.
+ *
+ * The explicit _pad after it is the same device the payload structs use. The
+ * layout rules above call for largest-first ordering to avoid implicit padding,
+ * and proc is 8-aligned, so the four bytes between version and proc exist
+ * either way. Naming them means the C compiler and the generated Go decoder
+ * agree about them rather than each deciding separately.
+ *
  * TODO(bpf): a union of payloads keeps the record small but forces a
  * fixed-size worst-case reservation. Per-type ring buffers would be tighter but
  * multiply the reader complexity. Measure before choosing. */
@@ -111,6 +140,8 @@ struct allseer_event {
     __u64 timestamp;        /* bpf_ktime_get_ns(), monotonic since boot */
     __u32 type;             /* enum allseer_event_type */
     __s32 ret;              /* syscall return; negative is -errno */
+    __u32 version;          /* ALLSEER_ABI_VERSION, as compiled into the probe */
+    __u32 _pad;
     struct allseer_proc proc;
 
     union {
@@ -121,8 +152,13 @@ struct allseer_event {
     } payload;
 };
 
-/* TODO(bpf): add a version field so the loader can reject an object compiled
- * against a different layout at load time rather than discovering it via
- * corrupt events. */
+/* Done: struct allseer_event carries a version field, and ALLSEER_ABI_VERSION
+ * above is the value every probe writes into it.
+ *
+ * TODO(bpf): expose that constant from the compiled object — a read-only global
+ * the loader can read through BTF before it attaches anything — and refuse to
+ * attach on a mismatch. The field in the record is the backstop, not the
+ * mechanism: it reports the mismatch one event at a time, after the probes are
+ * already running, which is later than the loader could have known. */
 
 #endif /* __ALLSEER_EVENT_H */

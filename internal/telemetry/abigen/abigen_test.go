@@ -302,6 +302,7 @@ func TestNamingRules(t *testing.T) {
 			"sock_type":      "SockType",
 			"caps_effective": "CapsEffective",
 			"PATH_MAX":       "PathMax",
+			"abi_version":    "ABIVersion",
 		}
 		for in, want := range cases {
 			if got := camel(in); got != want {
@@ -340,6 +341,117 @@ func TestNamingRules(t *testing.T) {
 			t.Errorf("memberPrefix = %q, want A_B_", p)
 		}
 	})
+}
+
+// --- defines: bounds versus plain constants -------------------------------------
+//
+// Two kinds of #define live in the header and they carry different obligations.
+// A bound caps what a probe can report, and exceeding it truncates. A define no
+// array uses is a value the kernel and user sides compare. Emitting the second
+// under the first's comment would put a false statement about the ABI into the
+// one file nobody is supposed to edit by hand, which is the failure the whole
+// generator exists to prevent — arriving as prose instead of as a wrong offset.
+
+func TestGenerateSeparatesBoundsFromPlainConstants(t *testing.T) {
+	src := `#define MINI_ABI_VERSION 3
+#define MINI_NAME_LEN 8
+
+struct mini_event {
+    __u64 timestamp;
+    __u32 version;
+    __u32 _pad;
+    char  comm[MINI_NAME_LEN];
+};
+`
+	out, err := Generate([]byte(src), "mini.h", "abi")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	got := string(out)
+
+	// Both defines survive. A constant dropped for not being a bound would be a
+	// value the C side has and the Go side does not.
+	for _, want := range []string{"MiniNameLen = 8", "MiniABIVersion = 3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated file does not declare %q", want)
+		}
+	}
+
+	// And they are described correctly. The bounds comment claims a hard limit
+	// on what a probe can report; that claim must not be made over a version.
+	boundsAt := strings.Index(got, "// Bounds declared in the header.")
+	constsAt := strings.Index(got, "// Constants declared in the header that no array bound uses.")
+	if boundsAt < 0 || constsAt < 0 {
+		t.Fatalf("expected both a bounds block and a constants block; bounds at %d, constants at %d",
+			boundsAt, constsAt)
+	}
+	lenAt := strings.Index(got, "MiniNameLen = 8")
+	verAt := strings.Index(got, "MiniABIVersion = 3")
+	if !(boundsAt < lenAt && lenAt < constsAt && constsAt < verAt) {
+		t.Errorf("the bound and the constant are not each under their own comment: "+
+			"bounds@%d len@%d constants@%d version@%d", boundsAt, lenAt, constsAt, verAt)
+	}
+}
+
+// A header with nothing but bounds must not grow an empty second block, and one
+// with nothing but plain constants must not borrow the bounds comment.
+func TestGenerateOmitsAnEmptyDefineBlock(t *testing.T) {
+	t.Run("bounds only", func(t *testing.T) {
+		out, err := Generate([]byte(miniHeader), "mini.h", "abi")
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		if strings.Contains(string(out), "no array bound uses") {
+			t.Error("emitted a constants block for a header whose every define is a bound")
+		}
+	})
+
+	t.Run("constants only", func(t *testing.T) {
+		src := `#define MINI_ABI_VERSION 1
+
+struct mini_event { __u32 version; };
+`
+		out, err := Generate([]byte(src), "mini.h", "abi")
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		got := string(out)
+		if strings.Contains(got, "Bounds declared in the header") {
+			t.Error("described a value the two sides compare as a hard limit on what a probe can report")
+		}
+		if !strings.Contains(got, "MiniABIVersion = 1") {
+			t.Error("the constant was dropped along with the bounds block")
+		}
+	})
+}
+
+// UsedAsBound is derived from use, not from the name. A rule keyed on a suffix
+// like _MAX would be a second, weaker copy of the header's meaning, and it would
+// be wrong the first time somebody named a bound differently.
+func TestUsedAsBoundIsDerivedFromUseNotFromTheName(t *testing.T) {
+	src := `#define MINI_CAP 4
+#define MINI_MAX 9
+
+struct mini_event { char comm[MINI_CAP]; };
+`
+	h, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, err := Layout(h); err != nil {
+		t.Fatalf("Layout: %v", err)
+	}
+
+	want := map[string]bool{"MINI_CAP": true, "MINI_MAX": false}
+	if len(h.Defines) != len(want) {
+		t.Fatalf("got %d defines, want %d", len(h.Defines), len(want))
+	}
+	for _, d := range h.Defines {
+		if got := d.UsedAsBound; got != want[d.Name] {
+			t.Errorf("%s UsedAsBound = %v, want %v; the flag follows the array that uses it, "+
+				"not the spelling of the name", d.Name, got, want[d.Name])
+		}
+	}
 }
 
 // --- comment handling -------------------------------------------------------------

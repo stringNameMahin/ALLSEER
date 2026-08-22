@@ -25,6 +25,31 @@
 // duplicates drift, and this particular drift corrupts the evidence every
 // downstream conclusion rests on while looking entirely healthy.
 //
+// # The ABI version, and who enforces it
+//
+// The header declares ALLSEER_ABI_VERSION and every record carries it in the
+// fixed prologue, ahead of proc and the payload union. This package surfaces
+// both — the constant as ABIVersion, the field as Event.Version — and compares
+// neither.
+//
+// That is the split, not an omission. Reading the version is an ABI concern and
+// belongs here; deciding what a mismatch *means* is a judgment, and the
+// judgments differ by layer. The loader can read the constant out of the
+// compiled object through BTF and refuse to attach anything, which is the only
+// point at which a mismatch costs nothing — no probes are running and no events
+// have been believed. A decoder that discovers it one record at a time is
+// already too late for that and has a different question to answer: drop the
+// record, fail the session closed, or surface it as VerdictIndeterminate. None
+// of those choices can be made in a file that is regenerated from a C header,
+// and a check wired in here would have to be re-argued every time the header
+// changed.
+//
+// So the field is a backstop with a reader, and the enforcement points are the
+// loader and telemetry.Decoder — telemetry.Decoder.EventSize already exists for
+// exactly this purpose, "to catch layout drift between the loaded object and
+// this binary at startup rather than at the first event". Both are separate
+// milestone issues, and neither exists yet.
+//
 //go:generate go run github.com/stringNameMahin/ALLSEER/internal/telemetry/abigen/cmd/abigen -header ../../../bpf/include/allseer_event.h -out layout_gen.go -package abi
 package abi
 

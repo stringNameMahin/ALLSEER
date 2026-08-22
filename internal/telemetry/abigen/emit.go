@@ -44,15 +44,43 @@ func writeFileHeader(b *strings.Builder, m *Model, headerPath, pkg string) {
 	fmt.Fprintf(b, "import (\n\t\"encoding/binary\"\n\t\"errors\"\n\t\"fmt\"\n)\n\n")
 }
 
+// writeBounds emits the header's integer defines, split by what they are.
+//
+// Two blocks rather than one, because the two kinds of define carry different
+// obligations and a single comment can only be true of one of them. A bound
+// caps what a probe can report; a define no array uses is a value the two sides
+// compare. Emitting the second under the first's comment would put a false
+// statement about the ABI into the file whose whole claim is that nothing in it
+// was written by hand.
 func writeBounds(b *strings.Builder, m *Model) {
-	if len(m.Defines) == 0 {
-		return
-	}
-	fmt.Fprintf(b, "// Bounds declared in the header. They are hard limits on what a probe can\n")
-	fmt.Fprintf(b, "// report: eBPF stack space is 512 bytes and the verifier rejects unbounded\n")
-	fmt.Fprintf(b, "// copies, so a longer path is truncated rather than reported in full.\n")
-	fmt.Fprintf(b, "const (\n")
+	var bounds, constants []Define
 	for _, d := range m.Defines {
+		if d.UsedAsBound {
+			bounds = append(bounds, d)
+			continue
+		}
+		constants = append(constants, d)
+	}
+
+	if len(bounds) > 0 {
+		fmt.Fprintf(b, "// Bounds declared in the header. They are hard limits on what a probe can\n")
+		fmt.Fprintf(b, "// report: eBPF stack space is 512 bytes and the verifier rejects unbounded\n")
+		fmt.Fprintf(b, "// copies, so a longer path is truncated rather than reported in full.\n")
+		writeDefineBlock(b, bounds)
+	}
+
+	if len(constants) > 0 {
+		fmt.Fprintf(b, "// Constants declared in the header that no array bound uses.\n//\n")
+		fmt.Fprintf(b, "// These are values the kernel and user sides compare rather than limits on\n")
+		fmt.Fprintf(b, "// what fits, so they are emitted apart from the bounds: a reader who takes one\n")
+		fmt.Fprintf(b, "// of them for a cap on what a probe can report has misread the contract.\n")
+		writeDefineBlock(b, constants)
+	}
+}
+
+func writeDefineBlock(b *strings.Builder, defines []Define) {
+	fmt.Fprintf(b, "const (\n")
+	for _, d := range defines {
 		fmt.Fprintf(b, "\t%s = %d // %s\n", goConstName(d.Name), d.Value, d.Name)
 	}
 	fmt.Fprintf(b, ")\n\n")
@@ -346,6 +374,7 @@ func goFieldType(f LaidField) (string, error) {
 // initialisms are rendered upper-case so the generated names read as Go rather
 // than as transliterated C.
 var initialisms = map[string]string{
+	"abi":  "ABI",
 	"id":   "ID",
 	"pid":  "PID",
 	"tid":  "TID",

@@ -83,7 +83,7 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 			{"ExecPayload", SizeofExecPayload, 776, "2*4 + 256 + 8*64"},
 			{"PrivPayload", SizeofPrivPayload, 32, "2*8 + 4*4"},
 			{"Payload union", SizeofPayload, 776, "the largest member, ExecPayload"},
-			{"Event", SizeofEvent, 848, "8 + 4 + 4 + 56 + 776"},
+			{"Event", SizeofEvent, 856, "8 + 4 + 4 + 4 + 4 + 56 + 776, counting version and its pad"},
 		}
 		for _, c := range cases {
 			if c.got != c.want {
@@ -119,8 +119,10 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 			{"Event.Timestamp", OffsetEventTimestamp, 0},
 			{"Event.Type", OffsetEventType, 8},
 			{"Event.Ret", OffsetEventRet, 12},
-			{"Event.Proc", OffsetEventProc, 16},
-			{"Event.Payload", OffsetEventPayload, 72},
+			{"Event.Version", OffsetEventVersion, 16},
+			{"Event.Pad", OffsetEventPad, 20},
+			{"Event.Proc", OffsetEventProc, 24},
+			{"Event.Payload", OffsetEventPayload, 80},
 
 			{"Proc.CgroupID", OffsetProcCgroupID, 0},
 			{"Proc.StartTime", OffsetProcStartTime, 8},
@@ -153,6 +155,67 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 				PathMax, CommLen, ArgvMax, ArgLen)
 		}
 	})
+}
+
+// --- the ABI version ------------------------------------------------------------------
+
+// The version is a value the two sides compare, not a limit on what fits, and
+// the distinction is load-bearing: a reader who takes ABIVersion for a bound has
+// misread the contract as badly as one who takes PathMax for a version.
+func TestABIVersionIsAValueNotABound(t *testing.T) {
+	if ABIVersion != 1 {
+		t.Errorf("ABIVersion = %d, want 1; this is the first numbered layout, and the number "+
+			"changes only when the bytes on the wire change", ABIVersion)
+	}
+
+	// Where the field sits is the whole point of it. A version a reader has to
+	// already know the layout to find cannot tell that reader the layout is
+	// wrong, so it has to live in the fixed prologue — ahead of proc, ahead of
+	// the payload union, and ahead of everything whose position a later version
+	// is free to move.
+	if OffsetEventVersion >= OffsetEventProc || OffsetEventVersion >= OffsetEventPayload {
+		t.Errorf("version sits at offset %d, at or past proc (%d) / payload (%d); a version "+
+			"reachable only by a reader who already agrees about the layout reports nothing",
+			OffsetEventVersion, OffsetEventProc, OffsetEventPayload)
+	}
+
+	// The pad is named rather than implicit so the C compiler and the generated
+	// decoder account for the same four bytes instead of each deciding
+	// separately. It exists either way: proc is 8-aligned and version ends at 20.
+	if OffsetEventPad != OffsetEventVersion+4 || OffsetEventProc != OffsetEventPad+4 {
+		t.Errorf("version/pad/proc = %d/%d/%d, want the pad to name exactly the gap between "+
+			"version and the 8-aligned proc", OffsetEventVersion, OffsetEventPad, OffsetEventProc)
+	}
+}
+
+// What this layer does with a version it does not recognize: nothing.
+//
+// Deliberate, and the reason is the same one that keeps pkg/event and
+// pkg/capability out of this package. Deciding what a mismatched version *means*
+// — refuse to attach, drop the record, fail the session closed — is a judgment,
+// and the generated layer must stay free of judgments it would have to
+// regenerate. The record's version is carried up verbatim so the layer that owns
+// that judgment can act on it; see the header's remaining TODO, which puts the
+// check in the loader, before any probe is attached.
+//
+// This test pins the current contract so that adding enforcement here later is a
+// deliberate act with a failing test attached, rather than a quiet change of
+// behavior at the boundary every downstream conclusion rests on.
+func TestDecodeRecordDoesNotJudgeTheVersion(t *testing.T) {
+	for _, v := range []uint32{0, ABIVersion, ABIVersion + 1, 0xFFFFFFFF} {
+		raw := make([]byte, RecordSize)
+		put32(raw, OffsetEventVersion, v)
+
+		rec, err := DecodeRecord(raw)
+		if err != nil {
+			t.Fatalf("DecodeRecord with version %d: %v; this layer reports the version, it does "+
+				"not rule on it", v, err)
+		}
+		if rec.Version != v {
+			t.Errorf("Version = %d, want %d; a version the decoder rewrites or drops cannot be "+
+				"compared by the layer that will enforce it", rec.Version, v)
+		}
+	}
 }
 
 // --- the event type enum -------------------------------------------------------------
@@ -219,6 +282,8 @@ func TestDecodeRecordReadsEveryHeaderField(t *testing.T) {
 	put64(raw, OffsetEventTimestamp, 0x1122334455667788)
 	put32(raw, OffsetEventType, uint32(EvtFileOpen))
 	putI32(raw, OffsetEventRet, -13) // -EACCES, as the probe would report it
+	put32(raw, OffsetEventVersion, ABIVersion)
+	put32(raw, OffsetEventPad, 0)
 
 	p := OffsetEventProc
 	put64(raw, p+OffsetProcCgroupID, 0xCAFEBABE)
@@ -245,6 +310,12 @@ func TestDecodeRecordReadsEveryHeaderField(t *testing.T) {
 	// so would turn every failed syscall into a large positive number.
 	if rec.Ret != -13 {
 		t.Errorf("Ret = %d, want -13; a negative return is -errno and must survive decoding", rec.Ret)
+	}
+	// Read from the record rather than assumed. A version field the decoder
+	// silently fills in from its own constant would agree with itself forever and
+	// report a mismatch never.
+	if rec.Version != ABIVersion {
+		t.Errorf("Version = %d, want %d", rec.Version, ABIVersion)
 	}
 	if rec.Proc.CgroupID != 0xCAFEBABE || rec.Proc.StartTime != 0xDEADBEEF {
 		t.Errorf("Proc identity = cgroup %#x start %#x", rec.Proc.CgroupID, rec.Proc.StartTime)
