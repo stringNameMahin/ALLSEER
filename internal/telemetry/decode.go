@@ -4,7 +4,7 @@ package telemetry
 //
 //	BPF event bytes → internal/telemetry/abi → telemetry.Decoder → pkg/event.Event
 //
-// The abi package stops at the ABI shape. It turns 848 bytes into the C structs
+// The abi package stops at the ABI shape. It turns 856 bytes into the C structs
 // the header declares and refuses to say what any of it *means*, because
 // meaning is a judgment and a generated file must hold nothing a regeneration
 // would overwrite. This file holds those judgments, and only those: which

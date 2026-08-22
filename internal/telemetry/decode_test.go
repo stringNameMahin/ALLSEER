@@ -122,9 +122,12 @@ func TestEventSizeIsTheGeneratedRecordSize(t *testing.T) {
 	// The exact value, and the arithmetic behind it, pinned independently of
 	// the generator. abi has the same assertion; having it on both sides means
 	// a generator bug producing self-consistent nonsense fails here too.
-	const want = 848 // 8 timestamp + 4 type + 4 ret + 56 proc + 776 payload union
+	//
+	// 856 = 8 timestamp + 4 type + 4 ret + 4 version + 4 pad + 56 proc
+	//     + 776 payload union, counting version and its pad.
+	const want = 856
 	if got != want {
-		t.Errorf("EventSize() = %d, want %d (8 + 4 + 4 + %d + %d)",
+		t.Errorf("EventSize() = %d, want %d (8 + 4 + 4 + 4 + 4 + %d + %d)",
 			got, want, abi.SizeofProc, abi.SizeofPayload)
 	}
 	if abi.OffsetEventPayload+abi.SizeofPayload != got {
