@@ -144,6 +144,10 @@ char LICENSE[] SEC("license") = "GPL";
  * Selector.ArgPatterns is documented as "a convenience for readable envelopes,
  * not a security boundary", so the gap costs convenience and not a control.
  *
+ * Filtered before anything is reserved. See the lookup at the top of the
+ * function: an exec in a cgroup nobody declared governed costs one hash lookup
+ * and a return, which is the whole point of the map living in the kernel.
+ *
  * CO-RE: every kernel struct read here goes through a relocation rather than a
  * literal offset. vmlinux.h applies preserve_access_index to every record it
  * declares, so the direct read of ctx->__data_loc_filename is relocated on
@@ -155,8 +159,55 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 {
 	struct task_struct *task;
 	struct allseer_event *e;
+	allseer_cgroup_id_t cgroup_id;
 	__u64 pid_tgid, uid_gid;
 	__u32 filename_off;
+
+	/* The filter, and the first thing this probe does.
+	 *
+	 * Presence in the map is the entire test, because that is the entire
+	 * contract: allseer_maps.h declares the value as `allseer_tracked_t` and
+	 * says of it that "presence in the map is the entire signal: a lookup that
+	 * returns non-NULL means this cgroup is governed". So the returned pointer
+	 * is tested against NULL and never dereferenced. Reading the byte it
+	 * points at and treating a zero as untracked would invent a second, unstated
+	 * meaning for a value user space has never been told to set — and would
+	 * turn a memset in a future loader into a silent, total loss of telemetry.
+	 * The header says the byte is one byte only "so that adding a field is a
+	 * visible ABI change on both sides instead of a silent reinterpretation of
+	 * padding"; giving the existing byte a meaning here would be exactly that
+	 * silent reinterpretation.
+	 *
+	 * The key type is the typedef rather than a bare __u64, so the width the
+	 * map was declared with and the width looked up in it are the same token.
+	 * libbpf checks key_size at load, but only against what this file already
+	 * says twice.
+	 *
+	 * Attribution is by cgroup and not by PID, for the reason allseer_maps.h
+	 * gives: "a filter keyed by PID would have to be updated on every fork the
+	 * agent performs, from user space, racing the child's first syscall". The
+	 * cost of that choice is that a governed process outside a tracked cgroup
+	 * is invisible from here — Collector.AttachSession's "PID ancestry
+	 * otherwise" branch cannot see what the kernel already dropped — so placing
+	 * the session in a cgroup is a requirement on the loader and not an
+	 * optimisation. pkg/capability records the other end of the same fact:
+	 * priv.namespace is "how a process escapes the attribution the collector
+	 * depends on: a new cgroup or PID namespace puts work outside the probes'
+	 * filter map". Nothing here closes that; it becomes reachable the moment a
+	 * filter exists, and the probe that would observe it does not.
+	 *
+	 * Cgroup ID 0 gets no special case, because the repository gives it no
+	 * special meaning: it is looked up like any other key and misses unless
+	 * user space put it there. That matters most in the environment where
+	 * bpf_get_current_cgroup_id() cannot answer — a kernel without cgroup v2 —
+	 * where every exec misses and this object observes nothing. Special-casing
+	 * 0 to pass the filter would convert that into reporting *everything*,
+	 * which is the wrong direction to fail in and would hide the misconfigured
+	 * host rather than surface it. Detecting it belongs to the loader, which is
+	 * the only side that can refuse to start. */
+	cgroup_id = bpf_get_current_cgroup_id();
+	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
 
 	/* Reserved, not built and copied. struct allseer_event is 856 bytes and
 	 * the eBPF stack is 512, so this is the only shape the record can be
@@ -193,7 +244,9 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * whichever of its threads happened to fork. start_boottime paired with
 	 * pid is what event.Process.StartTime is for — "the pair (PID, StartTime)
 	 * is unique for a boot; PID alone is not". */
-	e->proc.cgroup_id = bpf_get_current_cgroup_id();
+	/* The value the filter already matched on, not a second call. The record
+	 * and the filter decision must agree about which cgroup this was. */
+	e->proc.cgroup_id = cgroup_id;
 	e->proc.start_time = BPF_CORE_READ(task, start_boottime);
 	e->proc.pid = (__u32)(pid_tgid >> 32);
 	e->proc.tid = (__u32)pid_tgid;

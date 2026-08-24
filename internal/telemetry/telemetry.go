@@ -231,12 +231,18 @@ type Config struct {
 // first place. Selector.ArgPatterns is already documented as "a convenience for
 // readable envelopes, not a security boundary", so the gap costs convenience and
 // not a control.
-// TODO(telemetry): implement kernel-side cgroup filtering via a BPF map, so
-// untracked processes cost nothing instead of being filtered in user space.
-// The exec probe above does not consult tracked_cgroups and so reports every
-// exec on the host. That is this TODO and not an oversight: the map is empty
-// until a loader populates it, and a lookup added first would reject every event
-// on a machine where nothing has yet been declared governed.
+// Done: kernel-side cgroup filtering is implemented in bpf/allseer.bpf.c.
+// proc_exec looks the current cgroup ID up in `tracked_cgroups` before it
+// reserves anything, so an exec in an undeclared cgroup costs a hash lookup and
+// a return rather than a reservation, a wakeup, a decode and a discard.
+// Presence in the map is the whole test, as allseer_maps.h defines it: the
+// returned pointer is checked against NULL and never dereferenced. Two
+// consequences are worth stating here rather than leaving to be found. While no
+// loader populates the map, the filter set is empty and this object reports
+// nothing — the correct direction to fail in, but not an obvious one from the
+// Go side. And the filter is per-probe rather than a property of the object, so
+// every tracepoint added after this one has to perform the same lookup or it
+// silently reports on cgroups nobody declared.
 // Done, in its first half: the Go view of the ABI is generated from
 // bpf/include/allseer_event.h by internal/telemetry/abigen into
 // internal/telemetry/abi. Sizes, offsets, the event-type enum, the struct
