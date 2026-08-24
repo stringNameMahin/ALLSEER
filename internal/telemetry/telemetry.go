@@ -209,11 +209,34 @@ type Config struct {
 // counters verbatim so fail-closed paths are exercisable without a kernel. Seed
 // fixtures are in test/testdata/replay.
 
-// TODO(telemetry): write the first eBPF programs as tracepoints
-// (sys_enter_openat, sched_process_exec, sys_enter_connect). Tracepoints before
-// kprobes: a stable ABI is worth more than coverage while the design moves.
+// TODO(telemetry): write the remaining eBPF programs as tracepoints
+// (sys_enter_openat, sys_enter_connect). Tracepoints before kprobes: a stable
+// ABI is worth more than coverage while the design moves.
+// Done, for the first of the three: sched_process_exec is implemented in
+// bpf/allseer.bpf.c as the program `proc_exec`, under
+// SEC("tracepoint/sched/sched_process_exec"). It emits ALLSEER_EVT_PROC_EXEC
+// carrying struct allseer_exec_payload, reserving the record in the `events`
+// ring buffer and filling it in place — the record is larger than the eBPF
+// stack, so that is the only shape it can be written in. The hook is the
+// scheduler's rather than the syscall's: an exec that failed never reaches it
+// and one that succeeded never returns, which is why `ret` is 0 and why comm
+// already names the new image. Identity is struct allseer_proc and nothing
+// else. Every kernel read is CO-RE-relocated — the tracepoint's __data_loc
+// field and the task_struct walks alike — so no offset from the build kernel is
+// compiled in; the ring buffer helpers set the floor at 5.8.
+// Not carried, and stated here rather than left to be discovered: argv. The
+// tracepoint does not expose it, `argc` is written 0, and reaching the arguments
+// means task->mm->arg_start or struct linux_binprm — both kernel-internal, and
+// so both a trade against the stable-ABI reason for choosing a tracepoint in the
+// first place. Selector.ArgPatterns is already documented as "a convenience for
+// readable envelopes, not a security boundary", so the gap costs convenience and
+// not a control.
 // TODO(telemetry): implement kernel-side cgroup filtering via a BPF map, so
 // untracked processes cost nothing instead of being filtered in user space.
+// The exec probe above does not consult tracked_cgroups and so reports every
+// exec on the host. That is this TODO and not an oversight: the map is empty
+// until a loader populates it, and a lookup added first would reject every event
+// on a machine where nothing has yet been declared governed.
 // Done, in its first half: the Go view of the ABI is generated from
 // bpf/include/allseer_event.h by internal/telemetry/abigen into
 // internal/telemetry/abi. Sizes, offsets, the event-type enum, the struct
