@@ -209,6 +209,18 @@ type Config struct {
 // counters verbatim so fail-closed paths are exercisable without a kernel. Seed
 // fixtures are in test/testdata/replay.
 
+// Done: Loader is implemented in loader_linux.go as BPFLoader, over libbpfgo,
+// behind `//go:build linux && ebpf`. Load establishes the two things that must
+// be true before any event is believed — a cgroup2 hierarchy exists, and the
+// object's record layout matches Decoder.EventSize, read from the object's BTF
+// — and refuses to open anything if either fails, which is the only point at
+// which a mismatch costs nothing. RingBuffer returns raw records and decodes
+// none of them; UpdateMap is how tracked_cgroups is populated, with key and
+// value widths checked against the loaded map because nothing else can check
+// them. DetachAll and Close are idempotent. The loader owns no session state
+// and makes no decision: that is Collector, and it does not exist yet.
+// `make test-ebpf` runs its tests; the ones that load BPF skip unless root.
+
 // TODO(telemetry): write the remaining eBPF programs as tracepoints
 // (sys_enter_openat, sys_enter_connect). Tracepoints before kprobes: a stable
 // ABI is worth more than coverage while the design moves.

@@ -285,3 +285,29 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
+
+/* --- BTF anchor -------------------------------------------------------------
+ *
+ * Not read by anything in the kernel. It exists so that `struct allseer_event`
+ * reaches the object's BTF, where the loader reads its size before it attaches
+ * a probe.
+ *
+ * The file preamble above already explains why BTF alone would not carry it:
+ * "BTF carries only types something references", and a local variable in one
+ * program is not a reference BTF records. So without this declaration the
+ * record type is absent from the compiled object, and telemetry's startup check
+ * — the one internal/telemetry/abi describes as reading the object "through BTF
+ * before it attaches anything", because that is "the only point at which a
+ * mismatch costs nothing" — has nothing to compare against and must refuse to
+ * start.
+ *
+ * A pointer rather than an instance: it costs 8 bytes of .bss instead of 856,
+ * and BTF describes the pointee either way. libbpf turns that .bss into a small
+ * internal map alongside the two declared here, which is expected rather than a
+ * third map of ALLSEER's own.
+ *
+ * This is half of the TODO in allseer_event.h, which asks for the ABI version
+ * to be exposed the same way. The size is the half a struct declaration can
+ * give for free; the version needs a read-only global carrying a value, and
+ * that remains open. */
+struct allseer_event *_allseer_record_btf_anchor;

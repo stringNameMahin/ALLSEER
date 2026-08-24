@@ -34,6 +34,15 @@ CMDS      := allseerd allseerctl allseer-shim
 ARCH      := $(shell uname -m 2>/dev/null | sed 's/x86_64/x86/; s/aarch64/arm64/')
 BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) -I$(BPF_DIR)/include -Wall -Werror
 
+# libbpfgo binds to libbpf through cgo, but its own cgo directives ask only for
+# -lelf -lz: libbpf itself has to come from the caller. Everything built or
+# tested with `-tags ebpf` therefore needs this, and gets an undefined-reference
+# link failure without it. pkg-config is the source of truth so a libbpf
+# installed somewhere other than /usr/lib still resolves; the literal is a
+# fallback for a host with the library but no .pc file.
+CGO_LDFLAGS ?= $(shell pkg-config --libs libbpf 2>/dev/null || echo -lbpf)
+export CGO_LDFLAGS
+
 ##@ General
 
 .PHONY: help
@@ -58,6 +67,7 @@ build-ebpf: bpf ## Build binaries with the eBPF collector linked in (Linux only)
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=1 $(GO) build -trimpath -tags "ebpf" -ldflags "$(LDFLAGS)" \
 		-o $(BIN_DIR)/allseerd ./cmd/allseerd
+	CGO_ENABLED=1 $(GO) build -tags "ebpf" ./...
 
 .PHONY: bpf
 bpf: ## Compile eBPF C sources to CO-RE objects (needs clang + bpftool)
@@ -106,6 +116,19 @@ lint: ## Run golangci-lint if installed
 .PHONY: test
 test: ## Run unit tests
 	$(GO) test -race -count=1 ./...
+
+# Not part of `check`. `check` is what CI runs and what has to pass on a
+# developer laptop of any OS; this needs clang, libbpf and a kernel, and the
+# tests that matter most in it need root as well. Keeping them apart is the same
+# split the build tag makes: the portable layer must stay testable everywhere.
+.PHONY: test-ebpf
+test-ebpf: bpf ## Vet and test the eBPF-tagged code (Linux + libbpf; loading needs root)
+	CGO_ENABLED=1 $(GO) vet -tags "ebpf" ./...
+	CGO_ENABLED=1 $(GO) test -tags "ebpf" -count=1 ./...
+	@echo ""
+	@echo "Tests that load BPF skip unless run as root. For the full run:"
+	@echo "  sudo -E env PATH=\$$PATH CGO_LDFLAGS=\"$(CGO_LDFLAGS)\" \\"
+	@echo "    $(GO) test -tags ebpf -count=1 ./internal/telemetry/"
 
 .PHONY: golden
 golden: ## Regenerate the committed golden decision streams, then review the diff

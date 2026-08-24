@@ -47,8 +47,13 @@
 // So the field is a backstop with a reader, and the enforcement points are the
 // loader and telemetry.Decoder — telemetry.Decoder.EventSize already exists for
 // exactly this purpose, "to catch layout drift between the loaded object and
-// this binary at startup rather than at the first event". Both are separate
-// milestone issues, and neither exists yet.
+// this binary at startup rather than at the first event". Both now exist:
+// telemetry.BPFLoader.Load compares this package's RecordSize, by way of
+// EventSize, against sizeof(struct allseer_event) in the loaded object's BTF,
+// and refuses to open it on a mismatch. What that still does not catch is a
+// layout that kept its size and changed meaning, which is what Event.Version is
+// for and what the header's TODO about exposing ALLSEER_ABI_VERSION as a
+// read-only global would close.
 //
 //go:generate go run github.com/stringNameMahin/ALLSEER/internal/telemetry/abigen/cmd/abigen -header ../../../bpf/include/allseer_event.h -out layout_gen.go -package abi
 package abi
