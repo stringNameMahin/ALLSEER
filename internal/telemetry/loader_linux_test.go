@@ -96,6 +96,12 @@ func TestLoaderLifecycleWithoutLoading(t *testing.T) {
 	ctx := context.Background()
 	l := NewLoader(Config{}, nil)
 
+	if err := l.DeleteMap(ctx, MapTrackedCgroups, make([]byte, 8)); !errors.Is(err, ErrNotLoaded) {
+		t.Errorf("DeleteMap before Load = %v, want ErrNotLoaded", err)
+	}
+	if _, err := l.ReadCounter(ctx, MapRingbufDrops); !errors.Is(err, ErrNotLoaded) {
+		t.Errorf("ReadCounter before Load = %v, want ErrNotLoaded", err)
+	}
 	if err := l.Attach(ctx, ProgProcExec); !errors.Is(err, ErrNotLoaded) {
 		t.Errorf("Attach before Load = %v, want ErrNotLoaded", err)
 	}
@@ -118,6 +124,12 @@ func TestLoaderLifecycleWithoutLoading(t *testing.T) {
 	}
 	if err := l.Attach(ctx, ProgProcExec); !errors.Is(err, ErrClosed) {
 		t.Errorf("Attach after Close = %v, want ErrClosed", err)
+	}
+	if err := l.DeleteMap(ctx, MapTrackedCgroups, make([]byte, 8)); !errors.Is(err, ErrClosed) {
+		t.Errorf("DeleteMap after Close = %v, want ErrClosed", err)
+	}
+	if _, err := l.ReadCounter(ctx, MapRingbufDrops); !errors.Is(err, ErrClosed) {
+		t.Errorf("ReadCounter after Close = %v, want ErrClosed", err)
 	}
 }
 
@@ -318,6 +330,19 @@ func TestRuntimeExecEventReachesUserspace(t *testing.T) {
 		}
 	})
 
+	t.Run("no drops were counted", func(t *testing.T) {
+		// The third leg of the distinction TestRuntimeRingBufferDropsAreCounted
+		// draws: a record that reached user space is not a loss, and the
+		// counter must not have moved for it.
+		n, err := l.ReadCounter(ctx, MapRingbufDrops)
+		if err != nil {
+			t.Fatalf("ReadCounter: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("%d drop(s) counted on a run whose records all arrived", n)
+		}
+	})
+
 	t.Run("kernel timestamp", func(t *testing.T) {
 		if got.event.KernelTimestamp == 0 {
 			t.Error("kernel timestamp is zero")
@@ -415,6 +440,209 @@ func TestUpdateMapRefusesWrongWidths(t *testing.T) {
 
 	if err := l.UpdateMap(ctx, "no_such_map", make([]byte, 8), []byte{1}); err == nil {
 		t.Error("UpdateMap on an unknown map succeeded")
+	}
+}
+
+// Deleting an entry is how a session stops being watched, so the widths are
+// checked the same way UpdateMap's are and for the same reason: a truncated
+// cgroup ID names a different cgroup, and here that means un-tracking a session
+// that is still running while leaving the one that ended tracked.
+func TestDeleteMapRefusesWrongKeyWidthAndUnknownMaps(t *testing.T) {
+	requireRoot(t)
+	obj := objectOrSkip(t)
+
+	ctx := context.Background()
+	l := NewLoader(Config{ObjectPath: obj}, nil)
+	defer l.Close()
+	if err := l.Load(ctx, obj); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		key  []byte
+	}{
+		{"empty key", nil},
+		{"short key", make([]byte, 4)},
+		{"long key", make([]byte, 16)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := l.DeleteMap(ctx, MapTrackedCgroups, tc.key); !errors.Is(err, ErrMapValueSize) {
+				t.Fatalf("DeleteMap = %v, want ErrMapValueSize", err)
+			}
+		})
+	}
+
+	if err := l.DeleteMap(ctx, "no_such_map", make([]byte, 8)); err == nil {
+		t.Error("DeleteMap on an unknown map succeeded")
+	}
+
+	// A key the map does not hold is its own finding, not a failure and not a
+	// success. See ErrMapKeyNotFound.
+	key, _ := trackedKV(0xA11CE)
+	if err := l.DeleteMap(ctx, MapTrackedCgroups, key); !errors.Is(err, ErrMapKeyNotFound) {
+		t.Errorf("DeleteMap on an absent key = %v, want ErrMapKeyNotFound", err)
+	}
+}
+
+// ReadCounter refuses a map that is not the shape it reads, because the name is
+// a string and nothing else can tell.
+func TestReadCounterRefusesMapsThatAreNotCounters(t *testing.T) {
+	requireRoot(t)
+	obj := objectOrSkip(t)
+
+	ctx := context.Background()
+	l := NewLoader(Config{ObjectPath: obj}, nil)
+	defer l.Close()
+	if err := l.Load(ctx, obj); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	for _, name := range []string{MapTrackedCgroups, MapEvents} {
+		if _, err := l.ReadCounter(ctx, name); !errors.Is(err, ErrNotACounter) {
+			t.Errorf("ReadCounter(%q) = %v, want ErrNotACounter", name, err)
+		}
+	}
+	if _, err := l.ReadCounter(ctx, "no_such_map"); err == nil {
+		t.Error("ReadCounter on an unknown map succeeded")
+	}
+}
+
+// The tracked-to-untracked transition, which is what DeleteMap exists for.
+//
+// Three legs, and all three are needed. An exec that is reported proves the
+// probe fires at all; the same exec unreported after the delete proves the
+// entry is gone from the kernel's view and not merely from Go's; and the second
+// delete proves the loader can tell "already removed" from "removal failed",
+// which is the distinction a collector detaching a session twice depends on.
+func TestRuntimeDeleteMapUntracksACgroup(t *testing.T) {
+	l, records := loadAndAttach(t)
+	ctx := context.Background()
+
+	cgroupID := currentCgroupID(t)
+	key, value := trackedKV(cgroupID)
+	if err := l.UpdateMap(ctx, MapTrackedCgroups, key, value); err != nil {
+		t.Fatalf("UpdateMap: %v", err)
+	}
+
+	path, _ := execMarker(t, "allseer-delete-tracked")
+	if found := collect(t, records, path, 3*time.Second); len(found) == 0 {
+		t.Fatal("exec in a tracked cgroup produced no event, so the negative case below proves nothing")
+	}
+
+	if err := l.DeleteMap(ctx, MapTrackedCgroups, key); err != nil {
+		t.Fatalf("DeleteMap: %v", err)
+	}
+
+	path, _ = execMarker(t, "allseer-delete-untracked")
+	if found := collect(t, records, path, 2*time.Second); len(found) != 0 {
+		t.Fatalf("exec after the cgroup was deleted produced %d event(s); the entry is still in the kernel", len(found))
+	}
+
+	if err := l.DeleteMap(ctx, MapTrackedCgroups, key); !errors.Is(err, ErrMapKeyNotFound) {
+		t.Errorf("second DeleteMap = %v, want ErrMapKeyNotFound", err)
+	}
+}
+
+// execBurst runs /bin/true n times, which is n execs in this process's cgroup.
+//
+// The marker trick execMarker uses is deliberately not used here: this needs
+// volume rather than identifiable records, and nothing is draining the ring for
+// them to be identified in.
+func execBurst(t *testing.T, n int) {
+	t.Helper()
+	for range n {
+		if err := exec.Command("/bin/true").Run(); err != nil {
+			t.Fatalf("running /bin/true: %v", err)
+		}
+	}
+}
+
+// Ring buffer loss is counted in the kernel, and the three things that look
+// alike from user space are told apart.
+//
+// The loader is brought up with the smallest ring buffer the kernel will create
+// and, deliberately, no reader: RingBuffer is never called, so nothing drains
+// what the probe submits. One page holds four 856-byte records and then the
+// ring is full for good, which is the only way to produce a reservation failure
+// on demand — a full ring on a healthy host is a race nobody can lose reliably.
+//
+// The three legs are the distinction allseer_maps.h draws:
+//
+//   - filtered. Execs with an empty filter map. The probe returns before it
+//     reserves anything, so nothing is lost and the counter must stay at zero.
+//     A counter that moved here would be counting the design working.
+//   - emitted. Covered by TestRuntimeExecEventReachesUserspace, which asserts
+//     the counter is still zero after a record has gone all the way through.
+//   - lost. Execs in a tracked cgroup with the ring already full.
+func TestRuntimeRingBufferDropsAreCounted(t *testing.T) {
+	requireRoot(t)
+	obj := objectOrSkip(t)
+	ctx := context.Background()
+
+	l := NewLoader(Config{ObjectPath: obj, RingBufferSize: os.Getpagesize()}, nil)
+	t.Cleanup(func() {
+		if err := l.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if err := l.Load(ctx, obj); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := l.Attach(ctx, ProgProcExec); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+
+	// A freshly loaded object has lost nothing.
+	if n, err := l.ReadCounter(ctx, MapRingbufDrops); err != nil {
+		t.Fatalf("ReadCounter: %v", err)
+	} else if n != 0 {
+		t.Fatalf("a freshly loaded object reports %d drops, want 0", n)
+	}
+
+	// Filtered: nothing is tracked, so nothing is reserved and nothing is lost.
+	execBurst(t, 64)
+	if n, err := l.ReadCounter(ctx, MapRingbufDrops); err != nil {
+		t.Fatalf("ReadCounter: %v", err)
+	} else if n != 0 {
+		t.Fatalf("%d exec(s) the cgroup filter rejected were counted as %d drop(s); "+
+			"a filtered event is not a lost one", 64, n)
+	}
+
+	// Lost: tracked, with a one-page ring nobody is draining.
+	key, value := trackedKV(currentCgroupID(t))
+	if err := l.UpdateMap(ctx, MapTrackedCgroups, key, value); err != nil {
+		t.Fatalf("UpdateMap: %v", err)
+	}
+
+	const burst = 256
+	execBurst(t, burst)
+
+	dropped, err := l.ReadCounter(ctx, MapRingbufDrops)
+	if err != nil {
+		t.Fatalf("ReadCounter: %v", err)
+	}
+	if dropped == 0 {
+		t.Fatalf("%d execs into a %d-byte ring buffer nobody is draining produced 0 counted drops; "+
+			"the loss is happening and is not being recorded", burst, os.Getpagesize())
+	}
+	// The ring holds four records, so all but a handful of the burst had
+	// nowhere to go. An exact number would be asserting that nothing else on
+	// this host execs in this cgroup, which is not true of a machine running
+	// tests.
+	if dropped > burst*2 {
+		t.Errorf("counted %d drops from a burst of %d; the counter is not counting records", dropped, burst)
+	}
+	t.Logf("burst of %d execs into a %d-byte ring: %d records counted as lost",
+		burst, os.Getpagesize(), dropped)
+
+	// Monotonic and never reset by a read: a second read cannot report less.
+	again, err := l.ReadCounter(ctx, MapRingbufDrops)
+	if err != nil {
+		t.Fatalf("ReadCounter: %v", err)
+	}
+	if again < dropped {
+		t.Errorf("a second read reports %d after %d; reading the counter must not reset it", again, dropped)
 	}
 }
 

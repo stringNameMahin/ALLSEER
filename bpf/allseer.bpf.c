@@ -88,11 +88,66 @@ struct {
 	__type(value, allseer_tracked_t);
 } tracked_cgroups SEC(".maps");
 
+/* The count of records the ring buffer could not accept, read from user space
+ * through telemetry.Loader.ReadCounter.
+ *
+ * Declared next to `events` because the two are one mechanism rather than two:
+ * that map carries what was observed and this one carries what was observed and
+ * lost, and a reader holding the first without the second cannot tell a quiet
+ * host from a blind one. allseer_maps.h states what an increment means and, at
+ * more length, the two things that look like drops and are not.
+ *
+ * Nothing in this object reads it. It is write-only from the kernel side by
+ * design: a probe that changed its behaviour based on how much it had already
+ * lost would be making a governance decision on the hot path, in the one place
+ * that cannot log why. */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, ALLSEER_DROP_SLOTS);
+	__type(key, allseer_drop_key_t);
+	__type(value, allseer_drop_count_t);
+} ringbuf_drops SEC(".maps");
+
 /* Required before any program in this object can load. Declared with the maps
  * because it belongs to the object rather than to any one probe, and because
  * the helpers the probes will need — bpf_probe_read_kernel and the task
  * accessors among them — are GPL-only and refuse to verify without it. */
 char LICENSE[] SEC("license") = "GPL";
+
+/* --- Helpers ----------------------------------------------------------------
+ */
+
+/* count_ringbuf_drop records that one record was lost.
+ *
+ * Called from the one place this object loses a record it meant to emit: a
+ * bpf_ringbuf_reserve that returned NULL. It is deliberately not called
+ * anywhere else, and in particular not where the cgroup filter rejects an
+ * event — allseer_maps.h says why at the map, and the short form is that a
+ * filtered event is not a lost one.
+ *
+ * __sync_fetch_and_add rather than a plain `*slot += 1`. The slot belongs to
+ * this CPU, so there is no other CPU to race, but a tracepoint program can be
+ * interrupted on its own CPU — by an NMI-driven perf program among others — and
+ * a read-modify-write split across that interrupt loses a count silently. The
+ * atomic is uncontended by construction and it runs only on the path where a
+ * record has already been lost, so its cost is charged to the case that is
+ * already the expensive one.
+ *
+ * A lookup that fails returns without counting. It cannot fail: an array map is
+ * preallocated and the index is a constant inside max_entries. The check is
+ * there because the verifier requires it, and returning is the only honest
+ * thing to do with a count there is nowhere to put. */
+static __always_inline void count_ringbuf_drop(void)
+{
+	allseer_drop_key_t key = ALLSEER_DROP_KEY_RINGBUF;
+	allseer_drop_count_t *slot;
+
+	slot = bpf_map_lookup_elem(&ringbuf_drops, &key);
+	if (!slot)
+		return;
+
+	__sync_fetch_and_add(slot, 1);
+}
 
 /* --- Probes -----------------------------------------------------------------
  *
@@ -214,11 +269,17 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * written in. A failed reservation means the ring is full and user space
 	 * is behind: returning drops this record, which is the loss
 	 * pkg/event.Event.Dropped exists to report and telemetry.Config
-	 * .FailClosedOnDrop exists to act on. Nothing useful can be done about it
-	 * from in here. */
+	 * .FailClosedOnDrop exists to act on.
+	 *
+	 * The record cannot be saved from in here — there is nowhere to put it and
+	 * no waiting on the exec path — but the fact of it can be, and that is the
+	 * whole difference between a hole in the stream and a hole nobody knows
+	 * about. Counting is all this branch can do and all it does. */
 	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-	if (!e)
+	if (!e) {
+		count_ringbuf_drop();
 		return 0;
+	}
 
 	/* Reserved space is not zeroed — it is whatever the ring held before —
 	 * so every byte of the record is written, including the two named pads

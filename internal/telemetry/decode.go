@@ -48,6 +48,13 @@ package telemetry
 // governance decisions". A decode error is loud — it lands in
 // event.SourceStats.DecodeErrors and the collector decides whether the session
 // can continue — while a plausible-looking event is silent.
+//
+// The first thing refused is a record from a different ABI. Every offset below
+// is correct only under ALLSEER_ABI_VERSION, so the version field is compared
+// before any other field is believed, and a mismatch leaves this function as an
+// error rather than as an event. That is what keeps drift a telemetry fault the
+// collector counts, instead of an ordinary event that reaches the validator
+// carrying somebody else's bytes in this build's field names.
 
 import (
 	"errors"
@@ -72,6 +79,34 @@ var (
 	// There is nothing to interpret and no safe default: choosing a type would
 	// attribute an operation nobody observed.
 	ErrUnsetEventType = errors.New("telemetry: record carries ALLSEER_EVT_UNKNOWN, so it states no operation")
+
+	// ErrABIVersionMismatch: the record's ALLSEER_ABI_VERSION is not the one
+	// this build decodes.
+	//
+	// The check the size check cannot make, and the second of the two
+	// enforcement points internal/telemetry/abi names. That package surfaces
+	// the constant and the field and compares neither, because "deciding what a
+	// mismatch *means* is a judgment, and the judgments differ by layer" — the
+	// loader's is per-object and free, this one is per-record and is the only
+	// one that can see a record at all.
+	//
+	// What it catches is what the loader's BTF size comparison provably cannot:
+	// "a layout that kept its size and changed meaning". Two same-width fields
+	// exchanged, a flags word that gained an enumerator, a timestamp that
+	// changed from nanoseconds to microseconds — every one of those passes
+	// sizeof(struct allseer_event) unchanged and then produces a fully
+	// plausible event, which is the failure mode the header's preamble names:
+	// "it produces plausible garbage that flows straight into governance
+	// decisions". The two checks are complements and neither replaces the
+	// other; a version match says nothing about size, and this build could
+	// still be handed a record of the right size by an object it never saw.
+	//
+	// Refused, never coerced. There is no reading of a record from a different
+	// ABI that is safe to guess at: the version is the statement that the
+	// offsets mean what this build thinks they mean, and without it every field
+	// below — comm included — is an unchecked reinterpretation of somebody
+	// else's bytes.
+	ErrABIVersionMismatch = errors.New("telemetry: record's ABI version is not the one this build decodes")
 
 	// ErrUnknownEventType: the type is outside the enum this build was
 	// generated from. It means the loaded object is newer than this binary —
@@ -135,6 +170,15 @@ func (*EventDecoder) Decode(raw []byte) (*event.Event, error) {
 	rec, err := abi.DecodeRecord(raw)
 	if err != nil {
 		return nil, fmt.Errorf("telemetry: decoding record: %w", err)
+	}
+
+	// The version before anything else is read out of the record, because
+	// everything else read out of it means what it means only under this
+	// build's ABI. Checking comm or the event type first would be interpreting
+	// bytes whose interpretation is exactly what is in doubt.
+	if rec.Version != abi.ABIVersion {
+		return nil, fmt.Errorf("%w: record says %d, this build decodes %d",
+			ErrABIVersionMismatch, rec.Version, abi.ABIVersion)
 	}
 
 	// comm is checked before anything is allocated for the payload, so a

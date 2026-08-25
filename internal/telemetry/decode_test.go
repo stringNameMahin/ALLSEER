@@ -3,6 +3,7 @@ package telemetry
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -58,10 +59,19 @@ func fill(b []byte, off, n int) {
 	}
 }
 
-// newRecord returns a zeroed record of exactly one event type.
+// newRecord returns a zeroed record of exactly one event type, carrying this
+// build's ABI version.
+//
+// The version is stamped because a probe stamps it: bpf/allseer.bpf.c writes
+// `e->version = ALLSEER_ABI_VERSION` into every record it reserves, and a
+// helper that left it zero would be building records no probe produces and
+// testing the decoder against a population it never sees. The refusal of a
+// record that carries a *different* version is its own test below, and is the
+// only place a record should be built without this one.
 func newRecord(typ abi.EventType) []byte {
 	b := make([]byte, abi.RecordSize)
 	put32(b, abi.OffsetEventType, uint32(typ))
+	put32(b, abi.OffsetEventVersion, abi.ABIVersion)
 	return b
 }
 
@@ -858,13 +868,147 @@ func TestDecodeRefusesUnknownEventType(t *testing.T) {
 // record whose type was never set. It gets its own sentinel because the two
 // mean different things about the system.
 func TestDecodeRefusesUnsetEventType(t *testing.T) {
-	_, err := NewDecoder().Decode(make([]byte, abi.RecordSize))
+	// newRecord rather than a bare zeroed slice: a zeroed record also carries
+	// version 0, and the version is checked first, so the wrong refusal would
+	// pass a test written against the right one.
+	_, err := NewDecoder().Decode(newRecord(abi.EvtUnknown))
 	if !errors.Is(err, ErrUnsetEventType) {
 		t.Fatalf("err = %v, want %v", err, ErrUnsetEventType)
 	}
 	if errors.Is(err, ErrUnknownEventType) {
 		t.Error("an unset type was reported as an unknown one; the first is a probe that did not " +
 			"fill its reservation, the second is layout drift")
+	}
+}
+
+// --- the ABI version ---------------------------------------------------------
+//
+// The per-record half of drift detection. internal/telemetry/abi names two
+// enforcement points and this is the second: the loader compares
+// sizeof(struct allseer_event) out of the object's BTF before it attaches
+// anything, and that check cannot see "a layout that kept its size and changed
+// meaning". Only the version field can, and only one record at a time.
+//
+// TestCompiledObjectMatchesDecoderLayout covers the loader's half against the
+// object this repository builds, and the runtime test in loader_linux_test.go
+// asserts that a record a real probe emitted carries abi.ABIVersion. What is
+// left for here is the refusal, which no compiled object on this host can
+// produce: every record it writes carries the version this build expects.
+func TestDecodeEnforcesTheABIVersion(t *testing.T) {
+	// The version this build decodes is accepted, which is what makes every
+	// rejection below evidence about the version rather than about the record.
+	t.Run("current", func(t *testing.T) {
+		raw := newRecord(abi.EvtProcExec)
+		putStr(raw, offExecFilename, "/usr/bin/git")
+		e, err := NewDecoder().Decode(raw)
+		if err != nil {
+			t.Fatalf("a record carrying version %d was refused: %v", abi.ABIVersion, err)
+		}
+		if e.Capability != capability.KindProcessExec {
+			t.Errorf("capability = %s, want %s", e.Capability, capability.KindProcessExec)
+		}
+	})
+
+	for _, tc := range []struct {
+		name    string
+		version uint32
+		why     string
+	}{
+		{
+			name:    "zero",
+			version: 0,
+			why: "an unstamped record. A reservation the probe filled without writing the " +
+				"prologue, or bytes that were never a record at all.",
+		},
+		{
+			name:    "future",
+			version: abi.ABIVersion + 1,
+			why: "the near miss an actual ABI bump produces: an object built from a newer " +
+				"header, loaded by a binary that was not rebuilt.",
+		},
+		{
+			name:    "max",
+			version: math.MaxUint32,
+			why:     "uninitialised memory read as a version.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := newRecord(abi.EvtProcExec)
+			putStr(raw, offExecFilename, "/usr/bin/git")
+			put32(raw, abi.OffsetEventVersion, tc.version)
+
+			e, err := NewDecoder().Decode(raw)
+			if !errors.Is(err, ErrABIVersionMismatch) {
+				t.Fatalf("version %d (%s): err = %v, want ErrABIVersionMismatch", tc.version, tc.why, err)
+			}
+			if e != nil {
+				t.Error("an event was returned alongside the error; a caller checking only one " +
+					"of the two would act on a record from an ABI this build cannot read")
+			}
+			// The numbers are in the message because the operator's next
+			// question is which two ABIs disagreed, and an error that says only
+			// "version mismatch" sends them to the source to find out.
+			if !strings.Contains(err.Error(), fmt.Sprint(tc.version)) ||
+				!strings.Contains(err.Error(), fmt.Sprint(abi.ABIVersion)) {
+				t.Errorf("the error names neither the record's version nor this build's: %v", err)
+			}
+		})
+	}
+}
+
+// A wrong version is refused before anything else in the record is believed.
+//
+// The ordering is the point rather than an implementation detail. Every offset
+// in the record is correct only under this build's ABI, so a record that also
+// carries an unset event type, or a comm with no terminator, must still be
+// refused *as a version mismatch*: reporting either of the others would be
+// reporting a conclusion drawn by reading bytes whose meaning is exactly what
+// is in doubt.
+func TestABIVersionIsCheckedBeforeAnythingElseIsBelieved(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		build func() []byte
+		other error
+	}{
+		{
+			name: "unset event type",
+			build: func() []byte {
+				raw := newRecord(abi.EvtUnknown)
+				put32(raw, abi.OffsetEventVersion, abi.ABIVersion+1)
+				return raw
+			},
+			other: ErrUnsetEventType,
+		},
+		{
+			name: "type outside the enum",
+			build: func() []byte {
+				raw := newRecord(abi.EventType(math.MaxUint32))
+				put32(raw, abi.OffsetEventVersion, abi.ABIVersion+1)
+				return raw
+			},
+			other: ErrUnknownEventType,
+		},
+		{
+			name: "unterminated comm",
+			build: func() []byte {
+				raw := newRecord(abi.EvtProcExec)
+				fill(raw, abi.OffsetEventProc+abi.OffsetProcComm, abi.CommLen)
+				put32(raw, abi.OffsetEventVersion, abi.ABIVersion+1)
+				return raw
+			},
+			other: ErrTruncatedString,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewDecoder().Decode(tc.build())
+			if !errors.Is(err, ErrABIVersionMismatch) {
+				t.Fatalf("err = %v, want ErrABIVersionMismatch", err)
+			}
+			if errors.Is(err, tc.other) {
+				t.Errorf("the record was refused as %v, which is a conclusion drawn from "+
+					"fields this build cannot claim to be reading correctly", tc.other)
+			}
+		})
 	}
 }
 

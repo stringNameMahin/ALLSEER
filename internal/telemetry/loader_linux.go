@@ -41,9 +41,11 @@ package telemetry
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	bpf "github.com/aquasecurity/libbpfgo"
@@ -59,8 +61,14 @@ const (
 	// MapEvents is the record stream, drained by RingBuffer.
 	MapEvents = "events"
 
-	// MapTrackedCgroups is the kernel-side filter set, written by UpdateMap.
+	// MapTrackedCgroups is the kernel-side filter set, written by UpdateMap
+	// and unwritten by DeleteMap.
 	MapTrackedCgroups = "tracked_cgroups"
+
+	// MapRingbufDrops counts records no probe could reserve space for, read by
+	// ReadCounter. Per-CPU, one slot, monotonic; allseer_maps.h states exactly
+	// what an increment does and does not mean.
+	MapRingbufDrops = "ringbuf_drops"
 )
 
 // ProgProcExec is the sched_process_exec program in bpf/allseer.bpf.c, named
@@ -128,6 +136,29 @@ var (
 	// would be read past by the kernel; a long one would be silently
 	// truncated, and a truncated cgroup ID matches the wrong cgroup.
 	ErrMapValueSize = errors.New("telemetry: key or value is not the size the map declares")
+
+	// ErrMapKeyNotFound: DeleteMap was asked to remove a key the map does not
+	// hold.
+	//
+	// Reported rather than swallowed, and given its own sentinel so that a
+	// caller can swallow it deliberately. Removing an absent key is harmless
+	// and a collector detaching a session it already detached will do it — but
+	// "the entry was not there" and "the entry could not be removed" are
+	// different findings about the filter map, and a DeleteMap that returned
+	// nil for both would let a genuine failure to stop watching a cgroup read
+	// as success.
+	ErrMapKeyNotFound = errors.New("telemetry: the map holds no such key")
+
+	// ErrNotACounter: ReadCounter was pointed at a map that is not the shape it
+	// knows how to read.
+	//
+	// Checked for the same reason ErrMapValueSize is. The map is addressed by
+	// name and the name is a string, so nothing but this can tell that the
+	// caller reached a hash map, a ring buffer, or a counter of some other
+	// width — and a per-CPU read against a map that is not per-CPU returns the
+	// wrong number of bytes rather than an error, which would be summed into a
+	// plausible drop count.
+	ErrNotACounter = errors.New("telemetry: map is not a single-entry per-CPU counter")
 )
 
 // BPFLoader implements Loader over libbpfgo.
@@ -350,7 +381,12 @@ func (l *BPFLoader) UpdateMap(ctx context.Context, mapName string, key, value []
 	if err != nil {
 		return fmt.Errorf("telemetry: map %q: %w", mapName, err)
 	}
-	if len(key) != m.KeySize() || len(value) != m.ValueSize() {
+	// The emptiness checks are not redundant with the width comparison. A ring
+	// buffer map declares a zero-width key and value, so `events` satisfies
+	// len(key) == m.KeySize() with an empty slice — and &key[0] on an empty
+	// slice panics. Updating a ring buffer is meaningless in any case; this
+	// refuses it with the error the caller can act on instead of a stack trace.
+	if len(key) == 0 || len(value) == 0 || len(key) != m.KeySize() || len(value) != m.ValueSize() {
 		return fmt.Errorf("%w: map %q takes a %d-byte key and a %d-byte value, got %d and %d",
 			ErrMapValueSize, mapName, m.KeySize(), m.ValueSize(), len(key), len(value))
 	}
@@ -361,6 +397,142 @@ func (l *BPFLoader) UpdateMap(ctx context.Context, mapName string, key, value []
 		return fmt.Errorf("telemetry: updating map %q: %w", mapName, err)
 	}
 	return nil
+}
+
+// DeleteMap removes a key from a BPF map.
+//
+// The other half of UpdateMap, and what DetachSession will be built on. The
+// filter map's contract makes removal the only way to stop watching a cgroup:
+// allseer_maps.h declares the value as allseer_tracked_t and says "presence in
+// the map is the entire signal", and bpf/allseer.bpf.c tests the lookup for
+// NULL without dereferencing it. Writing a zero over the entry would therefore
+// change nothing the probe can see, while looking from Go exactly like it had.
+//
+// Deleting a key the map does not hold reports ErrMapKeyNotFound rather than
+// nil. It is not an error the caller must treat as fatal — see the sentinel —
+// but it is a different fact from a delete that removed something, and only the
+// caller knows which of the two it expected.
+//
+// The key width is checked against the loaded map for the reason UpdateMap
+// checks it: the signature is []byte, no compiler sees both sides, and a short
+// key is read past by the kernel while a long one is truncated. A truncated
+// cgroup ID names the wrong cgroup, and here that means un-tracking a session
+// that is still running.
+func (l *BPFLoader) DeleteMap(ctx context.Context, mapName string, key []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if err := l.readyLocked(); err != nil {
+		return err
+	}
+
+	m, err := l.module.GetMap(mapName)
+	if err != nil {
+		return fmt.Errorf("telemetry: map %q: %w", mapName, err)
+	}
+	if len(key) == 0 || len(key) != m.KeySize() {
+		return fmt.Errorf("%w: map %q takes a %d-byte key, got %d",
+			ErrMapValueSize, mapName, m.KeySize(), len(key))
+	}
+
+	if err := m.DeleteKey(unsafe.Pointer(&key[0])); err != nil {
+		// libbpfgo wraps the raw errno, so this is the one distinction worth
+		// making here: the kernel says ENOENT for a key that was not in the
+		// map, and that is a statement about the map rather than a failure of
+		// the operation.
+		if errors.Is(err, syscall.ENOENT) {
+			return fmt.Errorf("%w: map %q", ErrMapKeyNotFound, mapName)
+		}
+		return fmt.Errorf("telemetry: deleting from map %q: %w", mapName, err)
+	}
+	return nil
+}
+
+// ReadCounter returns a single-entry per-CPU counter map's value, summed across
+// CPUs.
+//
+// This is the only way the loss of a record becomes visible. A record the ring
+// buffer could not accept leaves nothing behind in the ring — the loss is the
+// absence of a record — so the probe counts it where it happens and this reads
+// the count. Nothing in RingBuffer can substitute: it reports what arrived, and
+// what arrived is precisely the population that was not lost.
+//
+// # What it will read, and what it refuses
+//
+// The map must be a BPF_MAP_TYPE_PERCPU_ARRAY with one entry, a 4-byte key and
+// an 8-byte value, which is what allseer_maps.h declares ringbuf_drops as.
+// Anything else is refused with ErrNotACounter rather than read, because a
+// per-CPU lookup against a map that is not per-CPU comes back the wrong length
+// and would be summed into a number that looks like a drop count.
+//
+// The kernel returns one 8-byte slot per possible CPU. Summing them is undoing
+// the per-CPU representation, which is a property of the map type and so
+// belongs to the layer that knows map types; it is not interpretation of the
+// value, and this function assigns the total no meaning beyond "what the map
+// says". What a drop *is* remains stated in one place, allseer_maps.h.
+//
+// # No reset
+//
+// Deliberately absent, not omitted for later. The counter is monotonic for the
+// lifetime of the loaded object, which is what both of its readers need:
+// SourceStats.DroppedEvents is cumulative by definition, and the per-record
+// delta Event.Dropped wants is current minus last-observed — a subtraction the
+// caller can do, and one that a reader resetting the counter would silently
+// break for every other reader on the host.
+func (l *BPFLoader) ReadCounter(ctx context.Context, mapName string) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if err := l.readyLocked(); err != nil {
+		return 0, err
+	}
+
+	m, err := l.module.GetMap(mapName)
+	if err != nil {
+		return 0, fmt.Errorf("telemetry: map %q: %w", mapName, err)
+	}
+	const (
+		counterKeySize   = 4 // allseer_drop_key_t
+		counterValueSize = 8 // allseer_drop_count_t
+	)
+	if m.Type() != bpf.MapTypePerCPUArray ||
+		m.MaxEntries() != 1 ||
+		m.KeySize() != counterKeySize ||
+		m.ValueSize() != counterValueSize {
+		return 0, fmt.Errorf("%w: map %q is a %s with %d entries, a %d-byte key and a %d-byte value",
+			ErrNotACounter, mapName, m.Type(), m.MaxEntries(), m.KeySize(), m.ValueSize())
+	}
+
+	// ALLSEER_DROP_KEY_RINGBUF, the only index the map has, as a 4-byte
+	// allseer_drop_key_t. Not a parameter: ReadCounter's contract is a
+	// single-entry map, and a caller choosing an index would be choosing among
+	// slots that do not exist.
+	slot := make([]byte, counterKeySize)
+
+	// GetValue sizes the buffer for a per-CPU map itself, at
+	// round_up(value_size, 8) * num_possible_cpus.
+	raw, err := m.GetValue(unsafe.Pointer(&slot[0]))
+	if err != nil {
+		return 0, fmt.Errorf("telemetry: reading counter %q: %w", mapName, err)
+	}
+	if len(raw) == 0 || len(raw)%counterValueSize != 0 {
+		return 0, fmt.Errorf("%w: map %q returned %d bytes, which is not a whole number of %d-byte per-CPU slots",
+			ErrNotACounter, mapName, len(raw), counterValueSize)
+	}
+
+	var total uint64
+	for off := 0; off+counterValueSize <= len(raw); off += counterValueSize {
+		total += binary.NativeEndian.Uint64(raw[off:])
+	}
+	return total, nil
 }
 
 // DetachAll detaches every attached program and stops every ring buffer reader.

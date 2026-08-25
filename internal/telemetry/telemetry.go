@@ -94,6 +94,40 @@ type Loader interface {
 	// costing a userspace round trip per event.
 	UpdateMap(ctx context.Context, mapName string, key, value []byte) error
 
+	// DeleteMap removes a key from a BPF map.
+	//
+	// The other half of UpdateMap, and the only way to say "stop watching this
+	// cgroup". The filter map's contract is that presence is the entire signal
+	// — bpf/allseer.bpf.c tests the lookup for NULL and never dereferences what
+	// it returns — so a session that ends cannot be un-watched by writing a
+	// zero value over its entry. There is nothing a value could say. The key
+	// has to go.
+	//
+	// The alternative to having this at all would be for the collector to keep
+	// tracking a dead session in the kernel and discard its events in user
+	// space, which is the exact cost the filter map exists to avoid: "an
+	// untracked process should cost a lookup and a return, not a ring buffer
+	// reservation, a wakeup, a decode and a discard".
+	DeleteMap(ctx context.Context, mapName string, key []byte) error
+
+	// ReadCounter returns a single-entry per-CPU counter map's value, summed
+	// across CPUs.
+	//
+	// The kernel-to-user channel for what the ring buffer could not carry.
+	// Records lost to a full ring are invisible in the stream by construction:
+	// the loss is the absence of a record, so no amount of reading the ring
+	// reveals it, and RingBuffer reports on exactly the wrong population.
+	// bpf/allseer.bpf.c counts each loss where it happens and this is how the
+	// count is read.
+	//
+	// Nothing here resets it. The counter is monotonic for the lifetime of the
+	// loaded object because both users of it need that: SourceStats
+	// .DroppedEvents is cumulative by definition, and the per-record delta
+	// Event.Dropped wants is current minus last-observed — a subtraction any
+	// reader can do, and one a reader that reset the counter would break for
+	// every other reader.
+	ReadCounter(ctx context.Context, mapName string) (uint64, error)
+
 	Close() error
 }
 
@@ -215,11 +249,24 @@ type Config struct {
 // object's record layout matches Decoder.EventSize, read from the object's BTF
 // — and refuses to open anything if either fails, which is the only point at
 // which a mismatch costs nothing. RingBuffer returns raw records and decodes
-// none of them; UpdateMap is how tracked_cgroups is populated, with key and
-// value widths checked against the loaded map because nothing else can check
-// them. DetachAll and Close are idempotent. The loader owns no session state
-// and makes no decision: that is Collector, and it does not exist yet.
+// none of them; UpdateMap and DeleteMap are how tracked_cgroups is populated
+// and unpopulated, with key and value widths checked against the loaded map
+// because nothing else can check them. DetachAll and Close are idempotent. The
+// loader owns no session state and makes no decision: that is Collector, and it
+// does not exist yet.
 // `make test-ebpf` runs its tests; the ones that load BPF skip unless root.
+// Done: ring buffer loss is counted in the kernel and readable from Go.
+// bpf/allseer.bpf.c increments the per-CPU `ringbuf_drops` map at the one place
+// a record is lost — a bpf_ringbuf_reserve that returned NULL — and
+// Loader.ReadCounter sums it. Before this, Config.FailClosedOnDrop and
+// pkg/event.Event.Dropped were both written against a signal that did not
+// exist, which is worse than an absent control because it reads as a present
+// one. Three things stay distinct and are worth naming here because they are
+// easy to conflate: an event the cgroup filter rejected is not a drop, a record
+// that failed to decode is not a drop, and only a reservation that failed is.
+// What is still missing is the consumer: nothing turns the counter into
+// SourceStats.DroppedEvents or into Event.Dropped, because that is Collector's
+// and Collector does not exist.
 
 // TODO(telemetry): write the remaining eBPF programs as tracepoints
 // (sys_enter_openat, sys_enter_connect). Tracepoints before kprobes: a stable

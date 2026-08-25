@@ -78,6 +78,15 @@ func FuzzDecode(f *testing.F) {
 	// A type outside the enum: the loaded object being newer than this binary.
 	f.Add(newRecord(abi.EventType(math.MaxUint32)))
 
+	// A well-formed record of a declared type carrying a version this build does
+	// not decode. newRecord stamps the right one, so this is the one place that
+	// overwrites it. The zeroed and 0xFF-filled seeds above already cover the
+	// two extreme versions; this one is the near miss, which is the shape an
+	// actual ABI bump produces.
+	wrongVersion := newRecord(abi.EvtProcExec)
+	put32(wrongVersion, abi.OffsetEventVersion, abi.ABIVersion+1)
+	f.Add(wrongVersion)
+
 	// Strings that filled their fields. The case the header names, and the one
 	// this layer is the last to be able to see.
 	truncated := newRecord(abi.EvtProcExec)
@@ -225,10 +234,12 @@ func readType(raw []byte) abi.EventType {
 	return abi.EventType(binary.NativeEndian.Uint32(raw[abi.OffsetEventType:]))
 }
 
-// isDeclaredRefusal reports whether an error is one of the three documented
+// isDeclaredRefusal reports whether an error is one of the four documented
 // reasons a correctly sized record of a declared type is refused.
 func isDeclaredRefusal(err error) bool {
-	for _, sentinel := range []error{ErrUnsetEventType, ErrUndecidedMapping, ErrTruncatedString} {
+	for _, sentinel := range []error{
+		ErrABIVersionMismatch, ErrUnsetEventType, ErrUndecidedMapping, ErrTruncatedString,
+	} {
 		if errors.Is(err, sentinel) {
 			return true
 		}
