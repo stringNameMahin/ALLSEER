@@ -172,7 +172,23 @@ func TestLoadRefusesLayoutDrift(t *testing.T) {
 // testing a configuration the collector will never run; and the exec/exit
 // pairing property cannot be observed at all unless both are on the same
 // stream.
+//
+// The openat pair is deliberately *not* attached here, and that is a change
+// from "every probe in the object". openat is among the busiest syscalls on a
+// Linux host and this process's cgroup is the one these tests track, so
+// attaching it would put every open the Go runtime performs onto the same ring
+// the exec assertions read from — including the subtest that requires the drop
+// counter to still be zero. The open probes have their own file, which attaches
+// what each of its tests is about; the one test that needs all four on one
+// stream says so.
 func loadAndAttach(t *testing.T) (*BPFLoader, <-chan []byte) {
+	t.Helper()
+	return loadAndAttachPrograms(t, ProgProcExec, ProgProcExit)
+}
+
+// loadAndAttachPrograms brings a loader up with a named set of programs
+// attached and a reader on the ring buffer, and registers teardown.
+func loadAndAttachPrograms(t *testing.T, progs ...string) (*BPFLoader, <-chan []byte) {
 	t.Helper()
 	requireRoot(t)
 	obj := objectOrSkip(t)
@@ -192,7 +208,7 @@ func loadAndAttach(t *testing.T) (*BPFLoader, <-chan []byte) {
 	if err != nil {
 		t.Fatalf("RingBuffer: %v", err)
 	}
-	for _, prog := range []string{ProgProcExec, ProgProcExit} {
+	for _, prog := range progs {
 		if err := l.Attach(ctx, prog); err != nil {
 			t.Fatalf("Attach %s: %v", prog, err)
 		}

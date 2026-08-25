@@ -69,6 +69,22 @@ const (
 	// ReadCounter. Per-CPU, one slot, monotonic; allseer_maps.h states exactly
 	// what an increment does and does not mean.
 	MapRingbufDrops = "ringbuf_drops"
+
+	// MapOpenatScratch holds one half-built open event per thread that is
+	// inside openat, between ProgOpenatEnter and ProgOpenatExit.
+	//
+	// No loader method touches it and none should. It is kernel-internal state
+	// with a kernel-internal lifecycle — allseer_maps.h defines when an entry
+	// is created, replaced, deleted and evicted, and every one of those is a
+	// probe's doing. A user-space write into it would be a fabricated syscall
+	// entry that the exit side would complete into a real-looking event.
+	//
+	// It is named here because allseer_maps.h publishes it in the same table as
+	// the other three, and because the runtime tests assert on it: that entries
+	// are gone after a completed open, and gone after one that failed. Those are
+	// claims about the map, and a test cannot make them against a name that is
+	// spelled out at its own call site and nowhere else.
+	MapOpenatScratch = "openat_scratch"
 )
 
 // Program names, as bpf/allseer.bpf.c declares them, for Attach. libbpf
@@ -88,6 +104,28 @@ const (
 	// the other gives a governed process a beginning with no end, which is what
 	// telemetry.ProcessTracker.Untrack has no signal for until both are on.
 	ProgProcExit = "proc_exit"
+
+	// ProgOpenatEnter is the sys_enter_openat program. It emits nothing.
+	//
+	// Named as a probe anyway because it is one: it performs the cgroup filter
+	// decision for every open this object reports, and it is what captures the
+	// path, the flags and the mode. What it does with them is store them, in
+	// openat_scratch, for ProgOpenatExit to complete — the entry has the
+	// arguments and no return, and struct allseer_event has a `ret` field the
+	// header defines as a syscall return.
+	ProgOpenatEnter = "openat_enter"
+
+	// ProgOpenatExit is the sys_exit_openat program, emitting
+	// ALLSEER_EVT_FILE_OPEN.
+	//
+	// A pair in a stronger sense than ProgProcExec and ProgProcExit are, which
+	// are two probes reporting two different things. These two are one probe
+	// split across two hooks by the shape of a syscall, and attaching either
+	// alone yields no events at all rather than half of them: the entry side
+	// never emits, and the exit side emits only what it finds a scratch entry
+	// for. A caller that attaches one and not the other has a blind spot that
+	// looks exactly like a quiet host.
+	ProgOpenatExit = "openat_exit"
 )
 
 const (

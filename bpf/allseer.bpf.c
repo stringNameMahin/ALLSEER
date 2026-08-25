@@ -6,13 +6,11 @@
  * and two filter sets, and sharing one between them means pinning it and
  * agreeing on a bpffs path. Probes are added to this file as they are written.
  *
- * At this point the file declares the maps and one probe: sched_process_exec.
- * The maps are what the probes emit into and are filtered by; the loader that
- * populates and drains them is a separate issue again, so nothing in user space
- * reads what this probe writes yet. That is deliberate ordering rather than an
- * oversight — a probe whose record shape is wrong is cheapest to find before
- * there is a consumer to blame it on, and the object, its programs and its maps
- * are all inspectable with bpftool without a line of Go.
+ * At this point the file declares four maps and four programs: sched_process_exec
+ * and sched_process_exit, which each produce a record on their own, and the
+ * sys_enter_openat / sys_exit_openat pair, which produce one record between
+ * them. The maps are what the probes emit into, are filtered by, and — for the
+ * syscall pair — hold half-built events in between.
  *
  * allseer_event.h is included for a reason that outlives the absence of probes:
  * it is the record ABI, internal/telemetry/abigen derives the Go decoder by
@@ -119,6 +117,33 @@ struct {
 	__type(value, allseer_drop_count_t);
 } ringbuf_drops SEC(".maps");
 
+/* The half-built openat events, held between one thread's sys_enter_openat and
+ * its sys_exit_openat.
+ *
+ * Nothing in user space reads or writes it during operation, unlike the three
+ * maps above: it is kernel-internal state, and telemetry.MapOpenatScratch exists
+ * so the runtime tests can look at it rather than because the loader needs it.
+ *
+ * allseer_maps.h holds the whole contract — why the key is a thread and not a
+ * process, why a thread cannot have two of these at once, why PID reuse needs a
+ * start-time stamp on top of the key, why this one is an LRU where
+ * tracked_cgroups is deliberately not, and every failure path with its answer.
+ * It is written there rather than here because connect will declare a second map
+ * under the same protocol.
+ *
+ * BPF_MAP_TYPE_LRU_HASH and not a per-CPU array, which is the tempting cheap
+ * answer and is wrong twice over. A task can be preempted inside openat and
+ * resume on another CPU, so the exit is not guaranteed to run where the entry
+ * did; and two tasks on one CPU can both be inside openat, so a single per-CPU
+ * slot would have them overwrite each other. The state belongs to a thread, so
+ * it has to be keyed by one. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, ALLSEER_MAX_OPEN_SCRATCH);
+	__type(key, allseer_syscall_key_t);
+	__type(value, struct allseer_open_scratch);
+} openat_scratch SEC(".maps");
+
 /* Required before any program in this object can load. Declared with the maps
  * because it belongs to the object rather than to any one probe, and because
  * the helpers the probes will need — bpf_probe_read_kernel and the task
@@ -162,7 +187,7 @@ static __always_inline void count_ringbuf_drop(void)
 
 /* --- Probes -----------------------------------------------------------------
  *
- * One probe so far. Tracepoints before kprobes, as internal/telemetry states:
+ * Tracepoints before kprobes, as internal/telemetry states:
  * "a stable ABI is worth more than coverage while the design moves". A
  * tracepoint's argument layout is published in
  * /sys/kernel/tracing/events/<group>/<event>/format and is not rearranged by a
@@ -507,6 +532,312 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 	 * recorder, or a future payload member would not, and none of those should
 	 * have to discover that exit records are not clean. */
 	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+
+	bpf_ringbuf_submit(e, 0);
+	return 0;
+}
+
+/* --- The openat pair ---------------------------------------------------------
+ *
+ * Two programs, one event. sys_enter_openat has the arguments and no return;
+ * sys_exit_openat has the return and no arguments; struct allseer_event needs
+ * both, so neither tracepoint can produce a record on its own and the pair is
+ * joined through `openat_scratch`. The protocol — the key, the identity stamp,
+ * the map type, the lifecycle, every failure path — is written down once in
+ * allseer_maps.h, because sys_enter_connect will use the same one.
+ *
+ * The three rules those two programs implement, restated here because they are
+ * what a reader of this file needs to be able to check by eye:
+ *
+ *   1. The entry side decides. It performs the tracked_cgroups lookup, captures
+ *      the cgroup ID it matched on, and puts that value in the record. The exit
+ *      side performs no filter lookup of its own. The presence of a scratch
+ *      entry *is* the entry side's decision, carried forward.
+ *   2. The exit side deletes. Every path that found an entry removes it, and no
+ *      other program removes anything.
+ *   3. No entry, no event. An exit that finds nothing returns. It never
+ *      synthesises a record out of what it has, because what it has is a return
+ *      value and no idea what syscall produced it.
+ *
+ * Rule 1 is what makes the cgroup question answerable. A task can be moved
+ * between cgroups while it sits inside openat, so "which cgroup owns this
+ * event" has two candidate answers and they can differ. The answer taken here is
+ * **the cgroup the task was in when it made the call**, which is the one that
+ * was governed at the moment the process asked for the file. It follows that a
+ * task moved *into* a tracked cgroup mid-syscall produces no event — its entry
+ * was filtered, so there is nothing to complete — and a task moved *out* of one
+ * still produces the event it earned on the way in. Both are the same rule, and
+ * the record's cgroup_id agrees with the lookup that admitted it in every case,
+ * because it is a copy of it rather than a second reading.
+ */
+
+/* sys_enter_openat: a thread is asking to open a path.
+ *
+ * Emits nothing. That is the point of it: the record it would emit has a `ret`
+ * field the header defines as "syscall return; negative is -errno", and at this
+ * instant there is no return — the open has not been attempted. Writing 0 there
+ * would make every failed open decode as Succeeded, and
+ * internal/telemetry/decode.go is explicit that a failed action is a governance
+ * signal in its own right: "the credential-egress fixture turns on it, where a
+ * read of a key that failed with ENOENT must not be treated as a disclosure".
+ * An event emitted here would say the opposite of that, for every open that
+ * failed. So this side captures and stores, and openat_exit below emits.
+ *
+ * The tracepoint's arguments, from its format file, arrive in the generic
+ * syscall context's args array:
+ *
+ *   args[0]  dfd        the directory fd a relative path is resolved against
+ *   args[1]  filename   a pointer into *user* memory
+ *   args[2]  flags      O_RDONLY/O_WRONLY/O_CREAT/...
+ *   args[3]  mode       the creation mode
+ *
+ * dfd is captured nowhere, and that is a decision rather than an oversight. It
+ * is only meaningful joined to the path, and joining them is path resolution —
+ * which the repository has already placed in M6 and which
+ * internal/telemetry/resolve is built around refusing to guess at: it "refuses
+ * to fall back from ResolvedPath to Path precisely so that a pre-resolution path
+ * can never reach selector matching". Carrying a dfd in a record that has no
+ * field for one, or resolving it here against the verifier's loop limits, are
+ * both ways of doing that job badly inside an issue that is not about it. An
+ * open of a relative name therefore arrives unevaluable, which is the
+ * fail-closed direction and is exactly what M6 exists to close.
+ *
+ * The path is read with bpf_probe_read_user_str and not the kernel variant. The
+ * pointer is a user-space address: reading it as a kernel address either faults
+ * and yields nothing, or on an architecture without a split address space reads
+ * whatever kernel memory happens to live at that number and copies it into an
+ * audit record. proc_exec's use of the kernel variant is not a precedent for
+ * this one — its string is inside the tracepoint record, which is kernel memory.
+ */
+SEC("tracepoint/syscalls/sys_enter_openat")
+int openat_enter(struct trace_event_raw_sys_enter *ctx)
+{
+	struct task_struct *task;
+	struct allseer_open_scratch s;
+	allseer_cgroup_id_t cgroup_id;
+	allseer_syscall_key_t key;
+	__u64 pid_tgid, uid_gid;
+
+	/* The filter, first, and before the path is read out of user memory
+	 * rather than after. Every probe in this object carries the same
+	 * obligation — internal/telemetry states it as a standing requirement:
+	 * "the filter is per-probe rather than a property of the object, so every
+	 * tracepoint added after this one has to perform the same lookup or it
+	 * silently reports on cgroups nobody declared."
+	 *
+	 * Here it also buys the most of anywhere it appears. openat is among the
+	 * busiest syscalls on a Linux host, and an untracked one costs a hash
+	 * lookup and a return instead of a 256-byte user-memory read and a map
+	 * insert.
+	 *
+	 * The value this returns is never dereferenced, per the contract
+	 * allseer_maps.h states for the map: "presence in the map is the entire
+	 * signal". */
+	cgroup_id = bpf_get_current_cgroup_id();
+	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
+
+	/* Zeroed in full before anything is written into it. Two reasons, and both
+	 * are load-bearing rather than defensive habit: the verifier refuses to
+	 * copy stack memory into a map unless every byte of it has been written,
+	 * and the path array below is filled by a helper that writes only as far as
+	 * the string goes, so the tail is whatever this stack slot held before —
+	 * which is another process's data, on its way into an audit record. */
+	__builtin_memset(&s, 0, sizeof(s));
+
+	/* The instant the call was made. Copied into the record verbatim by the
+	 * exit side; allseer_maps.h says why it is this instant and not the one the
+	 * syscall returned at. */
+	s.timestamp = bpf_ktime_get_ns();
+
+	pid_tgid = bpf_get_current_pid_tgid();
+	uid_gid = bpf_get_current_uid_gid();
+	task = (struct task_struct *)bpf_get_current_task();
+
+	/* The identity stamp, and the one field here that is not part of the
+	 * record. This is the *calling thread's* start_boottime, which is what
+	 * makes a reused TID detectable at exit. */
+	s.task_start_time = BPF_CORE_READ(task, start_boottime);
+
+	/* struct allseer_proc, in the units the header declares and the same ones
+	 * proc_exec and proc_exit use: pid is the thread group ID, tid the thread,
+	 * ppid the parent's tgid.
+	 *
+	 * start_time is read from the group leader and not from the current task,
+	 * which is the one place this probe differs from the two above it, and it
+	 * differs because it has to. Those two report on a process at a moment when
+	 * the current task is the process — exec installs a new image, exit is
+	 * filtered to the group leader. openat is called by whichever thread wants
+	 * a file, and a worker thread's start_boottime is its own, not its
+	 * process's. Pairing that with proc.pid, which is the tgid, would produce a
+	 * (PID, StartTime) that no other record in the stream carries — and
+	 * event.Process.StartTime exists precisely so that pair identifies a
+	 * process, with telemetry.ProcessTracker keyed on it. Reading the leader
+	 * gives the same value proc_exec recorded for the same process, which is
+	 * what lets a tracker find the session this open belongs to. */
+	s.proc.cgroup_id = cgroup_id;
+	s.proc.start_time = BPF_CORE_READ(task, group_leader, start_boottime);
+	s.proc.pid = (__u32)(pid_tgid >> 32);
+	s.proc.tid = (__u32)pid_tgid;
+	s.proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
+	s.proc.uid = (__u32)uid_gid;
+	s.proc.gid = (__u32)(uid_gid >> 32);
+	s.proc._pad = 0;
+	bpf_get_current_comm(&s.proc.comm, sizeof(s.proc.comm));
+
+	/* The arguments, as supplied. Narrowed to __u32 because that is what
+	 * struct allseer_file_payload declares; openat's flags and mode are an int
+	 * and a mode_t, both 32-bit on every target this ABI supports, so the
+	 * narrowing from the context's unsigned long discards only sign extension.
+	 *
+	 * mode is stored whatever the flags say. It is meaningful only when the
+	 * flags permit creation, and the record reports what the process passed
+	 * rather than substituting a zero it did not pass — the decoder is where
+	 * flags decide meaning, and kindForOpenFlags already does exactly that. */
+	s.flags = (__u32)ctx->args[2];
+	s.mode = (__u32)ctx->args[3];
+
+	/* The pathname, out of user memory, bounded by the destination.
+	 *
+	 * bpf_probe_read_user_str NUL-terminates within the destination even when
+	 * it truncates, so a path longer than ALLSEER_PATH_MAX arrives as a
+	 * terminated prefix and abi.CString reports it as whole. That is the same
+	 * behaviour proc_exec's filename has and the same gap: the decoder's
+	 * ErrTruncatedString detects an array with no NUL in it, which this helper
+	 * never produces. Carrying truncation on the wire is the open TODO(event)
+	 * in internal/telemetry/decode.go and is a record-layout change, not a
+	 * probe change.
+	 *
+	 * The return is deliberately not checked. On failure — an unmapped or
+	 * paged-out user address — the field keeps the zero the memset left, and
+	 * the entry is stored regardless: the syscall happened, the process that
+	 * made it is known, and refusing to report a real open because one field
+	 * could not be read would hide the event entirely. An empty path means the
+	 * read failed; it cannot mean a process opened nothing. */
+	bpf_probe_read_user_str(&s.path, sizeof(s.path), (const char *)ctx->args[1]);
+
+	/* BPF_ANY, so this thread's previous entry — if it has one, which means an
+	 * exit it never reached — is replaced rather than kept. That is what makes
+	 * an orphaned entry self-healing for a thread that is still alive.
+	 *
+	 * The return is not checked because there is nothing to do with it. An LRU
+	 * hash does not fail for want of room; a failure here is ENOMEM, and the
+	 * consequence is that the exit finds nothing and emits nothing, which is
+	 * already the documented behaviour of a missing entry. Nothing is reserved
+	 * yet, so no record has been lost and ringbuf_drops must not move: that
+	 * counter is defined as counting reservation failures and nothing else. */
+	key = pid_tgid;
+	bpf_map_update_elem(&openat_scratch, &key, &s, BPF_ANY);
+	return 0;
+}
+
+/* sys_exit_openat: the open has returned, and the record can be completed.
+ *
+ * This is the side that emits, and the only thing it contributes to the record
+ * is `ret`. Everything else — the timestamp, the identity, the cgroup, the path,
+ * the flags, the mode — is copied out of the scratch entry the entry side wrote,
+ * unexamined and unrecomputed. That is rule 1 above: one decision, made once,
+ * carried forward.
+ *
+ * It performs no tracked_cgroups lookup. Doing so would be a second, independent
+ * governance decision on a task whose cgroup may have changed since the call was
+ * made, and the two decisions can disagree — which is how a record ends up
+ * carrying a cgroup_id that is not the one that admitted it. The absence of that
+ * lookup is not a hole in the filter: an untracked caller's entry side stored
+ * nothing, so there is no entry here to find, and the lookup below is what
+ * enforces the filter on this side.
+ */
+SEC("tracepoint/syscalls/sys_exit_openat")
+int openat_exit(struct trace_event_raw_sys_exit *ctx)
+{
+	struct allseer_open_scratch *s;
+	struct task_struct *task;
+	struct allseer_event *e;
+	allseer_syscall_key_t key;
+
+	/* No entry, no event, and no further work. This is where an untracked
+	 * cgroup is rejected on this side — not by a filter lookup, but by the
+	 * absence of the state a filter lookup on the other side would have
+	 * produced. */
+	key = bpf_get_current_pid_tgid();
+	s = bpf_map_lookup_elem(&openat_scratch, &key);
+	if (!s)
+		return 0;
+
+	/* The entry is keyed by a thread ID, and thread IDs are reused. This is the
+	 * check that keeps a dead thread's entry from being completed by whatever
+	 * thread inherits its number — see PID reuse in allseer_maps.h for the
+	 * shape of the case, which ends in an untracked process producing a
+	 * governed event.
+	 *
+	 * A mismatch deletes. The entry is provably stale: its thread is gone, and
+	 * leaving it would let the next reuse of this TID try the same thing. */
+	task = (struct task_struct *)bpf_get_current_task();
+	if (BPF_CORE_READ(task, start_boottime) != s->task_start_time) {
+		bpf_map_delete_elem(&openat_scratch, &key);
+		return 0;
+	}
+
+	/* Reserved and filled in place, as everywhere in this object: the record is
+	 * 856 bytes and the eBPF stack is 512.
+	 *
+	 * A failed reservation deletes the entry before returning. The scratch
+	 * entry has served its purpose the moment this program has looked at it,
+	 * and a path that returned early without deleting would leave an orphan for
+	 * every record lost — which is exactly the moment the host is already
+	 * struggling. Deleting here is what makes "the exit side owns deletion"
+	 * true on every path rather than on the happy one. */
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e) {
+		count_ringbuf_drop();
+		bpf_map_delete_elem(&openat_scratch, &key);
+		return 0;
+	}
+
+	e->timestamp = s->timestamp;
+	e->type = ALLSEER_EVT_FILE_OPEN;
+
+	/* The one field this side owns. The tracepoint's `ret` is a long because
+	 * every syscall's return goes through this context; openat's is an int — a
+	 * file descriptor or a negative errno — so narrowing to the __s32 the header
+	 * declares is exact for every value openat can produce.
+	 *
+	 * Written as it is, negative and all. internal/telemetry/decode.go turns
+	 * that into event.Result: "ret >= 0" is Succeeded, and a negative value is
+	 * rendered as an errno name. A failed open is a governance signal, not an
+	 * absence of one. */
+	e->ret = (__s32)ctx->ret;
+	e->version = ALLSEER_ABI_VERSION;
+	e->_pad = 0;
+
+	/* Identity as it was when the call was made, copied rather than re-read.
+	 * Re-reading it here would mostly agree — it is the same task — and
+	 * "mostly" is the problem: a reparented process's ppid changes underneath a
+	 * blocking open, and the record would then describe an ancestry the process
+	 * did not have when it acted. */
+	e->proc = s->proc;
+
+	/* Reserved space is not zeroed; it is whatever the ring held before. The
+	 * union is cleared once rather than field by field, because the file
+	 * payload is smaller than the union and an unwritten tail is the previous
+	 * record's argv or peer address handed to a decoder. */
+	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+
+	/* inode, device and bytes are left at the zero the memset gave them. The
+	 * header defines them for the file payload, but openat's tracepoints carry
+	 * none of them: the inode is not chosen until the path has been resolved
+	 * inside the kernel, and there are no bytes yet on an open. Writing a
+	 * plausible zero into a field the record cannot answer for would be a claim
+	 * about a file this probe never saw. */
+	e->payload.file.flags = s->flags;
+	e->payload.file.mode = s->mode;
+	bpf_probe_read_kernel(&e->payload.file.path, sizeof(e->payload.file.path), s->path);
+
+	/* Deleted before the submit, and unconditionally. Once the bytes are in the
+	 * reserved record the entry has nothing left to contribute, and this
+	 * ordering means the only statement to make about the map afterwards is the
+	 * simple one: after an exit that found an entry, there is no entry. */
+	bpf_map_delete_elem(&openat_scratch, &key);
 
 	bpf_ringbuf_submit(e, 0);
 	return 0;

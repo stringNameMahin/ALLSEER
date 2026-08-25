@@ -268,15 +268,14 @@ type Config struct {
 // SourceStats.DroppedEvents or into Event.Dropped, because that is Collector's
 // and Collector does not exist.
 
-// TODO(telemetry): write the remaining eBPF programs as tracepoints
-// (sys_enter_openat, sys_enter_connect). Tracepoints before kprobes: a stable
-// ABI is worth more than coverage while the design moves. Both remaining ones
-// are syscall tracepoints rather than scheduler ones, which is a different
-// shape of problem from the two that are written: the entry carries the
-// arguments and no return, the exit carries the return and no arguments, so
-// each needs the two paired through a per-task scratch map before it can fill
-// the `ret` field the header defines. That pairing is one design and both
-// probes use it, so it should be settled once.
+// TODO(telemetry): write the last of the four eBPF programs as a tracepoint
+// pair: sys_enter_connect and sys_exit_connect. Tracepoints before kprobes: a
+// stable ABI is worth more than coverage while the design moves. The pairing it
+// needs is settled — see the Done entry below — so what is left is the payload:
+// reading a sockaddr out of user memory, deciding what an AF_UNIX connect means
+// against a catalog that lists `connect` under both net.connect and
+// ipc.unixsocket, and declaring a `connect_scratch` map of its own shape under
+// the protocol allseer_maps.h now writes down.
 // Done, for the first of the four: sched_process_exec is implemented in
 // bpf/allseer.bpf.c as the program `proc_exec`, under
 // SEC("tracepoint/sched/sched_process_exec"). It emits ALLSEER_EVT_PROC_EXEC
@@ -319,6 +318,58 @@ type Config struct {
 // syscall return and task->exit_code is an encoded wait status — carrying
 // whether a governed agent's build failed needs a field of its own, which is a
 // record-layout change.
+// Done, for the third of the four, and for the mechanism the fourth will reuse:
+// openat is implemented in bpf/allseer.bpf.c as a *pair* of programs,
+// `openat_enter` under SEC("tracepoint/syscalls/sys_enter_openat") and
+// `openat_exit` under SEC("tracepoint/syscalls/sys_exit_openat"), emitting one
+// ALLSEER_EVT_FILE_OPEN between them. A syscall's arguments and its return are
+// on opposite sides of the call: the entry has the path, the flags and the mode
+// and no outcome; the exit has the outcome and no arguments. struct
+// allseer_event needs both, and emitting at entry would mean writing something
+// into `ret` — a field the header defines as "syscall return; negative is
+// -errno" — before there is a return, which would make every failed open decode
+// as Succeeded.
+// The pairing is a scratch map, `openat_scratch`, and its contract is written
+// down in bpf/include/allseer_maps.h rather than at the probe, because connect
+// will declare a second map under the same protocol. The decisions, in short:
+//   - the key is bpf_get_current_pid_tgid(), the thread, because a thread is
+//     what enters a syscall and is inside at most one at a time. No two openats
+//     from one thread can overlap, so the key needs no sequence number.
+//   - a TID is reused, so the key alone is not enough. Every entry carries the
+//     calling thread's start_boottime and the exit side compares it against the
+//     thread it is running on. Without that check a thread killed inside openat
+//     leaves an entry that a later, possibly *untracked*, holder of its TID
+//     would complete — an untracked cgroup producing a governed event.
+//   - BPF_MAP_TYPE_LRU_HASH, which is the opposite of the choice made for
+//     tracked_cgroups and for the opposite reason. That map holds user-space
+//     policy, where eviction silently un-governs a session; this one holds
+//     kernel-owned ephemeral state, where a plain hash filled with orphans from
+//     killed tasks would reject every insert forever and stop openat being
+//     observed at all. Eviction costs one event; the alternative costs all of
+//     them.
+//   - the entry side decides and the exit side obeys. The cgroup lookup happens
+//     once, at entry, and the ID it matched on is the one in the record — so a
+//     task moved between cgroups mid-syscall cannot produce a record whose
+//     attribution and whose reason for existing disagree. The event belongs to
+//     the cgroup the task was in when it made the call.
+//   - the exit side owns deletion and deletes on every path that found an entry:
+//     the identity check failing, the reservation failing, and the record being
+//     submitted alike.
+//   - no entry, no event. An exit that finds nothing returns, and never
+//     synthesises a record from the one field it holds.
+// The path is captured with bpf_probe_read_user_str, because the pointer is a
+// user-space address — proc_exec's kernel-side read is not a precedent for it —
+// and is stored as the process supplied it. It is not joined to dirfd and not
+// resolved: that is M6's, and internal/telemetry/resolve already refuses to fall
+// back to an unresolved path, so a relative open arrives unevaluable rather than
+// wrongly evaluated. Truncation behaves as proc_exec's filename does — a
+// terminated prefix, which abi.CString cannot distinguish from a whole path, and
+// which the TODO(event) in decode.go is the fix for.
+// One gap is stated rather than left to be found: an open whose correlation is
+// lost — to eviction, or to a scratch update that failed — produces no event and
+// nothing counts it. It is not folded into ringbuf_drops, which is defined as
+// counting reservation failures; the TODO at the foot of allseer_maps.h is what
+// would close it, and it waits on Collector because a counter needs a consumer.
 // Done: kernel-side cgroup filtering is implemented in bpf/allseer.bpf.c.
 // proc_exec looks the current cgroup ID up in `tracked_cgroups` before it
 // reserves anything, so an exec in an undeclared cgroup costs a hash lookup and
