@@ -71,10 +71,24 @@ const (
 	MapRingbufDrops = "ringbuf_drops"
 )
 
-// ProgProcExec is the sched_process_exec program in bpf/allseer.bpf.c, named
-// for Attach. libbpf resolves the attach point from the program's SEC(), so the
-// tracepoint is named in one place — the C file — and not restated here.
-const ProgProcExec = "proc_exec"
+// Program names, as bpf/allseer.bpf.c declares them, for Attach. libbpf
+// resolves the attach point from each program's SEC(), so the tracepoint is
+// named in one place — the C file — and not restated here.
+//
+// Attaching is per program and the caller chooses which: the loader has no list
+// of "all probes" and deliberately does not honour Config.EnabledProbes, for
+// the reason recorded at the foot of this file.
+const (
+	// ProgProcExec is the sched_process_exec program, emitting
+	// ALLSEER_EVT_PROC_EXEC.
+	ProgProcExec = "proc_exec"
+
+	// ProgProcExit is the sched_process_exit program, emitting
+	// ALLSEER_EVT_PROC_EXIT. The pair to ProgProcExec: attaching one without
+	// the other gives a governed process a beginning with no end, which is what
+	// telemetry.ProcessTracker.Untrack has no signal for until both are on.
+	ProgProcExit = "proc_exit"
+)
 
 const (
 	// ringBufferPollMS is how long libbpf waits in epoll before checking

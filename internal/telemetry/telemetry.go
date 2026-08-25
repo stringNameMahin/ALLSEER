@@ -270,8 +270,14 @@ type Config struct {
 
 // TODO(telemetry): write the remaining eBPF programs as tracepoints
 // (sys_enter_openat, sys_enter_connect). Tracepoints before kprobes: a stable
-// ABI is worth more than coverage while the design moves.
-// Done, for the first of the three: sched_process_exec is implemented in
+// ABI is worth more than coverage while the design moves. Both remaining ones
+// are syscall tracepoints rather than scheduler ones, which is a different
+// shape of problem from the two that are written: the entry carries the
+// arguments and no return, the exit carries the return and no arguments, so
+// each needs the two paired through a per-task scratch map before it can fill
+// the `ret` field the header defines. That pairing is one design and both
+// probes use it, so it should be settled once.
+// Done, for the first of the four: sched_process_exec is implemented in
 // bpf/allseer.bpf.c as the program `proc_exec`, under
 // SEC("tracepoint/sched/sched_process_exec"). It emits ALLSEER_EVT_PROC_EXEC
 // carrying struct allseer_exec_payload, reserving the record in the `events`
@@ -290,6 +296,29 @@ type Config struct {
 // first place. Selector.ArgPatterns is already documented as "a convenience for
 // readable envelopes, not a security boundary", so the gap costs convenience and
 // not a control.
+// Done, for the second of the four: sched_process_exit is implemented in
+// bpf/allseer.bpf.c as the program `proc_exit`, under
+// SEC("tracepoint/sched/sched_process_exit"), emitting ALLSEER_EVT_PROC_EXIT.
+// It is the pair to proc_exec and the reason it comes before the two syscall
+// probes is that without it a governed process has a beginning and no end:
+// ProcessTracker.Untrack is declared as "removes a process on exit" and had
+// nothing to call it, and a (PID, StartTime) pair cannot be retired until
+// something observes the death that frees the number. The two records agree on
+// that pair by construction — exec does not replace the task_struct, so
+// start_boottime is the same value read twice — and the runtime tests assert it
+// rather than assuming it.
+// It reads nothing at all from the tracepoint context. Identity comes from the
+// same helpers and the same CO-RE walks proc_exec uses, so there is no context
+// layout this probe can be wrong about.
+// Two limits are stated at the probe and carried as TODOs in the C file rather
+// than left to be discovered. The tracepoint fires per thread and the probe
+// emits only on the thread group leader, which is one record per process with
+// the right identity but fires early in the one case where a leader exits while
+// its siblings run on; `group_dead` is the exact signal and reading it is a
+// portability trade. And `ret` is written 0, because the header defines it as a
+// syscall return and task->exit_code is an encoded wait status — carrying
+// whether a governed agent's build failed needs a field of its own, which is a
+// record-layout change.
 // Done: kernel-side cgroup filtering is implemented in bpf/allseer.bpf.c.
 // proc_exec looks the current cgroup ID up in `tracked_cgroups` before it
 // reserves anything, so an exec in an undeclared cgroup costs a hash lookup and
@@ -301,7 +330,11 @@ type Config struct {
 // nothing — the correct direction to fail in, but not an obvious one from the
 // Go side. And the filter is per-probe rather than a property of the object, so
 // every tracepoint added after this one has to perform the same lookup or it
-// silently reports on cgroups nobody declared.
+// silently reports on cgroups nobody declared. proc_exit, the first probe added
+// after it, does perform the lookup and does it first, and
+// TestRuntimeUntrackedCgroupProducesNoExitEvent is what proves it rather than
+// the reviewer's eye. The same now goes for count_ringbuf_drop, which is a
+// second per-probe obligation of exactly the same shape.
 // Done, in its first half: the Go view of the ABI is generated from
 // bpf/include/allseer_event.h by internal/telemetry/abigen into
 // internal/telemetry/abi. Sizes, offsets, the event-type enum, the struct

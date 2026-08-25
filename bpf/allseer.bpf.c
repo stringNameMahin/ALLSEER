@@ -60,20 +60,31 @@ struct {
 	__uint(max_entries, ALLSEER_RINGBUF_BYTES);
 } events SEC(".maps");
 
-/* The set of cgroups worth reporting on, written from user space through
- * telemetry.Loader.UpdateMap.
+/* The set of cgroups worth reporting on, whose membership user space controls
+ * through telemetry.Loader.UpdateMap and telemetry.Loader.DeleteMap.
  *
- * The map exists here and no probe consults it. That stays true with the exec
- * probe below written: consulting it is the filtering issue, and the map is
- * empty until the loader exists to populate it, so a lookup added now would
- * reject every event on a machine where nothing has been declared governed —
- * which is a probe that reports nothing, tested against a filter that has never
- * had a member. What the map is for is stated in the Loader contract: filtering
- * happens in the kernel "rather than costing a userspace round trip per event".
- * An untracked process should cost a lookup and a return, not a ring buffer
- * reservation, a wakeup, a decode and a discard. Until that lands, this object
- * reports every exec on the host, which is the reason the filtering issue is
- * the next one and not a later one.
+ * proc_exec below consults it, and it is the first thing that probe does. What
+ * the map is for is stated in the Loader contract: filtering happens in the
+ * kernel "rather than costing a userspace round trip per event". An untracked
+ * process costs a lookup and a return, not a ring buffer reservation, a wakeup,
+ * a decode and a discard.
+ *
+ * Both ends now exist. telemetry.BPFLoader adds a cgroup with UpdateMap and
+ * removes one with DeleteMap, and removal is a delete rather than a zeroed
+ * value because presence is the entire signal — the lookup below is tested for
+ * NULL and never dereferenced, so there is nothing a value could say. Those two
+ * calls are the whole of how a session becomes governed and stops being
+ * governed.
+ *
+ * What an empty map means is worth being explicit about, because it is the
+ * state this object is in until user space says otherwise: no cgroup has been
+ * declared governed, so every event misses the filter and nothing is reported.
+ * That is the direction to fail in. Reporting on a cgroup nobody asked about
+ * would be surveillance the system has no mandate for, and the opposite default
+ * — report everything until told otherwise — is the one that cannot be undone
+ * after the fact. Silence here is a filter with no members, not a probe that is
+ * failing to fire, and telemetry.Loader.ReadCounter is what distinguishes a
+ * host that observed nothing from one that lost what it observed.
  *
  * BPF_MAP_TYPE_HASH and not BPF_MAP_TYPE_LRU_HASH. An LRU map evicts under
  * pressure, and an evicted entry here does not degrade anything visibly — it
@@ -347,6 +358,160 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	return 0;
 }
 
+/* sched_process_exit: a task is leaving.
+ *
+ * The pair to proc_exec above, and the reason it is worth having is not that an
+ * exit is interesting on its own — pkg/capability rates process.exit
+ * SeverityInfo — but that without it a governed process has a beginning and no
+ * end. telemetry.ProcessTracker.Untrack is declared as "removes a process on
+ * exit" and has nothing to call it; internal/session/dispatch.go names PID reuse
+ * as what a tracker keyed on (PID, StartTime) exists to prevent, and a pair
+ * cannot be retired until something observes the death that frees the number.
+ *
+ * Nothing is read from the tracepoint context. That is not a shortcut, it is the
+ * whole of what this probe needs: identity comes from the same helpers and the
+ * same CO-RE task_struct walks proc_exec already uses, and comm, pid and prio in
+ * the context are either duplicated by a helper or not carried by the record at
+ * all. A probe that reads no context field cannot be broken by a context layout
+ * this object was not compiled against, which is the stable-ABI argument for
+ * tracepoints taken to its conclusion.
+ *
+ * # One event per process, not one per thread
+ *
+ * This tracepoint fires for every thread. A record per thread would report a
+ * ten-thread process exiting ten times, and a tracker acting on those would
+ * untrack a live process nine times before it died.
+ *
+ * The filter is pid == tid — the thread group leader — read from the one helper
+ * proc_exec already uses for both halves. It is the leader that carries the
+ * process's identity: `pid` in struct allseer_proc is documented as the thread
+ * group ID, and start_boottime read from the leader is the same value proc_exec
+ * recorded for the same process, which is what makes (pid, start_time) match
+ * across the two events.
+ *
+ * The narrow case this gets wrong is worth stating rather than leaving to be
+ * found. A group leader that exits while its siblings keep running — a bare
+ * pthread_exit from main — becomes a zombie without ending the process, and this
+ * probe reports an exit for a process that is still alive. The kernel does
+ * distinguish the two: this tracepoint carries `group_dead`, true only on the
+ * last thread of the group, which is the precise signal. It is not read here for
+ * one reason, and it is a portability reason rather than a preference: the field
+ * is a recent addition to the context, so reading it means either requiring a
+ * kernel that has it or carrying a bpf_core_field_exists branch and a fallback —
+ * and the fallback would be this comparison anyway. See the TODO at the foot of
+ * this file.
+ *
+ * # What is not carried
+ *
+ * The exit status. `ret` is written 0, and the header defines that field as
+ * "syscall return; negative is -errno" — a definition a process exit does not
+ * fit. task->exit_code is an encoded wait status, a shifted exit code or a
+ * signal number in the low bits, and putting it in `ret` unshifted would make
+ * exit(1) decode as ReturnCode 256 and Succeeded true, because
+ * internal/telemetry/decode.go reads ret >= 0 as success. Writing 0 says the
+ * one thing that is true of every record here — the task exited — and says
+ * nothing that is false. Carrying the status honestly needs a field of its own,
+ * which is a record-layout change; see the TODO at the foot of this file.
+ *
+ * No payload member is designated for an exit and none is written.
+ * internal/telemetry/decode.go states the same thing from the other side: "No
+ * union member is designated for an exit, so none is read. The process identity
+ * and the return are the whole record, and both are already decoded."
+ */
+SEC("tracepoint/sched/sched_process_exit")
+int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
+{
+	struct task_struct *task;
+	struct allseer_event *e;
+	allseer_cgroup_id_t cgroup_id;
+	__u64 pid_tgid, uid_gid;
+
+	/* The filter, and the first thing this probe does — the same obligation
+	 * proc_exec carries and for the same reason. internal/telemetry states it
+	 * as a standing requirement on every probe added after the first: "the
+	 * filter is per-probe rather than a property of the object, so every
+	 * tracepoint added after this one has to perform the same lookup or it
+	 * silently reports on cgroups nobody declared."
+	 *
+	 * First, ahead of the cheaper thread-leader comparison below, deliberately.
+	 * Ordering the comparison first would skip a hash lookup for every
+	 * non-leader thread, which is a real saving on a threaded process — and it
+	 * would also mean that "no untracked cgroup is ever observed" could no
+	 * longer be checked by reading the top of each probe. The invariant is
+	 * worth more than the lookup.
+	 *
+	 * The task is still in its cgroup here: this tracepoint fires from do_exit
+	 * before the task is dissociated from it, so bpf_get_current_cgroup_id()
+	 * answers with the cgroup the process lived in. That ordering is a property
+	 * of the kernel and not of this file, which is why the test that proves it
+	 * is a runtime one. */
+	cgroup_id = bpf_get_current_cgroup_id();
+	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
+
+	/* One record per process. See the comment above the function: every thread
+	 * reaches this tracepoint and only the group leader carries the identity
+	 * the record is about. */
+	pid_tgid = bpf_get_current_pid_tgid();
+	if ((__u32)(pid_tgid >> 32) != (__u32)pid_tgid)
+		return 0;
+
+	/* Reserved and filled in place, and counted when it cannot be. Identical to
+	 * proc_exec, including the reason: the record is larger than the eBPF stack,
+	 * and a reservation that fails is a lost record that only ringbuf_drops can
+	 * make visible. */
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e) {
+		count_ringbuf_drop();
+		return 0;
+	}
+
+	e->timestamp = bpf_ktime_get_ns();
+	e->type = ALLSEER_EVT_PROC_EXIT;
+	e->ret = 0;
+	e->version = ALLSEER_ABI_VERSION;
+	e->_pad = 0;
+
+	uid_gid = bpf_get_current_uid_gid();
+	task = (struct task_struct *)bpf_get_current_task();
+
+	/* The same fields, read the same way, in the same units as proc_exec. That
+	 * is what makes the two records comparable: start_boottime does not change
+	 * over a task's life and exec does not replace the task_struct, so the
+	 * (pid, start_time) pair here is the pair the exec record carried for the
+	 * same process — which is exactly the pair event.Process.StartTime is
+	 * documented to make unique.
+	 *
+	 * pid and tid are equal by the filter above and both are written anyway,
+	 * because struct allseer_proc declares both and a field left holding old
+	 * ring contents is worse than a field holding a value that happens to be
+	 * predictable.
+	 *
+	 * real_parent is read rather than parent: the tracepoint fires before
+	 * exit_notify reparents the task, so this is still the process that forked
+	 * it. */
+	e->proc.cgroup_id = cgroup_id;
+	e->proc.start_time = BPF_CORE_READ(task, start_boottime);
+	e->proc.pid = (__u32)(pid_tgid >> 32);
+	e->proc.tid = (__u32)pid_tgid;
+	e->proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
+	e->proc.uid = (__u32)uid_gid;
+	e->proc.gid = (__u32)(uid_gid >> 32);
+	e->proc._pad = 0;
+	bpf_get_current_comm(&e->proc.comm, sizeof(e->proc.comm));
+
+	/* Zeroed even though nothing reads it. Reserved space is whatever the ring
+	 * held before, so skipping this would submit a record carrying 776 bytes of
+	 * the previous event — a path, an argv, a peer address — under a type that
+	 * declares no payload. The decoder ignores it today; a raw-record dump, a
+	 * recorder, or a future payload member would not, and none of those should
+	 * have to discover that exit records are not clean. */
+	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+
+	bpf_ringbuf_submit(e, 0);
+	return 0;
+}
+
 /* --- BTF anchor -------------------------------------------------------------
  *
  * Not read by anything in the kernel. It exists so that `struct allseer_event`
@@ -372,3 +537,25 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
  * give for free; the version needs a read-only global carrying a value, and
  * that remains open. */
 struct allseer_event *_allseer_record_btf_anchor;
+
+/* --- Open items -------------------------------------------------------------
+ *
+ * TODO(bpf): carry a task's exit status. proc_exit writes ret = 0 because the
+ * header defines `ret` as "syscall return; negative is -errno" and a process
+ * exit is not a syscall return: task->exit_code is an encoded wait status, and
+ * writing it into that field would make exit(1) decode as ReturnCode 256 with
+ * Succeeded true. Whether a governed agent's build failed is a governance fact
+ * worth having, so this wants a field of its own — a __s32 exit_status, or an
+ * exit payload member — which is a record-layout change and so belongs with the
+ * other open ABI edits rather than inside a probe issue.
+ *
+ * TODO(bpf): use `group_dead` to decide when a process has exited. proc_exit
+ * emits on the thread group leader, which is one record per process and the
+ * right identity, but fires early in the one case where the leader exits and
+ * its siblings keep running. The tracepoint context carries `group_dead`, true
+ * only on the last thread of the group, which answers the question exactly.
+ * Reading it needs a bpf_core_field_exists guard and a fallback for kernels
+ * whose context predates the field — and the fallback is the comparison already
+ * written — so it is a portability decision with a measurable cost, not a
+ * one-line fix.
+ */
