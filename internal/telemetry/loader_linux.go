@@ -49,6 +49,8 @@ import (
 	"unsafe"
 
 	bpf "github.com/aquasecurity/libbpfgo"
+
+	"github.com/stringNameMahin/ALLSEER/internal/telemetry/abi"
 )
 
 // Map names, as bpf/include/allseer_maps.h publishes them. That header is the
@@ -294,6 +296,17 @@ func NewLoader(cfg Config, decoder Decoder) *BPFLoader {
 //     which a mismatch costs nothing — no probes are running and no events have
 //     been believed".
 //
+//  3. The object was compiled against the same ALLSEER_ABI_VERSION this binary
+//     decodes, read out of the read-only `allseer_abi_version` global in its
+//     .rodata. The pair to (2) rather than a repeat of it: a size comparison
+//     cannot see a layout that kept its size and changed meaning, which is the
+//     case bpf/include/allseer_event.h says "decode[s] without complaint into
+//     confident nonsense".
+//
+// All three happen before bpf.NewModuleFromFile, so an object that fails any of
+// them is never opened, never loaded, and cannot be attached: Attach requires a
+// module, and Load leaves none behind when it returns an error.
+//
 // The context is honoured at entry only. libbpf's open and load are synchronous
 // C calls with no cancellation, and returning early while they run would leave
 // an object nobody owns.
@@ -316,6 +329,9 @@ func (l *BPFLoader) Load(ctx context.Context, objectPath string) error {
 		return err
 	}
 	if err := checkRecordLayout(objectPath, l.decoder.EventSize()); err != nil {
+		return err
+	}
+	if err := checkABIVersion(objectPath, abi.ABIVersion); err != nil {
 		return err
 	}
 	if err := validateRingBufferSize(l.cfg.RingBufferSize); err != nil {

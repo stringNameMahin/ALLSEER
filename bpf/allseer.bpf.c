@@ -184,6 +184,36 @@ struct {
  * accessors among them — are GPL-only and refuse to verify without it. */
 char LICENSE[] SEC("license") = "GPL";
 
+/* The record ABI version this object was compiled against.
+ *
+ * The value of ALLSEER_ABI_VERSION, placed where a loader can read it out of
+ * the file before a single program reaches the kernel. That is the whole
+ * purpose: allseer_event.h explains that the version field in each record "is
+ * the backstop, not the mechanism: it reports the mismatch one event at a time,
+ * after the probes are already running, which is later than the loader could
+ * have known". This declaration is the mechanism, and
+ * telemetry.checkABIVersion is what reads it.
+ *
+ * `const` and not `const volatile`. Both land in .rodata and both are frozen by
+ * libbpf after load, but `const volatile` is the libbpf idiom for a global the
+ * *loader* fills in before load — a tunable — and this is the opposite of a
+ * tunable. It is a fact about the compiled object, and a loader that could
+ * write it could only ever write over the mismatch it exists to detect.
+ *
+ * Nothing in this object reads it, and nothing should. A probe comparing this
+ * against a version from somewhere else would be re-deciding, on the hot path
+ * and with nowhere to log it, a question the loader already refused to start
+ * on.
+ *
+ * External linkage rather than static, because a static that nothing references
+ * is a variable the compiler is free to discard, and a version the object drops
+ * for being unused reads to the loader exactly like a version it never had. The
+ * symbol is what carries the value's offset within .rodata: BTF names the
+ * variable and its size, but its DATASEC offset is zero in an unlinked object
+ * and is fixed up from .rel.BTF, so the ELF symbol table is where the loader
+ * looks. internal/telemetry/rodata.go records that in more detail. */
+const __u32 allseer_abi_version = ALLSEER_ABI_VERSION;
+
 /* --- Helpers ----------------------------------------------------------------
  */
 
@@ -1221,8 +1251,10 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
  *
  * This is half of the TODO in allseer_event.h, which asks for the ABI version
  * to be exposed the same way. The size is the half a struct declaration can
- * give for free; the version needs a read-only global carrying a value, and
- * that remains open. */
+ * give for free; the version needed a read-only global carrying a value, and
+ * `allseer_abi_version` above is now that global. The two are complementary and
+ * neither subsumes the other: this anchor catches a layout that changed size,
+ * and the version catches one that kept its size and changed meaning. */
 struct allseer_event *_allseer_record_btf_anchor;
 
 /* --- Open items -------------------------------------------------------------

@@ -244,11 +244,15 @@ type Config struct {
 // fixtures are in test/testdata/replay.
 
 // Done: Loader is implemented in loader_linux.go as BPFLoader, over libbpfgo,
-// behind `//go:build linux && ebpf`. Load establishes the two things that must
-// be true before any event is believed — a cgroup2 hierarchy exists, and the
-// object's record layout matches Decoder.EventSize, read from the object's BTF
-// — and refuses to open anything if either fails, which is the only point at
-// which a mismatch costs nothing. RingBuffer returns raw records and decodes
+// behind `//go:build linux && ebpf`. Load establishes the three things that
+// must be true before any event is believed — a cgroup2 hierarchy exists, the
+// object's record layout matches Decoder.EventSize, read from the object's BTF,
+// and the object was compiled against the ALLSEER_ABI_VERSION this binary
+// decodes, read from the read-only `allseer_abi_version` global in its .rodata
+// — and refuses to open anything if any of them fails, which is the only point
+// at which a mismatch costs nothing. The last two are a pair rather than a
+// repetition: the size catches a layout that changed size, the version catches
+// one that kept its size and changed meaning. RingBuffer returns raw records and decodes
 // none of them; UpdateMap and DeleteMap are how tracked_cgroups is populated
 // and unpopulated, with key and value widths checked against the loaded map
 // because nothing else can check them. DetachAll and Close are idempotent. The

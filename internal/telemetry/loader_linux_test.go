@@ -163,6 +163,104 @@ func TestLoadRefusesLayoutDrift(t *testing.T) {
 	}
 }
 
+// The version the object was compiled against must stop the load too, and it
+// must stop it for a reason the size check cannot see: the fixture is the real
+// object with four bytes changed, so its record layout still matches exactly.
+//
+// Needs the compiled object and not privilege. Load refuses before it opens
+// anything, which is the property under test.
+func TestLoadRefusesABIVersionDrift(t *testing.T) {
+	l := NewLoader(Config{}, nil)
+	defer l.Close()
+
+	err := l.Load(context.Background(), objectWithABIVersion(t, abi.ABIVersion+1))
+	if !errors.Is(err, ErrABIVersionDrift) {
+		t.Fatalf("Load with a mismatched ABI version = %v, want ErrABIVersionDrift", err)
+	}
+}
+
+// An object whose version cannot be read is refused rather than treated as
+// version zero. The fixture is the real object with the symbol renamed, which
+// is what an object built from a source that dropped the global — or a
+// different program altogether — looks like to the check, and it reaches the
+// version check because everything the earlier checks look at is intact.
+func TestLoadRefusesAnObjectWithNoABIVersion(t *testing.T) {
+	l := NewLoader(Config{}, nil)
+	defer l.Close()
+
+	err := l.Load(context.Background(), objectWithoutABIVersion(t))
+	if !errors.Is(err, ErrNoObjectGlobal) {
+		t.Fatalf("Load with no version global = %v, want ErrNoObjectGlobal", err)
+	}
+	if errors.Is(err, ErrABIVersionDrift) {
+		t.Error("a missing global was reported as a version disagreement")
+	}
+}
+
+// The ordering claim, made as an assertion rather than left to a reading of
+// Load: a version mismatch is found before any program is attached, and before
+// any object exists to attach one to.
+//
+// Attach returning ErrNotLoaded is the strongest form of that available from
+// outside — it means the refused Load left no module behind, so there was never
+// anything an attach could have run against. The module field is checked too,
+// because a loader in this package can see it and "no module" is the fact the
+// ordering rests on.
+//
+// Deliberately not a root test. If this needed privilege it would skip on the
+// hosts most likely to be running a stale object, which is the case it exists
+// for.
+func TestABIVersionIsCheckedBeforeAnyProgramIsAttached(t *testing.T) {
+	ctx := context.Background()
+	l := NewLoader(Config{}, nil)
+	defer l.Close()
+
+	if err := l.Load(ctx, objectWithABIVersion(t, abi.ABIVersion+1)); !errors.Is(err, ErrABIVersionDrift) {
+		t.Fatalf("Load = %v, want ErrABIVersionDrift", err)
+	}
+
+	l.mu.Lock()
+	module := l.module
+	links := len(l.links)
+	l.mu.Unlock()
+	if module != nil {
+		t.Error("a refused Load left a loaded object behind")
+	}
+	if links != 0 {
+		t.Errorf("a refused Load left %d links attached", links)
+	}
+
+	for _, prog := range []string{ProgProcExec, ProgProcExit, ProgOpenatEnter, ProgOpenatExit,
+		ProgConnectEnter, ProgConnectExit} {
+		if err := l.Attach(ctx, prog); !errors.Is(err, ErrNotLoaded) {
+			t.Errorf("Attach(%s) after a refused Load = %v, want ErrNotLoaded", prog, err)
+		}
+	}
+}
+
+// The size check and the version check are independent, and each has to refuse
+// on its own. Neither standing in for the other is the whole reason both exist:
+// a layout that changed size is caught by one, and a layout that kept its size
+// and changed meaning only by the other.
+func TestLayoutAndABIVersionChecksAreIndependent(t *testing.T) {
+	obj := objectOrSkip(t)
+
+	// The real object: version wrong, layout right.
+	if err := checkRecordLayout(objectWithABIVersion(t, abi.ABIVersion+1), NewDecoder().EventSize()); err != nil {
+		t.Errorf("the size check refused an object whose only fault is its version: %v", err)
+	}
+	// The real object with a decoder claiming a different size: layout wrong,
+	// version right.
+	if err := checkABIVersion(obj, abi.ABIVersion); err != nil {
+		t.Errorf("the version check refused the object the size check is about to refuse: %v", err)
+	}
+	l := NewLoader(Config{}, wrongSizeDecoder{NewDecoder()})
+	defer l.Close()
+	if err := l.Load(context.Background(), obj); !errors.Is(err, ErrLayoutDrift) {
+		t.Fatalf("Load = %v, want ErrLayoutDrift — the version check must not mask it", err)
+	}
+}
+
 // loadAndAttach brings a loader up to the point where events would flow, with
 // every probe in the object attached, and registers teardown. Shared by the
 // runtime tests below.

@@ -35,7 +35,7 @@
 // That is the split, not an omission. Reading the version is an ABI concern and
 // belongs here; deciding what a mismatch *means* is a judgment, and the
 // judgments differ by layer. The loader can read the constant out of the
-// compiled object through BTF and refuse to attach anything, which is the only
+// compiled object and refuse to attach anything, which is the only
 // point at which a mismatch costs nothing — no probes are running and no events
 // have been believed. A decoder that discovers it one record at a time is
 // already too late for that and has a different question to answer: drop the
@@ -50,10 +50,16 @@
 // this binary at startup rather than at the first event". Both now exist:
 // telemetry.BPFLoader.Load compares this package's RecordSize, by way of
 // EventSize, against sizeof(struct allseer_event) in the loaded object's BTF,
-// and refuses to open it on a mismatch. What that still does not catch is a
-// layout that kept its size and changed meaning, which is what Event.Version is
-// for and what the header's TODO about exposing ALLSEER_ABI_VERSION as a
-// read-only global would close.
+// and refuses to open it on a mismatch.
+//
+// What a size comparison cannot catch is a layout that kept its size and
+// changed meaning, and that is now closed at the same point rather than only by
+// Event.Version: bpf/allseer.bpf.c carries ALLSEER_ABI_VERSION in a read-only
+// `allseer_abi_version` global, and the same Load compares it against
+// ABIVersion below before it opens the object. Event.Version remains the
+// backstop for a record that reaches the decoder anyway, which is a different
+// question — the loader's answer is "do not start", the decoder's is what to do
+// with one record — and that split is why neither check lives in this file.
 //
 //go:generate go run github.com/stringNameMahin/ALLSEER/internal/telemetry/abigen/cmd/abigen -header ../../../bpf/include/allseer_event.h -out layout_gen.go -package abi
 package abi
