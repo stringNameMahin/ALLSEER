@@ -85,6 +85,19 @@ const (
 	// claims about the map, and a test cannot make them against a name that is
 	// spelled out at its own call site and nowhere else.
 	MapOpenatScratch = "openat_scratch"
+
+	// MapConnectScratch holds one half-built connect event per thread that is
+	// inside connect, between ProgConnectEnter and ProgConnectExit.
+	//
+	// The second instance of the scratch protocol, not a second mechanism:
+	// same key, same map type, same lifecycle, and separate from
+	// MapOpenatScratch only so that one syscall's pressure cannot evict the
+	// other's pending state. allseer_maps.h argues both halves of that.
+	//
+	// Kernel-internal in exactly the way MapOpenatScratch is, and named here
+	// for the same reason: the runtime tests assert on it. The name is fifteen
+	// characters, which is the most BPF_OBJ_NAME_LEN allows.
+	MapConnectScratch = "connect_scratch"
 )
 
 // Program names, as bpf/allseer.bpf.c declares them, for Attach. libbpf
@@ -126,6 +139,25 @@ const (
 	// for. A caller that attaches one and not the other has a blind spot that
 	// looks exactly like a quiet host.
 	ProgOpenatExit = "openat_exit"
+
+	// ProgConnectEnter is the sys_enter_connect program. It emits nothing.
+	//
+	// The entry half of the second syscall pair, and the same shape as
+	// ProgOpenatEnter: it performs the cgroup filter decision for every connect
+	// this object reports, captures the destination out of user memory, and
+	// stores it in connect_scratch for ProgConnectExit to complete.
+	ProgConnectEnter = "connect_enter"
+
+	// ProgConnectExit is the sys_exit_connect program, emitting
+	// ALLSEER_EVT_NET_CONNECT.
+	//
+	// Useless apart from ProgConnectEnter in the same way ProgOpenatExit is
+	// from its own entry side: attaching either alone yields no events rather
+	// than half of them, which looks exactly like a host that made no outbound
+	// connections. For a capability the catalog rates SeverityHigh — "it is how
+	// data leaves, and it cannot be undone after the fact" — that is the blind
+	// spot most worth not having by accident.
+	ProgConnectExit = "connect_exit"
 )
 
 const (

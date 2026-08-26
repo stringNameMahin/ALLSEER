@@ -268,14 +268,56 @@ type Config struct {
 // SourceStats.DroppedEvents or into Event.Dropped, because that is Collector's
 // and Collector does not exist.
 
-// TODO(telemetry): write the last of the four eBPF programs as a tracepoint
-// pair: sys_enter_connect and sys_exit_connect. Tracepoints before kprobes: a
-// stable ABI is worth more than coverage while the design moves. The pairing it
-// needs is settled — see the Done entry below — so what is left is the payload:
-// reading a sockaddr out of user memory, deciding what an AF_UNIX connect means
-// against a catalog that lists `connect` under both net.connect and
-// ipc.unixsocket, and declaring a `connect_scratch` map of its own shape under
-// the protocol allseer_maps.h now writes down.
+// Done, for the last of the four: connect is implemented in bpf/allseer.bpf.c
+// as the pair `connect_enter` and `connect_exit`, under
+// SEC("tracepoint/syscalls/sys_enter_connect") and .../sys_exit_connect,
+// emitting one ALLSEER_EVT_NET_CONNECT between them. It is the second instance
+// of the correlation protocol rather than a second mechanism: the same
+// allseer_syscall_key_t, the same LRU, the same identity stamp, the same
+// "entry decides, exit deletes, no entry no event" rules. What connect state is
+// told apart from openat state *by* is the map it lives in — `connect_scratch`
+// — which is what allseer_maps.h already specified when it wrote the protocol
+// down ("connect will want the same mechanism and will not share this map"),
+// and which keeps a burst of opens from evicting pending connects. The two
+// values share a byte-identical prologue and a _Static_assert now enforces it.
+// What the pair can honestly report is narrower than struct
+// allseer_net_payload's nine fields, and the boundary is the hook rather than
+// the ABI. From connect's arguments come the family, the destination address
+// and the destination port — the port converted to host byte order, because the
+// header declares it __u16 and not __be16. The local address, the local port,
+// the protocol and the socket type are all properties of the *socket*, reachable
+// only by walking task->files to a struct file, which is the same kernel-internal
+// trade proc_exec refused for argv; they are left zero and allseer_maps.h names
+// each one. Three of those four have an honest "unavailable" rendering in the
+// decoder already — protocol and sock_type render empty, which the matcher
+// treats as unevaluable — and `saddr` does not: sixteen zero bytes under AF_INET
+// decode to "0.0.0.0", the wildcard, which is a real address. That gap is a
+// record-layout problem and is recorded as a TODO(event) at the foot of
+// allseer_maps.h rather than papered over.
+// The family rule is the load-bearing decision on the capture side: AF_INET and
+// AF_INET6 are written into the record *only* when the address they describe was
+// captured, so a record naming either always carries the address the process
+// passed. Everything else — a short addrlen, a negative addrlen, an unreadable
+// or null pointer — leaves AF_UNSPEC and an empty destination, which is the
+// unevaluable case decode.go documents. Families that carry no address of this
+// shape are reported as themselves with no address, AF_UNIX above all.
+// Two limitations are stated at the probe rather than left to be found. A
+// non-blocking connect returns -EINPROGRESS and completes later, out of sight of
+// sys_exit_connect, so its record reads as a failure when it is really
+// "attempted, outcome unknown to this stream". And the timestamp is the
+// entry-side ktime, as openat's is — which matters more here, because a connect
+// can block for minutes, so a record can reach the ring long after the instant
+// it carries.
+// TODO(telemetry): decide what an AF_UNIX connect resolves to. decode.go maps
+// every ALLSEER_EVT_NET_CONNECT to net.connect and carries an open note asking
+// whether AF_UNIX should be ipc.unixsocket instead, deferred because it "should
+// be made with the connect probe in front of it". The probe now exists and emits
+// AF_UNIX connects as such — suppressing them in the kernel would be a
+// governance decision made in the one place that cannot log why — so the
+// question is live: pkg/capability lists `connect` under both kinds, they differ
+// by two severity levels, and the shipped rule set requests approval for
+// unexpected net.connect. Every unix-socket connect a governed process makes
+// currently arrives as a high-severity network egress.
 // Done, for the first of the four: sched_process_exec is implemented in
 // bpf/allseer.bpf.c as the program `proc_exec`, under
 // SEC("tracepoint/sched/sched_process_exec"). It emits ALLSEER_EVT_PROC_EXEC

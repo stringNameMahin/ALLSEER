@@ -6,11 +6,12 @@
  * and two filter sets, and sharing one between them means pinning it and
  * agreeing on a bpffs path. Probes are added to this file as they are written.
  *
- * At this point the file declares four maps and four programs: sched_process_exec
- * and sched_process_exit, which each produce a record on their own, and the
- * sys_enter_openat / sys_exit_openat pair, which produce one record between
- * them. The maps are what the probes emit into, are filtered by, and — for the
- * syscall pair — hold half-built events in between.
+ * At this point the file declares five maps and six programs: sched_process_exec
+ * and sched_process_exit, which each produce a record on their own, and two
+ * syscall pairs — sys_enter_openat / sys_exit_openat and sys_enter_connect /
+ * sys_exit_connect — which each produce one record between them. The maps are
+ * what the probes emit into, are filtered by, and — for the syscall pairs —
+ * hold half-built events in between.
  *
  * allseer_event.h is included for a reason that outlives the absence of probes:
  * it is the record ABI, internal/telemetry/abigen derives the Go decoder by
@@ -34,6 +35,12 @@
 #pragma clang diagnostic pop
 
 #include <bpf/bpf_core_read.h>
+/* bpf_ntohs, for the one field on the wire that is not in the machine's own byte
+ * order. A sockaddr's port is big-endian by definition and struct
+ * allseer_net_payload declares `dport` as __u16 rather than __be16, so the probe
+ * is the side that converts — see connect_enter, and decode.go on what the
+ * alternative reading costs. */
+#include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 
 #include "allseer_event.h"
@@ -143,6 +150,33 @@ struct {
 	__type(key, allseer_syscall_key_t);
 	__type(value, struct allseer_open_scratch);
 } openat_scratch SEC(".maps");
+
+/* The half-built connect events, held between one thread's sys_enter_connect
+ * and its sys_exit_connect.
+ *
+ * A second map rather than a second mechanism. allseer_maps.h settled the
+ * protocol when openat needed it and said this map would exist: "connect will
+ * want the same mechanism and will not share this map", because the value shape
+ * differs and because "one LRU shared by both means a burst of opens evicts
+ * pending connects, so the noisiest syscall on the host decides which of the
+ * quieter one's events survive".
+ *
+ * That separation is also the whole of how connect state is told apart from
+ * openat state. There is no discriminator in the value and none is needed: an
+ * entry written by connect_enter can only ever be read by connect_exit, because
+ * no other program names this map. A shared map would have needed a syscall tag
+ * and a check on it; two maps make the distinction structural, and a program
+ * that looked in the wrong one would not compile.
+ *
+ * Everything else is identical to openat_scratch by construction — the same
+ * allseer_syscall_key_t, the same LRU, the same capacity argument, the same
+ * identity stamp — and allseer_maps.h holds the reasoning for all of it. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, ALLSEER_MAX_CONNECT_SCRATCH);
+	__type(key, allseer_syscall_key_t);
+	__type(value, struct allseer_connect_scratch);
+} connect_scratch SEC(".maps");
 
 /* Required before any program in this object can load. Declared with the maps
  * because it belongs to the object rather than to any one probe, and because
@@ -838,6 +872,328 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	 * ordering means the only statement to make about the map afterwards is the
 	 * simple one: after an exit that found an entry, there is no entry. */
 	bpf_map_delete_elem(&openat_scratch, &key);
+
+	bpf_ringbuf_submit(e, 0);
+	return 0;
+}
+
+/* --- The connect pair --------------------------------------------------------
+ *
+ * The second instance of the protocol openat established, and deliberately the
+ * same shape: sys_enter_connect captures and stores, sys_exit_connect completes
+ * and emits, and the three rules stated above the openat pair hold here
+ * unchanged and unrestated —
+ *
+ *   1. the entry side decides, performing the one tracked_cgroups lookup and
+ *      putting the ID it matched into the record;
+ *   2. the exit side deletes, on every path that found an entry;
+ *   3. no entry, no event.
+ *
+ * Rule 1 answers the cgroup question for connect exactly as it does for openat,
+ * and connect makes the case it protects against far easier to reach: a connect
+ * can block for minutes, so the window in which a task might be moved between
+ * cgroups mid-syscall is not theoretical. The event belongs to the cgroup the
+ * task was in when it made the call. A task moved *into* a tracked cgroup while
+ * blocked in connect produces nothing, because its entry was filtered and there
+ * is no state to complete; a task moved *out* still produces the event it earned
+ * on the way in, carrying the cgroup_id that admitted it. Neither direction can
+ * produce a record whose attribution and whose reason for existing disagree,
+ * because the exit side never looks at the filter.
+ */
+
+/* Address families, in the vocabulary decode.go already uses.
+ *
+ * Defined here because vmlinux.h does not carry them: AF_* are uapi macros
+ * rather than kernel types, so BTF has nothing to say about them. The numbers
+ * are Linux's on both targets the ABI supports, and are the same three constants
+ * internal/telemetry/decode.go declares for the reading side. AF_UNIX is named
+ * even though the probe never compares against it, because the family it does
+ * not special-case is the one a reader will ask about. */
+#define ALLSEER_AF_UNIX   1
+#define ALLSEER_AF_INET   2
+#define ALLSEER_AF_INET6  10
+
+/* The smallest sockaddr each family can be described by, which is also what the
+ * kernel itself demands before it will look at one.
+ *
+ * For AF_INET that is the whole of struct sockaddr_in: inet_dgram_connect and
+ * __inet_stream_connect both reject an addr_len below sizeof(struct
+ * sockaddr_in) with EINVAL. For AF_INET6 it is *not* the whole struct — the
+ * trailing sin6_scope_id is optional and the kernel's minimum is
+ * SIN6_LEN_RFC2133, the 24 bytes up to and including sin6_addr. Requiring the
+ * full 28 here would silently skip the destination of every connect made with
+ * the shorter form, which is a legal and used call.
+ *
+ * Matching the kernel's own minimum buys a property worth having: an address
+ * this probe captured is an address the kernel also considered well-formed. */
+#define ALLSEER_SOCKADDR_IN_MIN   sizeof(struct sockaddr_in)
+#define ALLSEER_SOCKADDR_IN6_MIN  (__builtin_offsetof(struct sockaddr_in6, sin6_addr) + \
+				   sizeof(struct in6_addr))
+
+/* capture_peer_address reads connect's destination out of user memory.
+ *
+ * On entry the scratch value has already been zeroed, and every path that
+ * cannot produce an address simply leaves it that way: family AF_UNSPEC, no
+ * port, no address. Nothing here reports a failure to its caller, because there
+ * is nothing the caller would do with one — allseer_maps.h states the decision,
+ * and it is openat's: the record is stored and emitted regardless, since "a
+ * connect happened and the process that made it is known; dropping the record
+ * because one field could not be read would hide a real connection attempt".
+ *
+ * bpf_probe_read_user, never the kernel variant. The pointer is a user-space
+ * address supplied by the process being watched; reading it as a kernel address
+ * either faults and yields nothing or, on an architecture without a split
+ * address space, copies whatever kernel memory lives at that number into an
+ * audit record. This is the same rule openat's path read follows.
+ *
+ * Two reads rather than one, and the first is two bytes. The family has to be
+ * known before the size of the thing to read is known, and reading the larger
+ * structure speculatively would fault on a caller that passed a correctly-sized
+ * smaller one — turning a well-formed AF_INET connect into an unreadable
+ * sockaddr. Reading the family first costs one extra helper call on a syscall
+ * that is about to do far more work than that.
+ *
+ * addrlen is signed here, and every comparison against it casts the size it is
+ * compared with. connect's third argument is an int and a process may pass a
+ * negative one; left unsigned, -1 becomes 4294967295, clears every minimum, and
+ * the probe reads a sockaddr the kernel is about to reject with EINVAL. The
+ * property this function is written to keep — an address it captured is one the
+ * kernel also considered well-formed — would be false for exactly that call.
+ */
+static __always_inline void capture_peer_address(struct allseer_connect_scratch *s,
+						 const void *uaddr, __s32 addrlen)
+{
+	struct sockaddr_in6 v6;
+	struct sockaddr_in v4;
+	__u16 family;
+
+	/* A null pointer or a length that cannot even hold a family. connect
+	 * itself will fail with EFAULT or EINVAL, and the record will carry that
+	 * return alongside a destination it does not claim to know. */
+	if (!uaddr || addrlen < (__s32)sizeof(family))
+		return;
+	if (bpf_probe_read_user(&family, sizeof(family), uaddr))
+		return;
+
+	switch (family) {
+	case ALLSEER_AF_INET:
+		if (addrlen < (__s32)ALLSEER_SOCKADDR_IN_MIN)
+			return;
+		if (bpf_probe_read_user(&v4, sizeof(v4), uaddr))
+			return;
+		/* Set together, and only together. allseer_maps.h calls this the
+		 * family rule: AF_INET is a promise that daddr holds the address
+		 * the process passed, so it is made only where that is true. */
+		s->family = ALLSEER_AF_INET;
+		s->dport = bpf_ntohs(v4.sin_port);
+		/* Four bytes, into the front of a sixteen-byte field, because the
+		 * record header says so: "v4 addresses occupy the first 4 bytes".
+		 * Copied in wire order rather than byte-swapped — that order is
+		 * what netip.AddrFrom4 reads, and reversing it here would turn
+		 * 10.0.0.1 into 1.0.0.10 on the way out. */
+		__builtin_memcpy(s->daddr, &v4.sin_addr, sizeof(v4.sin_addr));
+		return;
+
+	case ALLSEER_AF_INET6:
+		if (addrlen < (__s32)ALLSEER_SOCKADDR_IN6_MIN)
+			return;
+		/* Exactly the kernel's minimum, not sizeof(v6). A caller that
+		 * passed 24 bytes has no sin6_scope_id to read, and asking for it
+		 * would fault on a sockaddr the kernel accepts. The bytes beyond
+		 * what is read keep the zero the memset left; nothing reads them,
+		 * because the record has no field for a scope ID. */
+		if (bpf_probe_read_user(&v6, ALLSEER_SOCKADDR_IN6_MIN, uaddr))
+			return;
+		s->family = ALLSEER_AF_INET6;
+		s->dport = bpf_ntohs(v6.sin6_port);
+		__builtin_memcpy(s->daddr, &v6.sin6_addr, sizeof(v6.sin6_addr));
+		return;
+
+	default:
+		/* A family that carries no address of this shape — AF_UNIX above
+		 * all, but also netlink, packet, bluetooth and the rest. The
+		 * family is reported and the address is not, which is not an
+		 * exception to the family rule but an application of it: these
+		 * families promise nothing about daddr and decode.go renders them
+		 * without one. AF_UNSPEC arrives here too and is written back as
+		 * itself, which is the zero the field already held.
+		 *
+		 * The socket path an AF_UNIX connect names is deliberately not
+		 * captured. struct allseer_net_payload has no field for it, the
+		 * 108-byte sun_path does not fit in a 16-byte address, and
+		 * decode.go states the reading side of the same fact: "a socket
+		 * path is not an address and does not fit in the field". */
+		s->family = family;
+		return;
+	}
+}
+
+/* sys_enter_connect: a thread is asking to connect a socket to an address.
+ *
+ * Emits nothing, for the reason openat_enter does not: `ret` has no value yet,
+ * and connect's is worth more than most. A connect that fails with
+ * ECONNREFUSED, EHOSTUNREACH or EPERM is a different governance fact from one
+ * that succeeded — the difference between an agent that reached an endpoint and
+ * one that tried to.
+ *
+ * The tracepoint's arguments, from its format file:
+ *
+ *   args[0]  fd        the socket descriptor
+ *   args[1]  uservaddr a pointer into *user* memory
+ *   args[2]  addrlen   how much of it the caller says is valid
+ *
+ * args[0] is captured nowhere, and the consequence is the largest limitation of
+ * this probe: the descriptor is the only route to the socket, and the socket is
+ * the only route to the protocol, the socket type and the local address. Three
+ * of struct allseer_net_payload's nine fields are therefore left zero, and
+ * allseer_maps.h names each one and why. Reaching them means walking
+ * task->files->fdt to a struct file, which is a kernel-internal structure and
+ * the same trade proc_exec already refused for argv.
+ */
+SEC("tracepoint/syscalls/sys_enter_connect")
+int connect_enter(struct trace_event_raw_sys_enter *ctx)
+{
+	struct task_struct *task;
+	struct allseer_connect_scratch s;
+	allseer_cgroup_id_t cgroup_id;
+	allseer_syscall_key_t key;
+	__u64 pid_tgid, uid_gid;
+
+	/* The filter, first, and before a byte of user memory is read. The
+	 * standing per-probe obligation internal/telemetry states, and the
+	 * governance decision this event will carry: the ID matched here is the
+	 * one that ends up in the record. */
+	cgroup_id = bpf_get_current_cgroup_id();
+	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
+
+	/* Zeroed in full: the verifier requires every byte of stack copied into a
+	 * map to have been written, and capture_peer_address relies on the zero
+	 * as its "nothing to report" state. */
+	__builtin_memset(&s, 0, sizeof(s));
+
+	s.timestamp = bpf_ktime_get_ns();
+
+	pid_tgid = bpf_get_current_pid_tgid();
+	uid_gid = bpf_get_current_uid_gid();
+	task = (struct task_struct *)bpf_get_current_task();
+
+	/* The identity stamp, checked at exit against the thread running there.
+	 * The calling thread's own start time, not the group leader's — see the
+	 * PID reuse section of allseer_maps.h. */
+	s.task_start_time = BPF_CORE_READ(task, start_boottime);
+
+	/* struct allseer_proc, read exactly as openat_enter reads it, including
+	 * start_time coming from the group leader so that (PID, StartTime) is the
+	 * pair proc_exec and proc_exit report for the same process. A connect made
+	 * by a worker thread must be attributable to the process that owns it. */
+	s.proc.cgroup_id = cgroup_id;
+	s.proc.start_time = BPF_CORE_READ(task, group_leader, start_boottime);
+	s.proc.pid = (__u32)(pid_tgid >> 32);
+	s.proc.tid = (__u32)pid_tgid;
+	s.proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
+	s.proc.uid = (__u32)uid_gid;
+	s.proc.gid = (__u32)(uid_gid >> 32);
+	s.proc._pad = 0;
+	bpf_get_current_comm(&s.proc.comm, sizeof(s.proc.comm));
+
+	capture_peer_address(&s, (const void *)ctx->args[1], (__s32)ctx->args[2]);
+
+	/* BPF_ANY, and the return unchecked, for the reasons openat_enter gives:
+	 * a thread's previous entry is replaced rather than kept, an LRU insert
+	 * does not fail for want of room, and a failure here means the exit finds
+	 * nothing and emits nothing — which is already the documented behaviour of
+	 * a missing entry. Nothing has been reserved, so ringbuf_drops must not
+	 * move. */
+	key = pid_tgid;
+	bpf_map_update_elem(&connect_scratch, &key, &s, BPF_ANY);
+	return 0;
+}
+
+/* sys_exit_connect: the connect has returned, and the record can be completed.
+ *
+ * Contributes `ret` and nothing else, exactly as openat_exit does. It performs
+ * no tracked_cgroups lookup: the presence of a scratch entry is the entry side's
+ * decision carried forward, and a second lookup on a task whose cgroup may have
+ * changed during a call that can block for minutes is precisely how a record
+ * ends up carrying a cgroup_id that is not the one that admitted it.
+ *
+ * # What `ret` means here, and one case it cannot express
+ *
+ * connect returns 0 on success and a negative errno on failure, which is the
+ * convention struct allseer_event.ret already declares and the one
+ * internal/telemetry/decode.go already reads: resultOf treats ret >= 0 as
+ * Succeeded and renders a negative value as an errno name. Nothing new is
+ * invented for connect.
+ *
+ * The case worth naming is EINPROGRESS. A connect on a non-blocking socket
+ * returns -EINPROGRESS immediately and the connection is completed later, out of
+ * sight of this tracepoint; the record says Succeeded false with errno
+ * EINPROGRESS, which is a true statement about the syscall and a misleading one
+ * about the connection if read as "no connection was made". The record cannot
+ * say more, because the fact that would resolve it — whether the handshake later
+ * completed — happens in the network stack rather than in any syscall this
+ * object hooks. A downstream reader must treat EINPROGRESS as "attempted, and
+ * this stream does not know the outcome" rather than as a failure.
+ */
+SEC("tracepoint/syscalls/sys_exit_connect")
+int connect_exit(struct trace_event_raw_sys_exit *ctx)
+{
+	struct allseer_connect_scratch *s;
+	struct task_struct *task;
+	struct allseer_event *e;
+	allseer_syscall_key_t key;
+
+	/* No entry, no event, and no fabrication. This is where an untracked
+	 * cgroup is rejected on this side: not by a filter lookup, but by the
+	 * absence of the state a filter lookup on the other side would have
+	 * produced. */
+	key = bpf_get_current_pid_tgid();
+	s = bpf_map_lookup_elem(&connect_scratch, &key);
+	if (!s)
+		return 0;
+
+	/* The PID-reuse guard. A mismatch means the entry belongs to a thread
+	 * that is gone and whose TID this one inherited; it is deleted rather
+	 * than completed. */
+	task = (struct task_struct *)bpf_get_current_task();
+	if (BPF_CORE_READ(task, start_boottime) != s->task_start_time) {
+		bpf_map_delete_elem(&connect_scratch, &key);
+		return 0;
+	}
+
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e) {
+		count_ringbuf_drop();
+		bpf_map_delete_elem(&connect_scratch, &key);
+		return 0;
+	}
+
+	e->timestamp = s->timestamp;
+	e->type = ALLSEER_EVT_NET_CONNECT;
+	e->ret = (__s32)ctx->ret;
+	e->version = ALLSEER_ABI_VERSION;
+	e->_pad = 0;
+	e->proc = s->proc;
+
+	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+
+	/* Three fields written and six left at the zero the memset gave them.
+	 * allseer_maps.h lists the six and why each is unreachable from these two
+	 * tracepoints; the short form is that saddr, sport, protocol and sock_type
+	 * are properties of the socket rather than of the call, and `bytes` is
+	 * read by decode.go for ALLSEER_EVT_NET_SEND alone.
+	 *
+	 * The address is copied whole. For AF_INET only the first four bytes carry
+	 * anything and the rest were never written, which is what the record
+	 * header means by "v4 addresses occupy the first 4 bytes"; copying sixteen
+	 * either way keeps this side free of a second place that knows how wide a
+	 * family is. */
+	e->payload.net.family = s->family;
+	e->payload.net.dport = s->dport;
+	__builtin_memcpy(e->payload.net.daddr, s->daddr, sizeof(e->payload.net.daddr));
+
+	bpf_map_delete_elem(&connect_scratch, &key);
 
 	bpf_ringbuf_submit(e, 0);
 	return 0;

@@ -21,10 +21,12 @@
  *   tracked_cgroups  the kernel-side filter set   telemetry.Loader.UpdateMap
  *   ringbuf_drops    records lost to a full ring  telemetry.Loader.ReadCounter
  *   openat_scratch   openat enter->exit state     kernel-internal; see below
+ *   connect_scratch  connect enter->exit state    kernel-internal; see below
  *
  * Names are capped at 15 characters plus a NUL by BPF_OBJ_NAME_LEN. Anything
  * longer is silently truncated by libbpf and then fails to be found by the name
- * user space asked for, so "tracked_cgroups", at exactly 15, is at the limit.
+ * user space asked for, so "tracked_cgroups" and "connect_scratch", both at
+ * exactly 15, are at the limit.
  */
 
 #ifndef __ALLSEER_MAPS_H
@@ -370,6 +372,168 @@ struct allseer_open_scratch {
  *                               that counter is for.
  */
 
+/* Capacity of `connect_scratch`, in entries.
+ *
+ * The same number as openat's, and for the same reason rather than for
+ * symmetry's sake: it is sized for orphans, not for the live population.
+ *
+ * The live population differs between the two syscalls in a way worth stating.
+ * openat on a warm page cache returns in microseconds, so entries barely exist;
+ * connect to an unreachable host blocks until the SYN retries give up, which is
+ * on the order of two minutes. A tracked process that opens many connections to
+ * something that is not answering therefore holds far more entries at once than
+ * any openat workload does. 4096 still covers that by a wide margin — it is
+ * 4096 threads simultaneously blocked in connect — and at 96 bytes the whole map
+ * is about 384 KiB, a quarter of what openat's costs.
+ *
+ * Running out is not a failure mode, for the reason the protocol above gives:
+ * the LRU converts "no further connects can be correlated, forever" into "the
+ * oldest pending connect loses its correlation". */
+#define ALLSEER_MAX_CONNECT_SCRATCH  4096
+
+/* Value of `connect_scratch`: everything the final record needs except `ret`.
+ *
+ * The same split as openat's, the same prologue, and the same rule — the entry
+ * side captures the whole event and the exit side contributes the syscall
+ * return and emits. The first three fields are byte-for-byte the ones
+ * struct allseer_open_scratch begins with, and the static assertion below is
+ * what keeps that true rather than merely intended.
+ *
+ * # What connect can be asked for, and what it can answer
+ *
+ * connect(2) takes a socket descriptor, a user-space sockaddr and its length.
+ * Of the nine fields struct allseer_net_payload declares, exactly three are
+ * derivable from those arguments:
+ *
+ *   family     the sockaddr's sa_family
+ *   daddr      the address inside the sockaddr, for the families that have one
+ *   dport      the port inside the sockaddr, converted to host byte order
+ *
+ * The other six are not, and are left at the zero the exit side's memset gives
+ * them. This is a limitation of the hook, not an omission, and each one is
+ * worth naming because a reader of a record must not mistake a zero for an
+ * observation:
+ *
+ *   saddr, sport   the local address is not an argument to connect, and for a
+ *                  TCP socket that has not been bound it does not exist yet at
+ *                  sys_enter — the kernel chooses it while the syscall runs.
+ *                  Recovering it would mean walking the descriptor to its
+ *                  struct socket through task->files, which is a kernel-internal
+ *                  structure and exactly the trade proc_exec already refused for
+ *                  argv: "both a decision about what evidence is worth an
+ *                  unbounded read on the exec path; neither belongs inside the
+ *                  issue that writes the first probe".
+ *   protocol       likewise. IPPROTO_TCP versus IPPROTO_UDP is a property of
+ *                  the socket, not of the call, and reaching it needs the same
+ *                  walk. internal/telemetry/decode.go renders protocol 0 as the
+ *                  empty string and says why that is survivable: "the matcher
+ *                  already treats an empty protocol as unevaluable against a
+ *                  grant that constrains protocols". Unevaluable is the
+ *                  fail-closed direction; a guessed "tcp" would not be.
+ *   sock_type      the same walk again, and the decoder already renders 0 as
+ *                  empty. Nothing in the validator reads it.
+ *   bytes          connect transfers nothing. decode.go reads the field for
+ *                  ALLSEER_EVT_NET_SEND alone.
+ *
+ * The one that has no honest representation is saddr. A zeroed 16-byte address
+ * under AF_INET decodes to "0.0.0.0" and under AF_INET6 to "::" — the wildcard,
+ * not an absence — because struct allseer_net_payload has no way to say "this
+ * field was never filled" and addressString has no rendering for it. The
+ * remaining fields all have one: protocol and sock_type render empty, and
+ * family renders AF_UNSPEC. See the TODO at the foot of this file.
+ *
+ * Field by field:
+ *
+ *   timestamp        bpf_ktime_get_ns() at sys_enter, copied into the record —
+ *                    the same decision openat made, for the same reason, and it
+ *                    matters more here. A connect can block for minutes, so the
+ *                    gap between this instant and the moment the record reaches
+ *                    the ring is bounded by the syscall's duration and that
+ *                    bound is large. The instant recorded is the one the process
+ *                    asked to connect, which is the instant a "read the key,
+ *                    then connect out" sequence should be ordered by.
+ *   task_start_time  the calling thread's start_boottime. The identity stamp the
+ *                    protocol above requires, checked at exit against the thread
+ *                    running there.
+ *   proc             struct allseer_proc exactly as the record carries it,
+ *                    including the cgroup_id the entry side matched on.
+ *   family           the sockaddr's family, subject to the rule below.
+ *   dport            the port, in host byte order. The header declares dport as
+ *                    __u16 and not __be16, and decode.go states the consequence
+ *                    of getting this wrong: "the alternative reading turns 443
+ *                    into 47873 and nothing downstream would notice". The probe
+ *                    is the side that converts.
+ *   daddr            the address bytes in wire order, which is the order
+ *                    netip.AddrFrom4 and AddrFrom16 read them in. v4 occupies
+ *                    the first four bytes, as the record header declares.
+ *
+ * # The family rule
+ *
+ * `family` is set to AF_INET or AF_INET6 **only when the address that family
+ * describes was captured**. Every other outcome leaves it at AF_UNSPEC or at
+ * the family the process actually passed, and leaves daddr and dport zero.
+ *
+ * The rule exists because those two families are the only ones for which
+ * addressString renders daddr at all. Setting family to AF_INET without a
+ * captured address would publish "0.0.0.0" as a destination, which is both a
+ * legal address to connect to and a plausible-looking lie. Under this rule a
+ * record naming AF_INET or AF_INET6 always carries the address the process
+ * passed, and a record that could not determine one says AF_UNSPEC and renders
+ * an empty destination — which decode.go documents as the unevaluable case.
+ *
+ * Families that carry no address of this shape are reported as themselves, and
+ * that is not an exception to the rule but the same rule: they promise nothing
+ * about daddr, and the decoder already renders them without one. AF_UNIX is the
+ * case that matters — "a socket path is not an address and does not fit in the
+ * field" — and an unrecognised family renders as AddressFamily(N), which is the
+ * decoder's stated policy of showing a reader what it did not expect.
+ */
+struct allseer_connect_scratch {
+    __u64 timestamp;
+    __u64 task_start_time;
+    struct allseer_proc proc;
+    __u8  daddr[16];
+    __u16 family;
+    __u16 dport;
+    __u32 _pad;
+};
+
+/* The shared prologue, enforced rather than described.
+ *
+ * The protocol above says the two scratch values begin the same way; these are
+ * what make that a fact a compiler checks. A field inserted into either struct's
+ * head, or a reordering of one and not the other, stops the build instead of
+ * quietly giving the two probes different ideas of where identity lives. */
+_Static_assert(__builtin_offsetof(struct allseer_connect_scratch, timestamp) ==
+               __builtin_offsetof(struct allseer_open_scratch, timestamp),
+               "scratch prologue: timestamp must sit at the same offset in both");
+_Static_assert(__builtin_offsetof(struct allseer_connect_scratch, task_start_time) ==
+               __builtin_offsetof(struct allseer_open_scratch, task_start_time),
+               "scratch prologue: task_start_time must sit at the same offset in both");
+_Static_assert(__builtin_offsetof(struct allseer_connect_scratch, proc) ==
+               __builtin_offsetof(struct allseer_open_scratch, proc),
+               "scratch prologue: proc must sit at the same offset in both");
+
+/* The lifecycle of a `connect_scratch` entry is the openat one unchanged, and
+ * is not restated here: created at sys_enter_connect after tracked_cgroups
+ * admits the caller and never before it, replaced with BPF_ANY, deleted by
+ * sys_exit_connect on every path that found an entry, evicted by the LRU under
+ * pressure. The failure paths are the same list too, with one substitution and
+ * one addition:
+ *
+ *   the sockaddr read fails      the entry is stored anyway, with family
+ *                                AF_UNSPEC and no address — the substitution for
+ *                                openat's "the path read fails". A connect
+ *                                happened and the process that made it is known;
+ *                                dropping the record because one field could not
+ *                                be read would hide a real connection attempt.
+ *   the sockaddr is too short    the same, and it is not a rare case: a connect
+ *                                with a length below what the family needs is
+ *                                one the kernel itself rejects with EINVAL, so
+ *                                the record pairs an unevaluable destination
+ *                                with a return that explains why.
+ */
+
 #endif /* __ALLSEER_MAPS_H */
 
 /* TODO(bpf): count correlations lost to eviction and to a failed scratch update.
@@ -381,4 +545,19 @@ struct allseer_open_scratch {
  * else — a second per-CPU counter map of the same shape, with its own key
  * constants, is the shape of the fix. It is left out of the openat issue because
  * the counter needs a consumer to be worth anything, and the consumer is
- * Collector. */
+ * Collector. It now covers connect on the same terms.
+ *
+ * TODO(event): struct allseer_net_payload cannot say that an address field was
+ * never filled. Every other field in it can — protocol and sock_type render as
+ * the empty string, family renders as AF_UNSPEC — but saddr and daddr are 16
+ * raw bytes, and 16 zero bytes under AF_INET are the wildcard 0.0.0.0, which is
+ * a real address a process can connect to. connect records this as a live
+ * problem rather than a theoretical one: it fills daddr and leaves saddr zero,
+ * so every connect event decodes with SourceAddr "0.0.0.0" and nothing in the
+ * record distinguishes that from an observation. The probe works around it for
+ * daddr by refusing to claim AF_INET at all unless the address was captured,
+ * which is only possible because family and address are set together; saddr has
+ * no such lever. A `__u16 fields_present` bitmap on the payload, or separate
+ * families for source and destination, would close it, and both are record
+ * layout changes that belong with the other open ABI edits rather than inside a
+ * probe issue. */
