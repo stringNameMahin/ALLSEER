@@ -571,14 +571,18 @@ func TestRuntimeConnectUnsupportedFamily(t *testing.T) {
 	if got.event.Result.Succeeded {
 		t.Errorf("result = %+v, want the failure the kernel returned", got.event.Result)
 	}
-	// The capability mapping is the decoder's and is deliberately unchanged by
-	// this issue: decode.go maps every ALLSEER_EVT_NET_CONNECT to net.connect
-	// and carries an open TODO about whether AF_UNIX should resolve to
-	// ipc.unixsocket instead. Asserted so that the decision, when it is made,
-	// has to be made here too rather than silently.
-	if got.event.Capability != capability.KindNetConnect {
-		t.Errorf("capability = %s, want %s; if this changed, the open TODO in decode.go was "+
-			"resolved and this test records the old answer", got.event.Capability, capability.KindNetConnect)
+	// The capability mapping is the decoder's, and the open question this test
+	// used to record has since been answered: kindForConnectFamily maps AF_UNIX
+	// to ipc.unixsocket, because pkg/capability defines net.connect as reaching
+	// "a remote endpoint" and a unix socket has none. Asserted here as well as
+	// in the decoder's own tests because this is the path that proves the
+	// family reaching the decoder is one a kernel actually wrote.
+	if got.event.Capability != capability.KindIPCUnixSock {
+		t.Errorf("capability = %s, want %s", got.event.Capability, capability.KindIPCUnixSock)
+	}
+	if got.event.Domain != capability.DomainIPC {
+		t.Errorf("domain = %s, want %s; the kind carries the domain with it",
+			got.event.Domain, capability.DomainIPC)
 	}
 
 	requireNoScratchEntry(t, connectScratchMap(t, l), scratchKey(os.Getpid(), thread.tid),

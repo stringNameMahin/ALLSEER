@@ -13,11 +13,13 @@
  * brings it forward. The sentence above is what that milestone overturns, so it
  * should be read as a statement about today rather than about the design.
  *
- * At this point the file declares five maps and six programs: sched_process_exec
- * and sched_process_exit, which each produce a record on their own, and two
- * syscall pairs — sys_enter_openat / sys_exit_openat and sys_enter_connect /
- * sys_exit_connect — which each produce one record between them. The maps are
- * what the probes emit into, are filtered by, and — for the syscall pairs —
+ * At this point the file declares six maps and twenty-eight programs:
+ * sched_process_exec and sched_process_exit, which each produce a record on
+ * their own; two syscall pairs — sys_enter_openat / sys_exit_openat and
+ * sys_enter_connect / sys_exit_connect — which each produce one record between
+ * them; and eleven more syscall pairs for the credential syscalls, which
+ * between them produce every ALLSEER_EVT_PRIV_CHANGE. The maps are what the
+ * probes emit into, are filtered by, and — for the thirteen syscall pairs —
  * hold half-built events in between.
  *
  * allseer_event.h is included for a reason that outlives the absence of probes:

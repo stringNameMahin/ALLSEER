@@ -312,16 +312,47 @@ type Config struct {
 // entry-side ktime, as openat's is — which matters more here, because a connect
 // can block for minutes, so a record can reach the ring long after the instant
 // it carries.
-// TODO(telemetry): decide what an AF_UNIX connect resolves to. decode.go maps
-// every ALLSEER_EVT_NET_CONNECT to net.connect and carries an open note asking
-// whether AF_UNIX should be ipc.unixsocket instead, deferred because it "should
-// be made with the connect probe in front of it". The probe now exists and emits
-// AF_UNIX connects as such — suppressing them in the kernel would be a
-// governance decision made in the one place that cannot log why — so the
-// question is live: pkg/capability lists `connect` under both kinds, they differ
-// by two severity levels, and the shipped rule set requests approval for
-// unexpected net.connect. Every unix-socket connect a governed process makes
-// currently arrives as a high-severity network egress.
+// Done: an AF_UNIX connect resolves to ipc.unixsocket, and every other family
+// to net.connect. decode.go decides it in kindForConnectFamily, on the address
+// family, which is the one field bpf/allseer.bpf.c reliably fills for a unix
+// socket — its default arm writes the family and nothing else, so this reads a
+// captured value rather than deducing one from an absence.
+// The catalog is what left the question open and the family is what closes it.
+// pkg/capability lists `connect` under both kinds, so it could not settle
+// itself; but it also defines net.connect as "Open an outbound connection to a
+// remote endpoint" and grounds the whole network block on "an outbound
+// connection is how data leaves, and that cannot be undone after the fact". An
+// AF_UNIX socket has no remote endpoint and nothing leaves the host through
+// one, so net.connect was not a conservative reading of the record — it was a
+// false statement about an observed fact, in the field the validator matches
+// on. ipc.unixsocket is defined as "Connect to or create a Unix domain socket"
+// and already lists `connect`, so the answer was the catalog's own.
+// The precedent is ALLSEER_EVT_FILE_OPEN, whose kind the open flags decide in
+// the same file for the same reason. ALLSEER_EVT_NET_CONNECT is now the third
+// type whose payload picks its kind, and the only one whose two answers land in
+// different domains — which the event schema permits, since it requires a
+// network payload when the domain is network and forbids one nowhere else.
+// Two consequences are recorded rather than left to be found.
+// The first is a limit that this decision does not introduce and cannot lift:
+// the record cannot say *which* unix socket. sun_path is 108 bytes against a
+// 16-byte address field and ABI v2 has no field for a path, so resolve.Observe
+// produces an empty target and no envelope can permit /run/docker.sock while
+// refusing the rest. That was equally true under net.connect — addressString
+// renders nothing for AF_UNIX and the port is zero — so nothing that was
+// matchable has stopped being matchable. Closing it needs a wire-format change,
+// which is a different issue from this one.
+// The second is a real reduction in what the shipped policy does.
+// configs/rules.default.yaml matches unexpected-network-egress on the
+// capability rather than on a score, so every ungranted unix-socket connect was
+// requested for approval regardless of risk; no shipped rule names any IPC
+// capability, so such an event now falls through to the score-based rules and
+// is warned instead. That is deliberate and it is not this decision's to
+// reverse: the rule set's own closing TODO says "Any rule that fires on routine
+// work needs tightening or removal before enforce mode is credible", and a
+// prompt on every connect to the journal, the resolver and the session bus is
+// that rule. Whether the IPC domain deserves a rule of its own is a policy
+// question, to be answered in configs/rules.default.yaml where the reasoning is
+// visible, and it is not answered here.
 // Done, for the first of the four: sched_process_exec is implemented in
 // bpf/allseer.bpf.c as the program `proc_exec`, under
 // SEC("tracepoint/sched/sched_process_exec"). It emits ALLSEER_EVT_PROC_EXEC
@@ -468,8 +499,91 @@ type Config struct {
 // What the two snapshots buy is the thing one snapshot could not: a capability
 // delta with both operands present, which internal/risk/privilege.go names as
 // the defect it has been labelling CapabilityDeltaAddedOnly.
-// No probe emits the type yet. The ABI is the contract; the syscall enter/exit
-// pairs that fill it are a separate issue.
+// The probes that fill it were a separate issue and are the two entries below.
+//
+// Done: the privilege probes are implemented in bpf/allseer.bpf.c as eleven
+// syscall enter/exit pairs — setuid, setreuid, setresuid, setgid, setregid,
+// setresgid, setgroups, capset, unshare, setns and seccomp — and every one of
+// them emits ALLSEER_EVT_PRIV_CHANGE. Twenty-two programs from one pair of
+// bodies, because the syscall is what names the operation: struct allseer_event
+// carries no syscall identifier, so `operation` is the only thing separating a
+// setuid record from a capset one, and a program attached to a single tracepoint
+// knows its own answer as a compile-time constant.
+// Correlation is the protocol allseer_maps.h settled for openat, used a third
+// time and shared for the first time. `priv_scratch` is keyed by the thread
+// rather than the process — credentials on Linux hang off task_struct, every
+// thread has its own, and every thread of a process can be inside setuid at
+// once — and it carries the `before` snapshot, which exists only until the
+// syscall commits and which no later hook could recover. One map serves all
+// eleven, which the two reasons for splitting openat from connect do not cover:
+// the eleven share one value shape exactly and none of them is hot. What a
+// shared map does need is the thing allseer_maps.h named when it declined one —
+// "a syscall tag and a check on it" — and `operation` is that tag, checked by
+// each exit program against its own.
+// Per thread and never per process, which is the opposite of proc_exit's
+// answer and deliberate: proc_exit filters to the group leader because a process
+// exits once, while a worker thread that calls setuid changes its own
+// credentials and no one else's. The visible cost is that one glibc setuid() on
+// an N-threaded process produces N records, because glibc implements the POSIX
+// whole-process semantics the kernel does not have by signalling every thread to
+// make the raw syscall itself. Collapsing them is a judgment for a stage that
+// can see more than one record at a time.
+// A refused syscall is a record rather than a silence. `ret` is copied verbatim
+// and the `after` snapshot is captured on both paths, so a negative return
+// arrives with the two snapshots equal — which is a stronger statement than the
+// record being absent, because it turns "nothing changed" from an absence into
+// an assertion a reader can check against `before`. decode.go needs no special
+// case for it: resultOf already reads ret >= 0 as Succeeded.
+// The obligations every probe in this object carries are carried here too. The
+// tracked_cgroups lookup is the first thing each entry program does, before any
+// credential is read, and the ID it matched on is the one in the record. The
+// exit side performs no lookup of its own, so the entry side's decision is what
+// admitted the event. Every exit path that found a scratch entry deletes it —
+// a stale identity stamp, a mismatched operation tag, a failed reservation and a
+// submitted record alike — and count_ringbuf_drop() is called on the failed
+// reservation and on nothing else, because a correlation that was never
+// completed is not a record that was lost.
+// ABI v2 is unchanged by any of it: the probes fill the layout the entry above
+// defines, struct allseer_event is still 856 bytes, and the object still exposes
+// the same ALLSEER_ABI_VERSION the loader checks before it attaches anything.
+// Verified against a running kernel rather than by inspection:
+// internal/telemetry/priv_linux_test.go covers every operation's enum, the
+// before/after snapshots against real uid, gid, capability and group
+// transitions, fields_present, the user-namespace case, per-thread identity,
+// cgroup filtering both ways, drop accounting, scratch deletion on success,
+// failure and tag mismatch, attach and detach of all twenty-two, and coexistence
+// with the four probes that were there first.
+
+// Done: the capability sets are read in whichever shape the running kernel
+// keeps them in, so the privilege probes did not raise this object's runtime
+// floor. Linux 6.3 replaced `struct kernel_cap_struct { __u32 cap[2]; }` with
+// `struct { u64 val; }`, and the two are the same eight bytes in the same order
+// on a little-endian target — cap[0] holds capabilities 0-31 and cap[1] holds
+// 32-63, which is where bits 0-31 and 32-63 of the u64 sit. Both targets this
+// ABI is generated for are little-endian, so the header's __u64 was always the
+// correct wire type and nothing in allseer_event.h is contingent on a kernel
+// version. The difference is entirely in the source expression, because there is
+// no member named `val` before 6.3 and none named `cap` after it.
+// ALLSEER_READ_CAP_SET in bpf/allseer.bpf.c picks between them. The modern read
+// is guarded by bpf_core_field_exists, which resolves to 0 when the field is
+// absent rather than poisoning; the legacy read goes through `struct
+// cred___legacy`, a CO-RE flavor libbpf matches against the kernel's own struct
+// cred. On any given kernel one of the two branches carries a relocation that
+// cannot resolve, and libbpf answers that by poisoning the instruction rather
+// than refusing the object — so the object loads and the verifier prunes the
+// branch the guard did not take. Nothing is truncated: both halves of the legacy
+// pair are read and recombined, so a capability above 31 — CAP_PERFMON, CAP_BPF
+// and CAP_CHECKPOINT_RESTORE are all in that range — survives on an older host.
+// vmlinux.h is generated from the build host's BTF, so the build host is 6.3 or
+// newer; the runtime floor stays where the ring buffer put it.
+// One limitation is recorded rather than left to be discovered: the legacy data
+// path has never executed. No pre-6.3 kernel is available in the current
+// verification environment, so what has been shown is that the object compiles
+// with both relocation sets present, that the offsets are resolved by CO-RE, and
+// that the guard-and-poison mechanism works — the privileged run was on a kernel
+// where it is the legacy branch that gets poisoned, so a clean load and a
+// passing suite exercised exactly that. The recombination arithmetic itself is
+// unverified until this object is run on a kernel between 5.8 and 6.2.
 //
 // TODO(architecture): after M5 is complete, transition the telemetry
 // architecture from the current single-BPF-object model toward independently

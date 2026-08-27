@@ -441,10 +441,15 @@ struct allseer_event {
 /* Done: struct allseer_event carries a version field, and ALLSEER_ABI_VERSION
  * above is the value every probe writes into it.
  *
- * TODO(bpf): expose that constant from the compiled object — a read-only global
- * the loader can read through BTF before it attaches anything — and refuse to
- * attach on a mismatch. The field in the record is the backstop, not the
- * mechanism: it reports the mismatch one event at a time, after the probes are
- * already running, which is later than the loader could have known. */
+ * Done: that constant is also exposed from the compiled object, so a mismatch is
+ * refused before a single program reaches the kernel. bpf/allseer.bpf.c declares
+ * `allseer_abi_version` as a read-only global; telemetry.checkABIVersion reads it
+ * out of the object's .rodata through the ELF symbol table and refuses to load on
+ * a disagreement. The field in each record remains the backstop rather than the
+ * mechanism — it reports the mismatch one event at a time, after the probes are
+ * already running, which is later than the loader could have known — and
+ * internal/telemetry/decode.go still checks it before it believes any other
+ * field. The two are complements: the loader's check is per-object and free, the
+ * decoder's is per-record and is the only one that can see a record at all. */
 
 #endif /* __ALLSEER_EVENT_H */

@@ -660,7 +660,13 @@ _Static_assert(sizeof(((struct allseer_priv_scratch *)0)->before) ==
  * else — a second per-CPU counter map of the same shape, with its own key
  * constants, is the shape of the fix. It is left out of the openat issue because
  * the counter needs a consumer to be worth anything, and the consumer is
- * Collector. It now covers connect on the same terms.
+ * Collector. It now covers all three scratch maps on the same terms: connect,
+ * and priv_scratch after it. The privilege case is the one where a lost
+ * correlation costs the most and is hardest to notice — a credential change
+ * whose exit found no entry produces no record, and a governed process that
+ * appears never to have changed its credentials is indistinguishable from one
+ * that did so unobserved. The deferral is unchanged, because the argument for it
+ * is unchanged: a counter nothing reads is not a control.
  *
  * TODO(event): struct allseer_net_payload cannot say that an address field was
  * never filled. Every other field in it can — protocol and sock_type render as

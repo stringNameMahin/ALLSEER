@@ -306,6 +306,28 @@ func TestEveryDecodableKindIsInTheCatalog(t *testing.T) {
 		t.Errorf("CapabilitiesFor(unknown) = %v, want nil", got)
 	}
 
+	// Both connect answers are advertised, and nothing else is. AF_UNIX is
+	// ipc.unixsocket and every other family is net.connect, so the coverage
+	// list has to name exactly those two — one more would report a capability
+	// as observable that no record decodes to, one fewer would hide one that
+	// does.
+	connAdvertised := make(map[capability.Kind]bool)
+	for _, k := range CapabilitiesFor(abi.EvtNetConnect) {
+		connAdvertised[k] = true
+	}
+	for _, family := range []uint16{0, 1, 2, 10, 17, 40, math.MaxUint16} {
+		if got := kindForConnectFamily(family); !connAdvertised[got] {
+			t.Errorf("family %d decodes to %q, which CapabilitiesFor(%s) does not advertise",
+				family, got, abi.EvtNetConnect)
+		}
+	}
+	for k := range connAdvertised {
+		if k != capability.KindNetConnect && k != capability.KindIPCUnixSock {
+			t.Errorf("CapabilitiesFor(%s) advertises %q, which no family decodes to",
+				abi.EvtNetConnect, k)
+		}
+	}
+
 	// Every open-flag combination the decoder can see resolves to a kind
 	// CapabilitiesFor(EvtFileOpen) advertises. Exhaustive over the bits that
 	// participate: the two access-mode bits and O_CREAT.
@@ -1554,6 +1576,98 @@ func TestDecodeRefusesSupersededPrivilegeLayout(t *testing.T) {
 			t.Errorf("refused as %v, which is a conclusion drawn from fields this build cannot "+
 				"claim to be reading correctly", wrong)
 		}
+	}
+}
+
+// An AF_UNIX connect is ipc.unixsocket; every other family is net.connect.
+//
+// The decision kindForConnectFamily documents, asserted at the boundary that
+// makes it: the address family is the one field the probe reliably fills for a
+// unix socket, and pkg/capability defines net.connect as reaching "a remote
+// endpoint" — which an AF_UNIX socket has none of.
+//
+// The domain moves with the kind, and that is the part worth pinning: a connect
+// over AF_UNIX is an IPC event carrying a network payload, which the event
+// schema permits because it requires a network payload when the domain is
+// network and says nothing that forbids one elsewhere.
+func TestDecodeConnectFamilySelectsCapability(t *testing.T) {
+	cases := []struct {
+		name   string
+		family uint16
+		kind   capability.Kind
+		domain capability.Domain
+	}{
+		{"AF_UNIX is IPC", 1, capability.KindIPCUnixSock, capability.DomainIPC},
+		{"AF_INET is network", 2, capability.KindNetConnect, capability.DomainNetwork},
+		{"AF_INET6 is network", 10, capability.KindNetConnect, capability.DomainNetwork},
+		// A family the decoder does not recognise is not quietly promoted to
+		// IPC. Only AF_UNIX is, because only AF_UNIX is known not to leave the
+		// host.
+		{"AF_NETLINK stays network", 16, capability.KindNetConnect, capability.DomainNetwork},
+		{"AF_UNSPEC stays network", 0, capability.KindNetConnect, capability.DomainNetwork},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw := newRecord(abi.EvtNetConnect)
+			put16(raw, offNetFamily, c.family)
+			e := decode(t, raw)
+
+			if e.Capability != c.kind {
+				t.Errorf("capability = %q, want %q", e.Capability, c.kind)
+			}
+			if e.Domain != c.domain {
+				t.Errorf("domain = %q, want %q", e.Domain, c.domain)
+			}
+			// The payload rides along either way. The record is a connect
+			// whichever kind it decodes to, and the family is in it.
+			if e.Network == nil {
+				t.Fatal("a connect decoded with no network payload")
+			}
+		})
+	}
+}
+
+// The AF_UNIX record still carries no destination, and the decision did not
+// invent one.
+//
+// What changed is the kind, the domain and the severity. What did not change is
+// the evidence: sun_path is 108 bytes against a 16-byte address field, so the
+// record cannot say which socket was reached and resolve.Observe produces an
+// empty target. Asserted so that a later change which appears to constrain a
+// unix socket has to make the evidence real first.
+func TestDecodeUnixConnectCarriesNoDestination(t *testing.T) {
+	raw := newRecord(abi.EvtNetConnect)
+	put16(raw, offNetFamily, 1)
+	put16(raw, offNetSockType, 1)
+	// Bytes that would read as an address if the family were misread.
+	copy(raw[offNetDaddr:], []byte{0x2f, 0x74, 0x6d, 0x70})
+
+	e := decode(t, raw)
+
+	if e.Capability != capability.KindIPCUnixSock {
+		t.Fatalf("capability = %q, want %q", e.Capability, capability.KindIPCUnixSock)
+	}
+	if e.Network.AddressFamily != "AF_UNIX" {
+		t.Errorf("address family = %q, want AF_UNIX", e.Network.AddressFamily)
+	}
+	if e.Network.DestAddr != "" {
+		t.Errorf("dest addr = %q; a socket path is not an address and none was captured",
+			e.Network.DestAddr)
+	}
+	if e.Network.DestPort != 0 {
+		t.Errorf("dest port = %d, want 0", e.Network.DestPort)
+	}
+
+	obs, err := resolve.Observe(e)
+	if err != nil {
+		t.Fatalf("resolve.Observe: %v", err)
+	}
+	if obs.Kind != capability.KindIPCUnixSock || obs.Domain != capability.DomainIPC {
+		t.Errorf("observation = %q/%q, want %q/%q",
+			obs.Kind, obs.Domain, capability.KindIPCUnixSock, capability.DomainIPC)
+	}
+	if obs.Target != "" {
+		t.Errorf("target = %q; the record cannot say which unix socket was reached", obs.Target)
 	}
 }
 

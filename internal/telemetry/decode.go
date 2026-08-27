@@ -327,7 +327,7 @@ func decodePayload(rec *abi.Event, e *event.Event) error {
 
 	case abi.EvtNetConnect:
 		p := rec.Net()
-		e.Capability = capability.KindNetConnect
+		e.Capability = kindForConnectFamily(p.Family)
 		e.Network = netPayload(&p, false)
 
 	case abi.EvtNetBind:
@@ -627,6 +627,67 @@ func privPayload(p *abi.PrivPayload) *event.PrivPayload {
 	return out
 }
 
+// kindForConnectFamily decides which capability a connect exercised.
+//
+// AF_UNIX is ipc.unixsocket; everything else is net.connect. This is the
+// decision the open TODO in internal/telemetry asked for, and the family is
+// what settles it — the one field the probe reliably fills for a unix socket.
+//
+// # Why the family is enough, and why net.connect was wrong
+//
+// pkg/capability defines net.connect as "Open an outbound connection to a
+// remote endpoint", and the network block's rationale is that "an outbound
+// connection is how data leaves, and that cannot be undone after the fact". An
+// AF_UNIX socket has no remote endpoint and nothing leaves the host through
+// one. Classifying it as net.connect is therefore not a conservative choice; it
+// is a false statement about an observed fact, made in the field the validator
+// matches on.
+//
+// ipc.unixsocket is defined as "Connect to or create a Unix domain socket" and
+// already lists `connect` among its syscalls, so this is the catalog's own
+// answer rather than a new one. The catalog listing `connect` under both kinds
+// is what left the question open; the family is what closes it.
+//
+// The family is not inferred. bpf/allseer.bpf.c reads it out of the sockaddr the
+// process passed and writes it into the record for every family, including the
+// ones whose address it cannot represent — its default arm sets family and
+// nothing else, which is exactly the AF_UNIX case. So this reads a captured
+// value rather than deducing one from an absence.
+//
+// # What this does not establish
+//
+// Which unix socket. sun_path is 108 bytes, struct allseer_net_payload's daddr
+// is 16, and ABI v2 has no field for a path — decode.go already states the
+// reading side of that as "a socket path is not an address and does not fit in
+// the field". So resolve.Observe produces an empty Target and no envelope can
+// say "may connect to /run/docker.sock" while saying no to the rest.
+//
+// That limit is not introduced here. Under net.connect the target was equally
+// empty, because addressString renders nothing for AF_UNIX and the port is
+// zero, so nothing that was matchable has stopped being matchable. What changes
+// is the kind, the domain and the severity — and those change because they were
+// wrong, not because more is now known.
+//
+// # The consequence worth stating rather than discovering
+//
+// configs/rules.default.yaml matches unexpected-network-egress on the
+// capability, so today every ungranted unix-socket connect is requested for
+// approval regardless of score. No shipped rule names any IPC capability, so
+// after this change such an event falls through to the score-based rules and is
+// warned rather than prompted. That is a real reduction in what the shipped
+// policy does about it, and it belongs in a policy decision rather than in this
+// one: the rule set's own closing TODO says "Any rule that fires on routine
+// work needs tightening or removal before enforce mode is credible", and a
+// prompt on every connect to the journal, the resolver and the session bus is
+// that rule. Whether IPC deserves a rule of its own is a question for the rule
+// set, which is where it can be answered with the reasoning visible.
+func kindForConnectFamily(family uint16) capability.Kind {
+	if family == afUnix {
+		return capability.KindIPCUnixSock
+	}
+	return capability.KindNetConnect
+}
+
 // kindForOpenFlags decides which filesystem capability an open exercised.
 //
 // An open is the one event type whose capability is not fixed by its name, and
@@ -918,11 +979,20 @@ func resultOf(ret int32) event.Result {
 // beside this file. A grant with no probe behind it is a blind spot that reads
 // as a control, and that check is only as good as the list feeding it.
 //
-// Two types have more than one answer, and for the same reason in both: the
-// payload decides. Which of fs.read, fs.write and fs.create an
-// ALLSEER_EVT_FILE_OPEN exercised depends on the open flags, and which of four
+// Three types have more than one answer, and for the same reason in all three:
+// the payload decides. Which of fs.read, fs.write and fs.create an
+// ALLSEER_EVT_FILE_OPEN exercised depends on the open flags; which of four
 // privilege kinds an ALLSEER_EVT_PRIV_CHANGE exercised depends on its
-// `operation` — see kindForOpenFlags and kindForPrivOp.
+// `operation`; and whether an ALLSEER_EVT_NET_CONNECT is net.connect or
+// ipc.unixsocket depends on its address family — see kindForOpenFlags,
+// kindForPrivOp and kindForConnectFamily.
+//
+// ALLSEER_EVT_NET_CONNECT is the one whose two answers land in different
+// *domains*, which is worth naming because it is the thing a reader would
+// otherwise assume cannot happen: a connect over AF_UNIX is an IPC event
+// carrying a network payload. api/schema/event.v1alpha1.schema.json permits
+// that — it requires a network payload when the domain is network, and says
+// nothing that forbids one elsewhere.
 //
 // priv.escalate is absent from the privilege list even though the catalog
 // grades it, because kindForPrivOp never returns it: no operation implies
@@ -950,7 +1020,7 @@ func CapabilitiesFor(t abi.EventType) []capability.Kind {
 	case abi.EvtProcExit:
 		return []capability.Kind{capability.KindProcessExit}
 	case abi.EvtNetConnect:
-		return []capability.Kind{capability.KindNetConnect}
+		return []capability.Kind{capability.KindNetConnect, capability.KindIPCUnixSock}
 	case abi.EvtNetBind:
 		return []capability.Kind{capability.KindNetBind}
 	case abi.EvtNetSend:
@@ -984,10 +1054,9 @@ func CapabilitiesFor(t abi.EventType) []capability.Kind {
 // naming one of them would be a guess in a field kept for forensics. A __u32
 // syscall number on struct allseer_event would settle it, alongside the version
 // field already open in the header.
-// TODO(telemetry): decide whether ALLSEER_EVT_NET_CONNECT with AF_UNIX should
-// resolve to ipc.unixsocket rather than net.connect. The catalog lists `connect`
-// under both, so the catalog does not settle it, and the difference is a
-// high-severity network egress versus a medium-severity IPC channel on every
-// unix socket a build touches. Deferred rather than guessed: it is a judgment
-// about what a family value means for governance, and it should be made with the
-// connect probe in front of it.
+// Done: ALLSEER_EVT_NET_CONNECT with AF_UNIX resolves to ipc.unixsocket, and
+// every other family to net.connect. The catalog lists `connect` under both
+// kinds, so it never settled the question; the address family does, and
+// kindForConnectFamily is where. The judgment this deferred — "what a family
+// value means for governance" — was made with the connect probe in front of it,
+// which is the condition it was deferred on.
