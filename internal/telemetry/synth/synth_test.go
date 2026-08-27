@@ -779,7 +779,7 @@ func TestDecoderRefusalsAreSurfacedUnchanged(t *testing.T) {
 		want error
 	}{
 		{"unset type", abi.EvtUnknown, telemetry.ErrUnsetEventType},
-		{"undecided privilege mapping", abi.EvtPrivChange, telemetry.ErrUndecidedMapping},
+		{"privilege record with no operation", abi.EvtPrivChange, telemetry.ErrUnsetPrivOp},
 		{"type outside this build's enum", abi.EventType(99), telemetry.ErrUnknownEventType},
 	}
 

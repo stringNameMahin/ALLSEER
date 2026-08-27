@@ -157,8 +157,16 @@ func FuzzDecode(f *testing.F) {
 				t.Fatal("network event with no network payload")
 			}
 		}
-		if e.Privil != nil {
-			t.Fatal("a privilege payload was produced, and the only type carrying one is refused")
+		// A privilege payload appears on exactly one type and on no other. The
+		// inverse — a privilege event with no payload — is not asserted here,
+		// because privPayload always returns a struct: which of its fields are
+		// filled is decided by fields_present, not by whether the pointer is
+		// set.
+		if e.Privil != nil && e.Domain != capability.DomainPrivilege {
+			t.Fatalf("a privilege payload rode on a %s event", e.Domain)
+		}
+		if e.Domain == capability.DomainPrivilege && e.Privil == nil {
+			t.Fatal("a privilege event carried no privilege payload")
 		}
 
 		// --- strings ---------------------------------------------------------
@@ -238,7 +246,7 @@ func readType(raw []byte) abi.EventType {
 // reasons a correctly sized record of a declared type is refused.
 func isDeclaredRefusal(err error) bool {
 	for _, sentinel := range []error{
-		ErrABIVersionMismatch, ErrUnsetEventType, ErrUndecidedMapping, ErrTruncatedString,
+		ErrABIVersionMismatch, ErrUnsetEventType, ErrUnsetPrivOp, ErrUnknownPrivOp, ErrTruncatedString,
 	} {
 		if errors.Is(err, sentinel) {
 			return true

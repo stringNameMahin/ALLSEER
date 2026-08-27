@@ -343,11 +343,21 @@ func (s Spec) check() error {
 		}
 
 	default:
-		// Every remaining type designates no union member: ALLSEER_EVT_PROC_EXIT
-		// and ALLSEER_EVT_PTRACE by the header, ALLSEER_EVT_UNKNOWN and
-		// ALLSEER_EVT_PRIV_CHANGE because the decoder refuses them, and an
-		// undeclared value because this build knows nothing about it. A payload
-		// on any of them is a payload nothing would read.
+		// Every remaining type designates no union member this generator can
+		// fill: ALLSEER_EVT_PROC_EXIT and ALLSEER_EVT_PTRACE by the header,
+		// ALLSEER_EVT_UNKNOWN because the decoder refuses it, and an undeclared
+		// value because this build knows nothing about it. A payload on any of
+		// them is a payload nothing would read.
+		//
+		// ALLSEER_EVT_PRIV_CHANGE is in this branch for a different reason than
+		// the rest, and it is a gap rather than a rule: the header does
+		// designate struct allseer_priv_payload for it, and the decoder does
+		// read it, but Spec has no member to describe one with. So a privilege
+		// spec renders a cleared payload, whose operation is
+		// ALLSEER_PRIV_OP_UNKNOWN, and telemetry.EventDecoder refuses it with
+		// ErrUnsetPrivOp — which is the correct refusal for those bytes and is
+		// not the same as the type being undecodable. Giving Spec a privilege
+		// member belongs with the probe that emits the type.
 		if set > 0 {
 			return fmt.Errorf("%w: %s designates no union member the decoder reads",
 				ErrPayloadMismatch, s.Type)

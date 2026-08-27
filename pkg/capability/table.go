@@ -233,11 +233,21 @@ var descriptors = []Descriptor{
 		Syscalls:         []string{"setuid", "setreuid", "setresuid", "capset"},
 	},
 	{
+		// setgroups belongs here on the summary's own terms: supplementary
+		// groups are group identity. It was missing from the list rather than
+		// excluded from the kind, and the omission mattered — setgroups(0, NULL)
+		// is the step that drops supplementary groups before dropping
+		// privilege, and failing to call it before a setuid is a textbook
+		// privilege-retention bug. It is named by ALLSEER_PRIV_OP_SETGROUPS,
+		// which internal/telemetry/decode.go maps to this kind.
 		Kind:             KindPrivSetuid,
 		Domain:           DomainPrivilege,
 		Summary:          "Change the process's user or group identity.",
 		BaselineSeverity: SeverityCritical,
-		Syscalls:         []string{"setuid", "setgid", "setreuid", "setregid", "setresuid", "setresgid"},
+		Syscalls: []string{
+			"setuid", "setgid", "setreuid", "setregid", "setresuid", "setresgid",
+			"setgroups",
+		},
 	},
 	{
 		Kind:             KindPrivCapSet,

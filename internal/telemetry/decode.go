@@ -114,9 +114,27 @@ var (
 	// The value is rendered rather than hidden, per abi.EventType.String.
 	ErrUnknownEventType = errors.New("telemetry: event type is not in this build's ABI")
 
-	// ErrUndecidedMapping: a declared event type whose capability mapping this
-	// build will not guess at. See privilegeMappingIsUndecided.
-	ErrUndecidedMapping = errors.New("telemetry: event type has no decided capability mapping in this build")
+	// ErrUnsetPrivOp: a privilege record whose `operation` is
+	// ALLSEER_PRIV_OP_UNKNOWN.
+	//
+	// The counterpart to ErrUnsetEventType, one level down, and it exists for
+	// the reason the header gives at the enum: every probe clears the payload
+	// union before filling it, so a probe that failed to write `operation`
+	// leaves a zero there. Zero names no operation, and the alternative to
+	// refusing it is deciding which of five privilege capabilities a
+	// zero-initialised record exercised.
+	ErrUnsetPrivOp = errors.New("telemetry: privilege record states no operation")
+
+	// ErrUnknownPrivOp: the operation is outside the enum this build was
+	// generated from.
+	//
+	// The counterpart to ErrUnknownEventType, and it means the same thing: the
+	// loaded object is newer than this binary. Refused rather than mapped to
+	// some default, because the operation is what selects the capability, and
+	// configs/rules.default.yaml blocks three of the five privilege kinds
+	// terminally while not naming the other two at all. A guess here decides
+	// the action.
+	ErrUnknownPrivOp = errors.New("telemetry: privilege operation is not in this build's ABI")
 
 	// ErrTruncatedString: a fixed-size character array with no NUL in it.
 	//
@@ -334,7 +352,13 @@ func decodePayload(rec *abi.Event, e *event.Event) error {
 		e.Capability = capability.KindProcessPtrace
 
 	case abi.EvtPrivChange:
-		return privilegeMappingIsUndecided()
+		p := rec.Priv()
+		k, err := kindForPrivOp(abi.PrivOp(p.Operation))
+		if err != nil {
+			return err
+		}
+		e.Capability = k
+		e.Privil = privPayload(&p)
 
 	case abi.EvtUnknown:
 		return ErrUnsetEventType
@@ -345,37 +369,262 @@ func decodePayload(rec *abi.Event, e *event.Event) error {
 	return nil
 }
 
-// privilegeMappingIsUndecided refuses ALLSEER_EVT_PRIV_CHANGE, and says why.
+// kindForPrivOp decides which privilege capability an operation exercised.
 //
-// This is the one declared event type with no honest mapping, and the reason is
-// in the header: struct allseer_priv_payload carries `__u32 operation` with no
-// enumerators anywhere in the repository. internal/risk/privilege.go states the
-// same thing from the other side — every field of the privilege payload is
-// "either free text with no vocabulary defined anywhere in the repository
-// (Operation, NamespaceType), one-sided (CapabilitiesAdded), or ambiguous on
-// its most important value".
+// The mapping the header's `enum allseer_priv_op` was added to make possible.
+// Before it, struct allseer_priv_payload carried a `__u32 operation` with no
+// enumerators anywhere in the repository, one C type stood in for five catalog
+// kinds, and this function's predecessor refused the whole event type rather
+// than choose between them. The enum is what makes the choice a lookup instead
+// of a guess.
 //
-// So one C type stands in for five catalog kinds — priv.escalate, priv.setuid,
-// priv.capset, priv.namespace, priv.seccomp — and nothing in the record
-// distinguishes them. Choosing one would not be a small inaccuracy.
-// configs/rules.default.yaml blocks priv.escalate, priv.setuid and priv.capset
-// terminally and does not name priv.namespace or priv.seccomp at all, so the
-// guess would decide the action. A decoder that decides the action by guessing
-// is precisely what this boundary exists to prevent.
+// Every arm is the catalog's own grouping rather than a second opinion about
+// it. pkg/capability/table.go places setuid, setgid and their re- and res-
+// variants under priv.setuid, whose summary is "Change the process's user or
+// group identity"; setgroups joins them there because supplementary groups are
+// group identity, which is the catalog correction that landed with this ABI.
+// capset is priv.capset, unshare and setns are priv.namespace, seccomp is
+// priv.seccomp.
 //
-// Refusing costs nothing today: no probe emits this type. The four tracepoints
-// M5 specifies are exec, exit, openat and connect, and none of them is a
-// privilege hook. When one is written, the mapping becomes decidable in the
-// only place it can be — the header, by declaring `enum allseer_priv_op`
-// alongside the operations the probe can actually distinguish. That is a C edit
-// for the Linux host and it belongs with the `version` field issue already open
-// for the same reason.
-func privilegeMappingIsUndecided() error {
-	return fmt.Errorf("%w: %s carries struct allseer_priv_payload, whose `operation` field has "+
-		"no enumerators in bpf/include/allseer_event.h; priv.escalate, priv.setuid, priv.capset, "+
-		"priv.namespace and priv.seccomp are indistinguishable in the record, and the shipped rule "+
-		"set treats them differently",
-		ErrUndecidedMapping, abi.EvtPrivChange)
+// priv.escalate is never returned, and its absence is the design rather than an
+// omission. The catalog describes it as "Gain privileges, by any mechanism",
+// which is a claim about the difference between two states and not about which
+// syscall was called — no operation value implies it, and the header says so at
+// the enum. Deriving it belongs downstream, where both snapshots are in hand
+// and where the user-namespace scope of a capability set can be taken into
+// account: unshare(CLONE_NEWUSER) hands the caller a full capability set inside
+// the namespace it just created, and a consumer that read that as escalation
+// would block every containerized build step on the host, because
+// configs/rules.default.yaml blocks priv.escalate terminally.
+//
+// Two values are refused rather than mapped. ALLSEER_PRIV_OP_UNKNOWN is the
+// zero a cleared payload holds, and an operation outside the enum means the
+// loaded object is newer than this binary. Both are layout or probe faults, and
+// neither has a safe default: the operation selects the capability, and the
+// capability selects the action.
+func kindForPrivOp(op abi.PrivOp) (capability.Kind, error) {
+	switch op {
+	case abi.OpSetuid, abi.OpSetreuid, abi.OpSetresuid,
+		abi.OpSetgid, abi.OpSetregid, abi.OpSetresgid,
+		abi.OpSetgroups:
+		return capability.KindPrivSetuid, nil
+	case abi.OpCapset:
+		return capability.KindPrivCapSet, nil
+	case abi.OpUnshare, abi.OpSetns:
+		return capability.KindPrivNamespace, nil
+	case abi.OpSeccomp:
+		return capability.KindPrivSeccomp, nil
+	case abi.OpUnknown:
+		return "", ErrUnsetPrivOp
+	}
+	return "", fmt.Errorf("%w: %s", ErrUnknownPrivOp, op)
+}
+
+// privOpNames is the operation vocabulary as event.PrivPayload.Operation spells
+// it.
+//
+// Short lower-case names rather than abi.PrivOp.String(), which renders the C
+// enumerator — "ALLSEER_PRIV_OP_SETUID" — because Operation is a field a human
+// reads in an audit record and a rule author may one day match on. The names
+// here are the ones internal/risk/privilege.go's tests already use for the
+// field: "setuid", "capset", "unshare", "seccomp". That vocabulary predates the
+// enum and this table adopts it rather than introducing a second one.
+//
+// Keyed by abi.PrivOp so a value added to the header without a name here yields
+// the empty string, which privEvidenceState already reads as a malformed
+// payload rather than as an absent one. It cannot silently become some other
+// operation's name.
+var privOpNames = map[abi.PrivOp]string{
+	abi.OpSetuid:    "setuid",
+	abi.OpSetreuid:  "setreuid",
+	abi.OpSetresuid: "setresuid",
+	abi.OpSetgid:    "setgid",
+	abi.OpSetregid:  "setregid",
+	abi.OpSetresgid: "setresgid",
+	abi.OpSetgroups: "setgroups",
+	abi.OpCapset:    "capset",
+	abi.OpUnshare:   "unshare",
+	abi.OpSetns:     "setns",
+	abi.OpSeccomp:   "seccomp",
+}
+
+// CLONE_* values, as the kernel's uapi defines them.
+//
+// Only the namespace bits, because ns_flags is documented in the header as
+// carrying unshare's flags or setns's nstype and both name namespaces. The
+// other CLONE_ bits can appear in an unshare argument — CLONE_FILES and
+// CLONE_FS are legal there — and they are deliberately not named, because they
+// are not namespaces and namespaceName would be claiming otherwise.
+const (
+	cloneNewTime   = 0x00000080
+	cloneNewNS     = 0x00020000
+	cloneNewCgroup = 0x02000000
+	cloneNewUTS    = 0x04000000
+	cloneNewIPC    = 0x08000000
+	cloneNewUser   = 0x10000000
+	cloneNewPID    = 0x20000000
+	cloneNewNet    = 0x40000000
+)
+
+// namespaceName renders ns_flags as event.PrivPayload.NamespaceType.
+//
+// The user namespace is reported ahead of every other bit when several are set,
+// and that ordering is a judgment worth stating rather than an artifact of the
+// switch. unshare accepts a mask, so `unshare(CLONE_NEWUSER|CLONE_NEWNS)` is one
+// call carrying two namespaces, and NamespaceType is a single string. The user
+// namespace is the one that is a credential — it lives in struct cred, where
+// the rest live in task->nsproxy — and it is the one that changes what the
+// process may do rather than what it can see. Naming the mount namespace on
+// that call and dropping the user namespace would report the less consequential
+// half.
+//
+// A mask with no namespace bit set, which is what an unshare of CLONE_FILES
+// alone produces, renders as the empty string. So does a zero, which is what
+// setns(fd, 0) supplies when the caller names no type — and there the
+// before/after userns_inum pair in the payload is what says whether a user
+// namespace was entered. The empty string is the honest rendering of both:
+// nothing in the argument named a namespace.
+func namespaceName(flags uint32) string {
+	switch {
+	case flags&cloneNewUser != 0:
+		return "user"
+	case flags&cloneNewPID != 0:
+		return "pid"
+	case flags&cloneNewNet != 0:
+		return "net"
+	case flags&cloneNewNS != 0:
+		return "mount"
+	case flags&cloneNewIPC != 0:
+		return "ipc"
+	case flags&cloneNewUTS != 0:
+		return "uts"
+	case flags&cloneNewCgroup != 0:
+		return "cgroup"
+	case flags&cloneNewTime != 0:
+		return "time"
+	}
+	return ""
+}
+
+// capabilityNames maps a bit position in a capability mask to its CAP_ name.
+//
+// Index is the bit number, which is what the kernel's CAP_TO_INDEX/CAP_TO_MASK
+// pair computes and what the header's note on kernel_cap_t explains is
+// identical between the pre-6.3 __u32[2] representation and the u64 that
+// replaced it on a little-endian target.
+//
+// The list stops at CAP_CHECKPOINT_RESTORE, which is CAP_LAST_CAP on every
+// kernel this build targets. A bit above the end of the list is rendered
+// numerically by capabilityDelta rather than dropped, because a capability this
+// binary has no name for is still a capability that was gained, and losing it
+// from the audit record would be the one direction that matters.
+var capabilityNames = [...]string{
+	"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER",
+	"CAP_FSETID", "CAP_KILL", "CAP_SETGID", "CAP_SETUID",
+	"CAP_SETPCAP", "CAP_LINUX_IMMUTABLE", "CAP_NET_BIND_SERVICE", "CAP_NET_BROADCAST",
+	"CAP_NET_ADMIN", "CAP_NET_RAW", "CAP_IPC_LOCK", "CAP_IPC_OWNER",
+	"CAP_SYS_MODULE", "CAP_SYS_RAWIO", "CAP_SYS_CHROOT", "CAP_SYS_PTRACE",
+	"CAP_SYS_PACCT", "CAP_SYS_ADMIN", "CAP_SYS_BOOT", "CAP_SYS_NICE",
+	"CAP_SYS_RESOURCE", "CAP_SYS_TIME", "CAP_SYS_TTY_CONFIG", "CAP_MKNOD",
+	"CAP_LEASE", "CAP_AUDIT_WRITE", "CAP_AUDIT_CONTROL", "CAP_SETFCAP",
+	"CAP_MAC_OVERRIDE", "CAP_MAC_ADMIN", "CAP_SYSLOG", "CAP_WAKE_ALARM",
+	"CAP_BLOCK_SUSPEND", "CAP_AUDIT_READ", "CAP_PERFMON", "CAP_BPF",
+	"CAP_CHECKPOINT_RESTORE",
+}
+
+// capabilityDelta names every capability set in after and not in before.
+//
+// The one thing the two-snapshot payload was designed to make computable.
+// internal/risk/privilege.go states the defect it closes: "A delta needs a
+// before and an after. The repository has neither", and it labels every
+// capability report it emits CapabilityDeltaAddedOnly because the previous
+// payload snapshotted one absolute set from which "added" was unrecoverable.
+// Both operands are now in the record.
+//
+// Additions only, which is what event.PrivPayload.CapabilitiesAdded is declared
+// to hold. A dropped capability is visible to anything reading the raw payload
+// and is not representable in this field, which is exactly the one-sidedness
+// that risk labels; this function does not pretend otherwise by folding
+// removals in.
+func capabilityDelta(before, after uint64) []string {
+	gained := after &^ before
+	if gained == 0 {
+		return nil
+	}
+	var names []string
+	for bit := 0; bit < 64; bit++ {
+		if gained&(1<<uint(bit)) == 0 {
+			continue
+		}
+		if bit < len(capabilityNames) {
+			names = append(names, capabilityNames[bit])
+			continue
+		}
+		names = append(names, fmt.Sprintf("CAP_%d", bit))
+	}
+	return names
+}
+
+// privPayload builds the user-space view of a privilege record.
+//
+// Every field it fills is gated on the fields_present bit that covers it, and
+// that gating is the whole reason the bitmap is on the wire. The header explains
+// it at enum allseer_priv_field: uid 0 is root and is also what an unwritten
+// field holds, so without an explicit statement of what was observed the single
+// most consequential transition this record can carry is indistinguishable from
+// a record that carried no identity at all. A decoder that read the fields
+// anyway would launder an unfilled struct into a claim about privilege.
+//
+// # Which uid the pair reports
+//
+// OldUID and NewUID are the *effective* uids. The payload carries four views of
+// each identity and event.PrivPayload has room for one pair, so this is a
+// choice: euid is the one that governs what a process may do, which is what a
+// privilege record is about. The other three views are not lost — they are in
+// the record the probe wrote, and reach anything reading the ABI struct — they
+// are simply not what this two-field summary reports.
+//
+// Both are int32 in pkg/event and uint32 here, so a uid above 2^31 wraps
+// negative. That range holds no real account: the kernel's overflow uid is
+// 65534 and systemd-style dynamic users sit far below the boundary. The
+// conversion is stated rather than hidden because the field is signed for
+// reasons that predate this decoder.
+//
+// # What is not filled
+//
+// The capability delta is computed only when both snapshots were observed and
+// only when the user namespace did not change across the call. A capability set
+// is scoped to the namespace it was granted in, so sets from two namespaces are
+// not the same quantity: unshare(CLONE_NEWUSER) hands the caller a full set in
+// the namespace it just created, and subtracting one from the other would
+// report every such call as a gain of nearly every capability in Linux. The
+// header carries the same warning at userns_inum, and the guard is the reason
+// that field is in the payload at all.
+//
+// When either userns bit is clear the namespaces cannot be compared, and the
+// delta is withheld on the same grounds: unknown is not the same as unchanged.
+func privPayload(p *abi.PrivPayload) *event.PrivPayload {
+	present := func(f abi.PrivField) bool { return p.FieldsPresent&uint32(f) != 0 }
+
+	out := &event.PrivPayload{Operation: privOpNames[abi.PrivOp(p.Operation)]}
+
+	if present(abi.FieldNsFlags) {
+		out.NamespaceType = namespaceName(p.NsFlags)
+	}
+	if present(abi.FieldBeforeCred) {
+		out.OldUID = int32(p.Before.UIDEffective)
+	}
+	if present(abi.FieldAfterCred) {
+		out.NewUID = int32(p.After.UIDEffective)
+	}
+
+	comparableCreds := present(abi.FieldBeforeCred) && present(abi.FieldAfterCred)
+	comparableNS := present(abi.FieldBeforeUserns) && present(abi.FieldAfterUserns) &&
+		p.Before.UsernsInum == p.After.UsernsInum
+	if comparableCreds && comparableNS {
+		out.CapabilitiesAdded = capabilityDelta(p.Before.CapEffective, p.After.CapEffective)
+	}
+	return out
 }
 
 // kindForOpenFlags decides which filesystem capability an open exercised.
@@ -669,10 +918,21 @@ func resultOf(ret int32) event.Result {
 // beside this file. A grant with no probe behind it is a blind spot that reads
 // as a control, and that check is only as good as the list feeding it.
 //
-// ALLSEER_EVT_FILE_OPEN is the one type with more than one answer: which of
-// fs.read, fs.write and fs.create it exercised depends on the open flags. The
-// types this build refuses — ALLSEER_EVT_UNKNOWN and ALLSEER_EVT_PRIV_CHANGE —
-// return nil, so a probe emitting one cannot make its capability look covered.
+// Two types have more than one answer, and for the same reason in both: the
+// payload decides. Which of fs.read, fs.write and fs.create an
+// ALLSEER_EVT_FILE_OPEN exercised depends on the open flags, and which of four
+// privilege kinds an ALLSEER_EVT_PRIV_CHANGE exercised depends on its
+// `operation` — see kindForOpenFlags and kindForPrivOp.
+//
+// priv.escalate is absent from the privilege list even though the catalog
+// grades it, because kindForPrivOp never returns it: no operation implies
+// escalation, which is a comparison of the record's two snapshots rather than a
+// property of the syscall. Listing it here would report a capability as
+// observable that no record can decode to, which is the opposite of what this
+// function exists for.
+//
+// ALLSEER_EVT_UNKNOWN returns nil, so a probe emitting it cannot make any
+// capability look covered.
 func CapabilitiesFor(t abi.EventType) []capability.Kind {
 	switch t {
 	case abi.EvtFileOpen:
@@ -695,6 +955,13 @@ func CapabilitiesFor(t abi.EventType) []capability.Kind {
 		return []capability.Kind{capability.KindNetBind}
 	case abi.EvtNetSend:
 		return []capability.Kind{capability.KindNetSend}
+	case abi.EvtPrivChange:
+		return []capability.Kind{
+			capability.KindPrivSetuid,
+			capability.KindPrivCapSet,
+			capability.KindPrivNamespace,
+			capability.KindPrivSeccomp,
+		}
 	case abi.EvtPtrace:
 		return []capability.Kind{capability.KindProcessPtrace}
 	}

@@ -75,6 +75,23 @@ func newRecord(typ abi.EventType) []byte {
 	return b
 }
 
+// newDecodableRecord is newRecord plus whatever else the type needs before the
+// decoder will accept it at all.
+//
+// Only ALLSEER_EVT_PRIV_CHANGE needs anything: its payload carries a second
+// discriminator, `operation`, whose zero is ALLSEER_PRIV_OP_UNKNOWN and is
+// refused for the same reason ALLSEER_EVT_UNKNOWN is. The whole-record property
+// tests below iterate every event type and are about what a *decoded* event
+// carries, so they need a record that decodes rather than one that exercises
+// that refusal — which is TestDecodeMapsEveryPrivilegeOperation's job.
+func newDecodableRecord(typ abi.EventType) []byte {
+	b := newRecord(typ)
+	if typ == abi.EvtPrivChange {
+		put32(b, abi.OffsetEventPayload+abi.OffsetPrivPayloadOperation, uint32(abi.OpSetuid))
+	}
+	return b
+}
+
 // Payload field offsets are relative to the union, which starts at
 // OffsetEventPayload. Naming them once keeps the tests from repeating the
 // arithmetic and getting it subtly wrong in one place.
@@ -178,7 +195,11 @@ func TestEveryEventTypeIsMapped(t *testing.T) {
 		abi.EvtNetConnect: {kind: capability.KindNetConnect, domain: capability.DomainNetwork},
 		abi.EvtNetBind:    {kind: capability.KindNetBind, domain: capability.DomainNetwork},
 		abi.EvtNetSend:    {kind: capability.KindNetSend, domain: capability.DomainNetwork},
-		abi.EvtPrivChange: {err: ErrUndecidedMapping},
+		// A bare record has operation ALLSEER_PRIV_OP_UNKNOWN, so the type is
+		// mapped and the *operation* is what refuses it. Which of the four
+		// privilege kinds a filled record decodes to is
+		// TestDecodeMapsEveryPrivilegeOperation.
+		abi.EvtPrivChange: {err: ErrUnsetPrivOp},
 		abi.EvtPtrace:     {kind: capability.KindProcessPtrace, domain: capability.DomainProcess},
 	}
 
@@ -246,11 +267,38 @@ func TestEveryDecodableKindIsInTheCatalog(t *testing.T) {
 		}
 	}
 
-	// The refused types advertise nothing. A probe emitting one cannot make its
+	// The refused type advertises nothing. A probe emitting it cannot make any
 	// capability look covered.
-	for _, typ := range []abi.EventType{abi.EvtUnknown, abi.EvtPrivChange} {
-		if got := CapabilitiesFor(typ); got != nil {
-			t.Errorf("CapabilitiesFor(%s) = %v, want nil: this build refuses the type", typ, got)
+	if got := CapabilitiesFor(abi.EvtUnknown); got != nil {
+		t.Errorf("CapabilitiesFor(%s) = %v, want nil: this build refuses the type", abi.EvtUnknown, got)
+	}
+
+	// ALLSEER_EVT_PRIV_CHANGE is the second type whose kind its payload decides,
+	// so its coverage list has to be exactly the set kindForPrivOp can return —
+	// no more, or a grant reads as observed when nothing observes it, and no
+	// less, or an observed capability reads as a blind spot. Derived from
+	// abi.AllPrivOps() rather than restated, so an operation appended to the
+	// header cannot widen the decoder without widening the coverage report.
+	privAdvertised := make(map[capability.Kind]bool)
+	for _, k := range CapabilitiesFor(abi.EvtPrivChange) {
+		privAdvertised[k] = true
+	}
+	privProduced := make(map[capability.Kind]bool)
+	for _, op := range abi.AllPrivOps() {
+		k, err := kindForPrivOp(op)
+		if err != nil {
+			continue // ALLSEER_PRIV_OP_UNKNOWN produces nothing
+		}
+		privProduced[k] = true
+		if !privAdvertised[k] {
+			t.Errorf("%s decodes to %q, which CapabilitiesFor(%s) does not advertise",
+				op, k, abi.EvtPrivChange)
+		}
+	}
+	for k := range privAdvertised {
+		if !privProduced[k] {
+			t.Errorf("CapabilitiesFor(%s) advertises %q, which no operation decodes to",
+				abi.EvtPrivChange, k)
 		}
 	}
 	// Nor does a type outside the enum.
@@ -927,6 +975,13 @@ func TestDecodeEnforcesTheABIVersion(t *testing.T) {
 				"header, loaded by a binary that was not rebuilt.",
 		},
 		{
+			name:    "superseded",
+			version: 1,
+			why: "the layout this repository shipped before ALLSEER_ABI_VERSION 2 reshaped " +
+				"struct allseer_priv_payload. It is the one rejected version that was once " +
+				"correct, so it is the one an old object on a host actually carries.",
+		},
+		{
 			name:    "max",
 			version: math.MaxUint32,
 			why:     "uninitialised memory read as a version.",
@@ -1012,28 +1067,492 @@ func TestABIVersionIsCheckedBeforeAnythingElseIsBelieved(t *testing.T) {
 	}
 }
 
-// The privilege payload is refused, and the error says why rather than only
-// that. See privilegeMappingIsUndecided: one C type stands in for five catalog
-// kinds the shipped rule set treats differently, and the field that would
-// separate them has no enumerators.
-func TestDecodeRefusesPrivilegeChange(t *testing.T) {
+// --- the privilege contract ----------------------------------------------------------
+//
+// ALLSEER_ABI_VERSION 2 is what made this event type decodable: before it,
+// struct allseer_priv_payload carried a `__u32 operation` with no enumerators
+// and the decoder refused the whole type rather than guess which of five
+// catalog kinds a record exercised. These tests pin the contract that replaced
+// that refusal — the operation selects the kind, fields_present decides which
+// values may be read, and neither is allowed to be inferred.
+
+// privOffsets are the payload-relative offsets of one snapshot, resolved
+// against `before` or `after`.
+func privBefore(off int) int { return abi.OffsetEventPayload + abi.OffsetPrivPayloadBefore + off }
+func privAfter(off int) int  { return abi.OffsetEventPayload + abi.OffsetPrivPayloadAfter + off }
+
+// newPrivRecord builds a privilege record whose operation is set and whose
+// snapshots are both declared observed.
+//
+// Both CRED bits are set by default because that is the ordinary case — a probe
+// that read task->cred on the way in and on the way out — and because a test
+// that had to opt in to it every time would make the fields_present tests below
+// harder to read rather than easier.
+func newPrivRecord(op abi.PrivOp) []byte {
 	raw := newRecord(abi.EvtPrivChange)
-	put64(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadCapsEffective, 0x3fffffffff)
-	put32(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadNewUID, 0)
-	put32(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadOldUID, 1000)
+	put32(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadOperation, uint32(op))
+	put32(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadFieldsPresent,
+		uint32(abi.FieldBeforeCred)|uint32(abi.FieldAfterCred))
+	return raw
+}
+
+func privFields(raw []byte, fields ...abi.PrivField) {
+	var v uint32
+	for _, f := range fields {
+		v |= uint32(f)
+	}
+	put32(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadFieldsPresent, v)
+}
+
+// Every operation the ABI declares maps to a capability, and the mapping is
+// driven from abi.AllPrivOps() rather than from a list written here — so an
+// operation appended to the header and regenerated fails this test until
+// somebody decides which capability it exercises. That is the same discipline
+// TestEveryEventTypeIsMapped applies one level up, and it exists for the same
+// reason: an operation silently decoding to nothing is drift that reads as
+// coverage.
+func TestDecodeMapsEveryPrivilegeOperation(t *testing.T) {
+	want := map[abi.PrivOp]struct {
+		kind capability.Kind
+		name string
+		err  error
+	}{
+		abi.OpUnknown:   {err: ErrUnsetPrivOp},
+		abi.OpSetuid:    {kind: capability.KindPrivSetuid, name: "setuid"},
+		abi.OpSetreuid:  {kind: capability.KindPrivSetuid, name: "setreuid"},
+		abi.OpSetresuid: {kind: capability.KindPrivSetuid, name: "setresuid"},
+		abi.OpSetgid:    {kind: capability.KindPrivSetuid, name: "setgid"},
+		abi.OpSetregid:  {kind: capability.KindPrivSetuid, name: "setregid"},
+		abi.OpSetresgid: {kind: capability.KindPrivSetuid, name: "setresgid"},
+		abi.OpSetgroups: {kind: capability.KindPrivSetuid, name: "setgroups"},
+		abi.OpCapset:    {kind: capability.KindPrivCapSet, name: "capset"},
+		abi.OpUnshare:   {kind: capability.KindPrivNamespace, name: "unshare"},
+		abi.OpSetns:     {kind: capability.KindPrivNamespace, name: "setns"},
+		abi.OpSeccomp:   {kind: capability.KindPrivSeccomp, name: "seccomp"},
+	}
+
+	all := abi.AllPrivOps()
+	if len(all) != len(want) {
+		t.Fatalf("the ABI declares %d privilege operations and this table covers %d; an operation "+
+			"was added to bpf/include/allseer_event.h and nobody decided what capability it "+
+			"exercises", len(all), len(want))
+	}
+
+	for _, op := range all {
+		exp, ok := want[op]
+		if !ok {
+			t.Fatalf("privilege operation %s is not in the expectation table", op)
+		}
+		t.Run(op.String(), func(t *testing.T) {
+			e, err := NewDecoder().Decode(newPrivRecord(op))
+			if exp.err != nil {
+				if !errors.Is(err, exp.err) {
+					t.Fatalf("err = %v, want %v", err, exp.err)
+				}
+				if e != nil {
+					t.Fatal("a refused record returned an event")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if e.Capability != exp.kind {
+				t.Errorf("Capability = %q, want %q", e.Capability, exp.kind)
+			}
+			// The domain comes from the M1 catalog and never from a second
+			// table, so every one of these has to land in the privilege domain
+			// without this test asserting it per row.
+			if e.Domain != capability.DomainPrivilege {
+				t.Errorf("Domain = %q, want %q", e.Domain, capability.DomainPrivilege)
+			}
+			if e.Privil == nil {
+				t.Fatal("a privilege event carried no privilege payload")
+			}
+			if e.Privil.Operation != exp.name {
+				t.Errorf("Operation = %q, want %q", e.Privil.Operation, exp.name)
+			}
+		})
+	}
+}
+
+// priv.escalate is never produced by the decoder, on any operation.
+//
+// The catalog grades it and configs/rules.default.yaml blocks it terminally,
+// but no syscall implies it: it is a comparison of the record's two snapshots,
+// which is a judgment that belongs downstream where the user-namespace scope of
+// a capability set can be taken into account. A decoder that emitted it would
+// be deciding the action.
+func TestDecodeNeverProducesPrivEscalate(t *testing.T) {
+	for _, op := range abi.AllPrivOps() {
+		if op == abi.OpUnknown {
+			continue
+		}
+		e, err := NewDecoder().Decode(newPrivRecord(op))
+		if err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+		if e.Capability == capability.KindPrivEscalate {
+			t.Errorf("%s decoded to %q; escalation is a downstream classification",
+				op, capability.KindPrivEscalate)
+		}
+	}
+	for _, k := range CapabilitiesFor(abi.EvtPrivChange) {
+		if k == capability.KindPrivEscalate {
+			t.Error("CapabilitiesFor reports priv.escalate as observable, but no record decodes to it")
+		}
+	}
+}
+
+// An operation outside this build's enum is refused rather than defaulted.
+//
+// It means the loaded object is newer than this binary, which is layout drift —
+// and the operation selects the capability, which selects the action, so there
+// is no safe default to fall back to.
+func TestDecodeRefusesUnknownPrivilegeOperation(t *testing.T) {
+	for _, op := range []uint32{12, 99, 0xFFFFFFFF} {
+		raw := newPrivRecord(abi.PrivOp(op))
+		e, err := NewDecoder().Decode(raw)
+		if !errors.Is(err, ErrUnknownPrivOp) {
+			t.Fatalf("operation %d: err = %v, want ErrUnknownPrivOp", op, err)
+		}
+		if e != nil {
+			t.Fatal("a refused record returned an event")
+		}
+		if !strings.Contains(err.Error(), fmt.Sprint(op)) {
+			t.Errorf("the error hides the offending value: %v", err)
+		}
+	}
+}
+
+// fields_present decides what may be read, and a bit that is clear withholds
+// the field rather than letting its zero be reported as an observation.
+//
+// This is the whole reason the bitmap is on the wire. The header states it at
+// enum allseer_priv_field: uid 0 is root and is also what an unwritten field
+// holds, so a decoder that read the snapshots unconditionally would launder a
+// cleared struct into a claim that a process reached uid 0.
+func TestDecodePrivilegeHonoursFieldsPresent(t *testing.T) {
+	// A record whose *bytes* say uid 1000 became uid 0 — the most consequential
+	// transition this event can carry — and whose fields_present says neither
+	// snapshot was observed.
+	build := func(fields ...abi.PrivField) []byte {
+		raw := newPrivRecord(abi.OpSetuid)
+		put32(raw, privBefore(abi.OffsetPrivStateUIDEffective), 1000)
+		put32(raw, privAfter(abi.OffsetPrivStateUIDEffective), 0)
+		privFields(raw, fields...)
+		return raw
+	}
+
+	t.Run("no bits: neither uid is reported", func(t *testing.T) {
+		e, err := NewDecoder().Decode(build())
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if e.Privil.OldUID != 0 || e.Privil.NewUID != 0 {
+			t.Errorf("uids = %d -> %d; neither snapshot was observed, so neither may be reported",
+				e.Privil.OldUID, e.Privil.NewUID)
+		}
+	})
+
+	t.Run("before only", func(t *testing.T) {
+		e, err := NewDecoder().Decode(build(abi.FieldBeforeCred))
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if e.Privil.OldUID != 1000 {
+			t.Errorf("OldUID = %d, want 1000", e.Privil.OldUID)
+		}
+		if e.Privil.NewUID != 0 {
+			t.Errorf("NewUID = %d; the after snapshot was not observed", e.Privil.NewUID)
+		}
+	})
+
+	t.Run("both", func(t *testing.T) {
+		e, err := NewDecoder().Decode(build(abi.FieldBeforeCred, abi.FieldAfterCred))
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if e.Privil.OldUID != 1000 || e.Privil.NewUID != 0 {
+			t.Errorf("uids = %d -> %d, want 1000 -> 0", e.Privil.OldUID, e.Privil.NewUID)
+		}
+	})
+}
+
+// The uid pair is the *effective* uid, not the real one.
+//
+// The payload carries four views of each identity and event.PrivPayload has
+// room for one pair, so this is a choice the decoder makes and a test is where
+// it is written down: euid governs what a process may do, which is what a
+// privilege record is about.
+func TestDecodePrivilegeReportsEffectiveUID(t *testing.T) {
+	raw := newPrivRecord(abi.OpSetresuid)
+	put32(raw, privBefore(abi.OffsetPrivStateUIDReal), 1000)
+	put32(raw, privBefore(abi.OffsetPrivStateUIDEffective), 1001)
+	put32(raw, privBefore(abi.OffsetPrivStateUIDSaved), 1002)
+	put32(raw, privAfter(abi.OffsetPrivStateUIDReal), 2000)
+	put32(raw, privAfter(abi.OffsetPrivStateUIDEffective), 2001)
+	put32(raw, privAfter(abi.OffsetPrivStateUIDSaved), 2002)
 
 	e, err := NewDecoder().Decode(raw)
-	if !errors.Is(err, ErrUndecidedMapping) {
-		t.Fatalf("err = %v, want %v", err, ErrUndecidedMapping)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if e.Privil.OldUID != 1001 || e.Privil.NewUID != 2001 {
+		t.Errorf("uids = %d -> %d, want the effective pair 1001 -> 2001",
+			e.Privil.OldUID, e.Privil.NewUID)
+	}
+}
+
+// The capability delta is the thing two snapshots were added to make
+// computable. internal/risk/privilege.go names the defect it closes: "A delta
+// needs a before and an after. The repository has neither."
+func TestDecodePrivilegeComputesCapabilityDelta(t *testing.T) {
+	const (
+		capChown    = 1 << 0
+		capNetRaw   = 1 << 13
+		capSysAdmin = 1 << 21
+	)
+
+	t.Run("gained capabilities are named", func(t *testing.T) {
+		raw := newPrivRecord(abi.OpCapset)
+		privFields(raw, abi.FieldBeforeCred, abi.FieldAfterCred,
+			abi.FieldBeforeUserns, abi.FieldAfterUserns)
+		put64(raw, privBefore(abi.OffsetPrivStateCapEffective), capChown)
+		put64(raw, privAfter(abi.OffsetPrivStateCapEffective), capChown|capSysAdmin|capNetRaw)
+
+		e, err := NewDecoder().Decode(raw)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		want := []string{"CAP_NET_RAW", "CAP_SYS_ADMIN"}
+		if !reflect.DeepEqual(e.Privil.CapabilitiesAdded, want) {
+			t.Errorf("CapabilitiesAdded = %v, want %v", e.Privil.CapabilitiesAdded, want)
+		}
+	})
+
+	t.Run("dropped capabilities are not reported as added", func(t *testing.T) {
+		raw := newPrivRecord(abi.OpCapset)
+		privFields(raw, abi.FieldBeforeCred, abi.FieldAfterCred,
+			abi.FieldBeforeUserns, abi.FieldAfterUserns)
+		put64(raw, privBefore(abi.OffsetPrivStateCapEffective), capChown|capSysAdmin)
+		put64(raw, privAfter(abi.OffsetPrivStateCapEffective), capChown)
+
+		e, err := NewDecoder().Decode(raw)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if e.Privil.CapabilitiesAdded != nil {
+			t.Errorf("CapabilitiesAdded = %v; the field holds additions only",
+				e.Privil.CapabilitiesAdded)
+		}
+	})
+
+	// The guard the whole design turns on. unshare(CLONE_NEWUSER) hands the
+	// caller a full capability set inside the namespace it just created, so
+	// subtracting one snapshot from the other across such a call reports a gain
+	// of nearly every capability in Linux — and configs/rules.default.yaml
+	// blocks priv.escalate terminally, which would hard-block every
+	// containerized build step on the host. Sets from two user namespaces are
+	// not the same quantity.
+	t.Run("a user namespace change withholds the delta", func(t *testing.T) {
+		raw := newPrivRecord(abi.OpUnshare)
+		privFields(raw, abi.FieldBeforeCred, abi.FieldAfterCred,
+			abi.FieldBeforeUserns, abi.FieldAfterUserns, abi.FieldNsFlags)
+		put64(raw, privBefore(abi.OffsetPrivStateCapEffective), 0)
+		put64(raw, privAfter(abi.OffsetPrivStateCapEffective), 0x1FFFFFFFFFF)
+		put32(raw, privBefore(abi.OffsetPrivStateUsernsInum), 4026531837)
+		put32(raw, privAfter(abi.OffsetPrivStateUsernsInum), 4026532999)
+		put32(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadNsFlags, 0x10000000)
+
+		e, err := NewDecoder().Decode(raw)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if e.Privil.CapabilitiesAdded != nil {
+			t.Errorf("CapabilitiesAdded = %v; capability sets from two user namespaces are not "+
+				"comparable", e.Privil.CapabilitiesAdded)
+		}
+		if e.Capability != capability.KindPrivNamespace {
+			t.Errorf("Capability = %q, want %q", e.Capability, capability.KindPrivNamespace)
+		}
+	})
+
+	// Unknown is not unchanged. Without both userns bits the namespaces cannot
+	// be compared, so the delta is withheld on the same grounds as an outright
+	// change.
+	t.Run("an unobserved user namespace withholds the delta", func(t *testing.T) {
+		raw := newPrivRecord(abi.OpCapset)
+		privFields(raw, abi.FieldBeforeCred, abi.FieldAfterCred)
+		put64(raw, privAfter(abi.OffsetPrivStateCapEffective), capSysAdmin)
+
+		e, err := NewDecoder().Decode(raw)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if e.Privil.CapabilitiesAdded != nil {
+			t.Errorf("CapabilitiesAdded = %v; the user namespace was not observed",
+				e.Privil.CapabilitiesAdded)
+		}
+	})
+
+	// A capability this build has no name for is still one that was gained.
+	// Rendering it numerically keeps it in the audit record; dropping it would
+	// lose the one direction that matters.
+	t.Run("a capability past the end of the name table is rendered numerically", func(t *testing.T) {
+		raw := newPrivRecord(abi.OpCapset)
+		privFields(raw, abi.FieldBeforeCred, abi.FieldAfterCred,
+			abi.FieldBeforeUserns, abi.FieldAfterUserns)
+		put64(raw, privAfter(abi.OffsetPrivStateCapEffective), 1<<62)
+
+		e, err := NewDecoder().Decode(raw)
+		if err != nil {
+			t.Fatalf("Decode: %v", err)
+		}
+		if !reflect.DeepEqual(e.Privil.CapabilitiesAdded, []string{"CAP_62"}) {
+			t.Errorf("CapabilitiesAdded = %v, want [CAP_62]", e.Privil.CapabilitiesAdded)
+		}
+	})
+}
+
+// ns_flags renders as NamespaceType, and only when its bit says it was captured.
+//
+// The user namespace wins when several bits are set, because unshare takes a
+// mask and NamespaceType is one string: it is the namespace that lives in
+// struct cred and the one that changes what a process may do rather than what
+// it can see.
+func TestDecodePrivilegeNamespaceType(t *testing.T) {
+	const (
+		newNS   = 0x00020000
+		newUser = 0x10000000
+		newNet  = 0x40000000
+		newFS   = 0x00000200 // CLONE_FS: legal for unshare, not a namespace
+	)
+	cases := []struct {
+		name  string
+		flags uint32
+		set   bool
+		want  string
+	}{
+		{"user", newUser, true, "user"},
+		{"net", newNet, true, "net"},
+		{"mount", newNS, true, "mount"},
+		{"user wins over mount", newUser | newNS, true, "user"},
+		{"a non-namespace clone bit names nothing", newFS, true, ""},
+		{"setns naming no type", 0, true, ""},
+		{"bit clear: not captured", newUser, false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw := newPrivRecord(abi.OpUnshare)
+			if c.set {
+				privFields(raw, abi.FieldBeforeCred, abi.FieldAfterCred, abi.FieldNsFlags)
+			}
+			put32(raw, abi.OffsetEventPayload+abi.OffsetPrivPayloadNsFlags, c.flags)
+
+			e, err := NewDecoder().Decode(raw)
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+			if e.Privil.NamespaceType != c.want {
+				t.Errorf("NamespaceType = %q, want %q", e.Privil.NamespaceType, c.want)
+			}
+		})
+	}
+}
+
+// A failed privilege change decodes as an attempt, not as a change.
+//
+// The header defines `ret` as the syscall return and this event needs no
+// special case: a negative return means the kernel committed nothing, so both
+// snapshots hold the same values and Result says the call failed. Both are
+// emitted, because an agent that repeatedly fails to reach uid 0 has said
+// something about itself.
+func TestDecodePrivilegeReportsAttemptedChange(t *testing.T) {
+	raw := newPrivRecord(abi.OpSetuid)
+	putI32(raw, abi.OffsetEventRet, -1) // -EPERM
+	put32(raw, privBefore(abi.OffsetPrivStateUIDEffective), 1000)
+	put32(raw, privAfter(abi.OffsetPrivStateUIDEffective), 1000)
+
+	e, err := NewDecoder().Decode(raw)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if e.Result.Succeeded {
+		t.Error("Succeeded = true on a call the kernel refused")
+	}
+	if e.Result.Errno != "EPERM" {
+		t.Errorf("Errno = %q, want EPERM", e.Result.Errno)
+	}
+	if e.Privil.OldUID != e.Privil.NewUID {
+		t.Errorf("uids = %d -> %d; a refused call commits nothing",
+			e.Privil.OldUID, e.Privil.NewUID)
+	}
+	// The capability the record claims is the one it attempted, not a weaker
+	// one chosen because the attempt failed. A failed action is a governance
+	// signal in its own right.
+	if e.Capability != capability.KindPrivSetuid {
+		t.Errorf("Capability = %q, want %q", e.Capability, capability.KindPrivSetuid)
+	}
+}
+
+// A record in the ABI v1 privilege layout is refused on its version, and is
+// refused before any of its fields is believed.
+//
+// This is the case the version bump exists for. Version 1 and version 2 both
+// describe an 856-byte record — the payload union is sized by
+// struct allseer_exec_payload and the privilege payload grew from 32 bytes to
+// 208 inside it — so the loader's BTF size comparison cannot tell them apart,
+// and neither can a length check. Only the version field can. The header calls
+// this exactly: a version catches "a layout that stayed the same size and
+// changed meaning".
+//
+// The bytes below are laid out where ABI v1 put them: caps_effective at payload
+// offset 0, old_uid at 16, new_uid at 20, operation at 24. Under v2 those same
+// offsets fall inside `before` — a capability set, then uid_effective and
+// uid_saved. So a decoder that skipped the version check would not error; it
+// would report a plausible privilege event with the wrong uids, which is the
+// failure the header's preamble names as "plausible garbage that flows straight
+// into governance decisions".
+//
+// No compatibility shim exists for these records and none should: no probe ever
+// emitted ALLSEER_EVT_PRIV_CHANGE under version 1, so there is no v1 privilege
+// record anywhere to be read.
+func TestDecodeRefusesSupersededPrivilegeLayout(t *testing.T) {
+	const (
+		v1CapsEffective = 0
+		v1OldUID        = 16
+		v1NewUID        = 20
+		v1Operation     = 24
+	)
+	raw := newRecord(abi.EvtPrivChange)
+	put32(raw, abi.OffsetEventVersion, 1)
+	put64(raw, abi.OffsetEventPayload+v1CapsEffective, 0x3fffffffff)
+	put32(raw, abi.OffsetEventPayload+v1OldUID, 1000)
+	put32(raw, abi.OffsetEventPayload+v1NewUID, 0)
+	put32(raw, abi.OffsetEventPayload+v1Operation, 2)
+
+	if len(raw) != abi.RecordSize {
+		t.Fatalf("the v1 record is %d bytes and this build expects %d; the two layouts are "+
+			"supposed to be the same size, which is why the version field is the only thing "+
+			"that separates them", len(raw), abi.RecordSize)
+	}
+
+	e, err := NewDecoder().Decode(raw)
+	if !errors.Is(err, ErrABIVersionMismatch) {
+		t.Fatalf("err = %v, want ErrABIVersionMismatch", err)
 	}
 	if e != nil {
-		t.Fatal("a refused record returned an event")
+		t.Fatal("a v1 privilege record decoded into an event")
 	}
-	// The message has to be actionable: it is the only place a reader learns
-	// what would make the type decodable.
-	for _, want := range []string{"operation", "allseer_event.h", "priv.setuid"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the error does not mention %q: %v", want, err)
+	// Refused on the version and not on anything downstream. Operation 2 is
+	// ALLSEER_PRIV_OP_SETREUID under v2 and would decode cleanly, so a run that
+	// reached the operation check at all would mean the version was not
+	// consulted first.
+	for _, wrong := range []error{ErrUnsetPrivOp, ErrUnknownPrivOp} {
+		if errors.Is(err, wrong) {
+			t.Errorf("refused as %v, which is a conclusion drawn from fields this build cannot "+
+				"claim to be reading correctly", wrong)
 		}
 	}
 }
@@ -1161,7 +1680,7 @@ func TestDecodedEventCarriesNoEnrichmentOrSessionState(t *testing.T) {
 			continue // refused types produce no event
 		}
 		t.Run(typ.String(), func(t *testing.T) {
-			raw := newRecord(typ)
+			raw := newDecodableRecord(typ)
 			putStr(raw, abi.OffsetEventProc+abi.OffsetProcComm, "sh")
 			e := decode(t, raw)
 
@@ -1200,7 +1719,7 @@ func TestPayloadMatchesDomain(t *testing.T) {
 			continue
 		}
 		t.Run(typ.String(), func(t *testing.T) {
-			e := decode(t, newRecord(typ))
+			e := decode(t, newDecodableRecord(typ))
 
 			set := 0
 			for _, present := range []bool{e.File != nil, e.Network != nil, e.Exec != nil, e.Privil != nil} {
@@ -1230,14 +1749,22 @@ func TestPayloadMatchesDomain(t *testing.T) {
 				if typ != abi.EvtProcExec && e.Exec != nil {
 					t.Error("a non-exec process event carries an exec payload")
 				}
+			case capability.DomainPrivilege:
+				// The payload is always attached, because which of its fields
+				// are readable is stated by fields_present rather than by the
+				// pointer being nil. A privilege event with no payload at all
+				// would leave the operation nowhere to be reported.
+				if e.Privil == nil {
+					t.Error("a privilege event has no privilege payload")
+				}
 			default:
 				t.Errorf("unexpected domain %q", e.Domain)
 			}
 
-			// Nothing in this build produces a privilege payload: the one event
-			// type that carries one is refused.
-			if e.Privil != nil {
-				t.Error("a privilege payload was produced, but ALLSEER_EVT_PRIV_CHANGE is refused")
+			// A privilege payload rides on the privilege domain and on nothing
+			// else.
+			if e.Privil != nil && e.Domain != capability.DomainPrivilege {
+				t.Errorf("a privilege payload rode on a %s event", e.Domain)
 			}
 		})
 	}

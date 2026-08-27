@@ -444,17 +444,32 @@ type Config struct {
 // the M1 catalog, never from a second table. ALLSEER_EVT_FILE_OPEN is the one
 // type whose kind the payload decides — the open flags separate fs.read,
 // fs.write, and fs.create, which is the mapping docs/dataflow.md already traces.
-// Two declared types are refused rather than guessed at: ALLSEER_EVT_UNKNOWN,
-// which states no operation, and ALLSEER_EVT_PRIV_CHANGE, whose `operation`
-// field has no enumerators in the header and so cannot be told apart from four
-// other privilege kinds the shipped rule set treats differently.
+// ALLSEER_EVT_PRIV_CHANGE is the second type whose kind the payload decides,
+// and it became decodable when ALLSEER_ABI_VERSION 2 gave the header an `enum
+// allseer_priv_op` to select on: the operation names the syscall, and
+// kindForPrivOp maps it to priv.setuid, priv.capset, priv.namespace or
+// priv.seccomp. priv.escalate is deliberately not among them — it is a
+// comparison of the record's two credential snapshots rather than a property of
+// any syscall, so it stays a downstream classification.
+// One declared type is still refused rather than guessed at: ALLSEER_EVT_UNKNOWN,
+// which states no operation. A privilege record is refused on the same grounds
+// when its own operation is ALLSEER_PRIV_OP_UNKNOWN, or outside this build's
+// enum.
 // The abi package deliberately stops at the ABI shape: it imports neither
 // pkg/event nor pkg/capability, because deciding what a record *means* is a
 // judgment and the generated layer must stay free of judgments it would have to
 // regenerate.
-// TODO(telemetry): add an `enum allseer_priv_op` to the header so
-// ALLSEER_EVT_PRIV_CHANGE becomes decodable. A C edit, and one for the Linux
-// host, alongside the version field already open above.
+// Done: bpf/include/allseer_event.h declares `enum allseer_priv_op` and
+// `enum allseer_priv_field`, and struct allseer_priv_payload carries two
+// `struct allseer_priv_state` snapshots — before and after — so
+// ALLSEER_EVT_PRIV_CHANGE decodes. ALLSEER_ABI_VERSION is 2 for it. The record
+// stays 856 bytes: the payload grew from 32 to 208 and the union is sized by
+// struct allseer_exec_payload at 776, so nothing outside the priv payload moved.
+// What the two snapshots buy is the thing one snapshot could not: a capability
+// delta with both operands present, which internal/risk/privilege.go names as
+// the defect it has been labelling CapabilityDeltaAddedOnly.
+// No probe emits the type yet. The ABI is the contract; the syscall enter/exit
+// pairs that fill it are a separate issue.
 // TODO(telemetry): decide the path resolution strategy. Full dentry walking in
 // the kernel is expensive and bounded by the verifier's loop limits; resolving
 // in user space races with rename. Neither is clean.
@@ -471,8 +486,9 @@ type Config struct {
 // telemetry.EventDecoder. So an open's capability comes from its flags, an
 // errno from a negative return, an address from its family, and a domain from
 // the M1 catalog, exactly as they do for a record off the ring buffer; and a
-// record this build refuses — ALLSEER_EVT_UNKNOWN, ALLSEER_EVT_PRIV_CHANGE, a
-// type outside the enum — is refused here too, in the decoder's own words.
+// record this build refuses — ALLSEER_EVT_UNKNOWN, a privilege record whose
+// operation is unset or outside the enum, a type outside the enum — is refused
+// here too, in the decoder's own words.
 // Assembling event.Event values directly would have been a second decoder
 // beside the first, which is the drift the generated ABI exists to prevent,
 // arriving through the tool meant to produce evidence about it.

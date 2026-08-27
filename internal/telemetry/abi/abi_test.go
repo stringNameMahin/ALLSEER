@@ -81,7 +81,8 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 			{"FilePayload", SizeofFilePayload, 544, "3*8 + 2*4 + 2*256"},
 			{"NetPayload", SizeofNetPayload, 56, "16+16 + 8 + 6*2 = 52, rounded up to the 8-byte alignment"},
 			{"ExecPayload", SizeofExecPayload, 776, "2*4 + 256 + 8*64"},
-			{"PrivPayload", SizeofPrivPayload, 32, "2*8 + 4*4"},
+			{"PrivState", SizeofPrivState, 96, "5*8 + 14*4, already 8-aligned"},
+			{"PrivPayload", SizeofPrivPayload, 208, "2*96 + 4*4"},
 			{"Payload union", SizeofPayload, 776, "the largest member, ExecPayload"},
 			{"Event", SizeofEvent, 856, "8 + 4 + 4 + 4 + 4 + 56 + 776, counting version and its pad"},
 		}
@@ -139,8 +140,17 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 			{"ExecPayload.Filename", OffsetExecPayloadFilename, 8},
 			{"ExecPayload.Argv", OffsetExecPayloadArgv, 264},
 
-			{"PrivPayload.OldUID", OffsetPrivPayloadOldUID, 16},
-			{"PrivPayload.NewUID", OffsetPrivPayloadNewUID, 20},
+			{"PrivState.CapBounding", OffsetPrivStateCapBounding, 32},
+			{"PrivState.UIDEffective", OffsetPrivStateUIDEffective, 44},
+			{"PrivState.Ngroups", OffsetPrivStateNgroups, 72},
+			{"PrivState.UsernsInum", OffsetPrivStateUsernsInum, 80},
+			{"PrivState.SeccompMode", OffsetPrivStateSeccompMode, 84},
+
+			{"PrivPayload.Before", OffsetPrivPayloadBefore, 0},
+			{"PrivPayload.After", OffsetPrivPayloadAfter, 96},
+			{"PrivPayload.Operation", OffsetPrivPayloadOperation, 192},
+			{"PrivPayload.FieldsPresent", OffsetPrivPayloadFieldsPresent, 196},
+			{"PrivPayload.NsFlags", OffsetPrivPayloadNsFlags, 200},
 		}
 		for _, c := range cases {
 			if c.got != c.want {
@@ -163,9 +173,10 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 // the distinction is load-bearing: a reader who takes ABIVersion for a bound has
 // misread the contract as badly as one who takes PathMax for a version.
 func TestABIVersionIsAValueNotABound(t *testing.T) {
-	if ABIVersion != 1 {
-		t.Errorf("ABIVersion = %d, want 1; this is the first numbered layout, and the number "+
-			"changes only when the bytes on the wire change", ABIVersion)
+	if ABIVersion != 2 {
+		t.Errorf("ABIVersion = %d, want 2; version 1 was the first numbered layout and version 2 "+
+			"reshaped struct allseer_priv_payload, and the number changes only when the bytes on "+
+			"the wire change", ABIVersion)
 	}
 
 	// Where the field sits is the whole point of it. A version a reader has to
@@ -427,28 +438,80 @@ func TestPayloadAccessorsReadTheirMembers(t *testing.T) {
 		}
 	})
 
+	// The privilege payload is the one member built from a nested struct used
+	// twice, so the mistake it exists to catch is a `before` field read at an
+	// `after` offset or the reverse. Every scalar below is given a distinct
+	// value for that reason: a swap of the two snapshots, or a stride error
+	// inside one, cannot produce a passing run.
 	t.Run("priv", func(t *testing.T) {
 		raw := make([]byte, RecordSize)
 		put32(raw, OffsetEventType, uint32(EvtPrivChange))
 		pay := OffsetEventPayload
-		put64(raw, pay+OffsetPrivPayloadCapsEffective, 0x3FFFFFFFFF)
-		put64(raw, pay+OffsetPrivPayloadCapsPermitted, 0x1)
-		put32(raw, pay+OffsetPrivPayloadOldUID, 1000)
-		put32(raw, pay+OffsetPrivPayloadNewUID, 0)
-		put32(raw, pay+OffsetPrivPayloadOperation, 2)
+		before := pay + OffsetPrivPayloadBefore
+		after := pay + OffsetPrivPayloadAfter
+
+		put64(raw, before+OffsetPrivStateCapEffective, 0x1)
+		put64(raw, before+OffsetPrivStateCapPermitted, 0x2)
+		put64(raw, before+OffsetPrivStateCapInheritable, 0x4)
+		put64(raw, before+OffsetPrivStateCapAmbient, 0x8)
+		put64(raw, before+OffsetPrivStateCapBounding, 0x3FFFFFFFFF)
+		put32(raw, before+OffsetPrivStateUIDReal, 1000)
+		put32(raw, before+OffsetPrivStateUIDEffective, 1001)
+		put32(raw, before+OffsetPrivStateUIDSaved, 1002)
+		put32(raw, before+OffsetPrivStateUIDFs, 1003)
+		put32(raw, before+OffsetPrivStateGIDReal, 2000)
+		put32(raw, before+OffsetPrivStateGIDEffective, 2001)
+		put32(raw, before+OffsetPrivStateGIDSaved, 2002)
+		put32(raw, before+OffsetPrivStateGIDFs, 2003)
+		put32(raw, before+OffsetPrivStateNgroups, 7)
+		put32(raw, before+OffsetPrivStateSecurebits, 0x21)
+		put32(raw, before+OffsetPrivStateUsernsInum, 4026531837)
+		put32(raw, before+OffsetPrivStateSeccompMode, 0)
+
+		// Zero is root, not "absent". Reading this field wrongly is how a
+		// privilege escalation becomes invisible, which is why the after
+		// snapshot lands on 0 for every identity view.
+		put64(raw, after+OffsetPrivStateCapEffective, 0x3FFFFFFFFF)
+		put32(raw, after+OffsetPrivStateUIDEffective, 0)
+		put32(raw, after+OffsetPrivStateNgroups, 0)
+		put32(raw, after+OffsetPrivStateUsernsInum, 4026531837)
+		put32(raw, after+OffsetPrivStateSeccompMode, 2)
+
+		put32(raw, pay+OffsetPrivPayloadOperation, uint32(OpSetresuid))
+		put32(raw, pay+OffsetPrivPayloadFieldsPresent,
+			uint32(FieldBeforeCred)|uint32(FieldAfterCred))
+		put32(raw, pay+OffsetPrivPayloadNsFlags, 0x10000000)
 
 		rec, err := DecodeRecord(raw)
 		if err != nil {
 			t.Fatalf("DecodeRecord: %v", err)
 		}
 		p := rec.Priv()
-		if p.CapsEffective != 0x3FFFFFFFFF || p.CapsPermitted != 0x1 {
-			t.Errorf("caps = %#x / %#x", p.CapsEffective, p.CapsPermitted)
+
+		wantBefore := PrivState{
+			CapEffective: 0x1, CapPermitted: 0x2, CapInheritable: 0x4,
+			CapAmbient: 0x8, CapBounding: 0x3FFFFFFFFF,
+			UIDReal: 1000, UIDEffective: 1001, UIDSaved: 1002, UIDFs: 1003,
+			GIDReal: 2000, GIDEffective: 2001, GIDSaved: 2002, GIDFs: 2003,
+			Ngroups: 7, Securebits: 0x21, UsernsInum: 4026531837, SeccompMode: 0,
 		}
-		// Zero is root, not "absent". Reading this field wrongly is how a
-		// privilege escalation becomes invisible.
-		if p.OldUID != 1000 || p.NewUID != 0 || p.Operation != 2 {
-			t.Errorf("priv scalars = %+v", p)
+		if p.Before != wantBefore {
+			t.Errorf("before = %+v, want %+v", p.Before, wantBefore)
+		}
+		wantAfter := PrivState{
+			CapEffective: 0x3FFFFFFFFF, UsernsInum: 4026531837, SeccompMode: 2,
+		}
+		if p.After != wantAfter {
+			t.Errorf("after = %+v, want %+v", p.After, wantAfter)
+		}
+		if p.Operation != uint32(OpSetresuid) {
+			t.Errorf("Operation = %d, want %d", p.Operation, OpSetresuid)
+		}
+		if p.FieldsPresent != uint32(FieldBeforeCred)|uint32(FieldAfterCred) {
+			t.Errorf("FieldsPresent = %#x", p.FieldsPresent)
+		}
+		if p.NsFlags != 0x10000000 {
+			t.Errorf("NsFlags = %#x, want CLONE_NEWUSER", p.NsFlags)
 		}
 	})
 }
