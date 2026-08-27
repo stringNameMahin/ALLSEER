@@ -6,6 +6,13 @@
  * and two filter sets, and sharing one between them means pinning it and
  * agreeing on a bpffs path. Probes are added to this file as they are written.
  *
+ * That is the current model and it has a decided end date. A mandatory
+ * architectural milestone requires this object to be split into independently
+ * loadable telemetry modules after M5 — see the TODO(architecture) entry in
+ * internal/telemetry/telemetry.go for the requirement and the exception that
+ * brings it forward. The sentence above is what that milestone overturns, so it
+ * should be read as a statement about today rather than about the design.
+ *
  * At this point the file declares five maps and six programs: sched_process_exec
  * and sched_process_exit, which each produce a record on their own, and two
  * syscall pairs — sys_enter_openat / sys_exit_openat and sys_enter_connect /
@@ -177,6 +184,35 @@ struct {
 	__type(key, allseer_syscall_key_t);
 	__type(value, struct allseer_connect_scratch);
 } connect_scratch SEC(".maps");
+
+/* The half-built privilege events, held between one thread's entry into a
+ * credential syscall and its return from it.
+ *
+ * A third map under the protocol allseer_maps.h settled for openat, and the
+ * first one to be shared by more than one syscall. That header carries the
+ * argument for why sharing is right here and what it costs — the eleven
+ * operations have one value shape and none of them is hot, so neither reason for
+ * splitting applies, and the syscall tag the shared case needs is the
+ * `operation` field the value already carries for the record.
+ *
+ * Same key type as the other two, deliberately and not by inheritance. The
+ * protocol's argument for keying on the thread is that "a thread is inside at
+ * most one syscall at a time", which is a property of the kernel rather than of
+ * openat, so it holds for these eleven unchanged. A privilege syscall cannot
+ * overlap another from the same thread, and every thread of a process can be
+ * inside setuid at once — which is exactly the case a tgid key would collapse
+ * and this one keeps apart.
+ *
+ * BPF_MAP_TYPE_LRU_HASH for the third time, for the reason the header gives at
+ * the second: a plain hash filling with orphans from threads killed mid-syscall
+ * would reject every insert forever, and the failure would be silent and
+ * permanent. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, ALLSEER_MAX_PRIV_SCRATCH);
+	__type(key, allseer_syscall_key_t);
+	__type(value, struct allseer_priv_scratch);
+} priv_scratch SEC(".maps");
 
 /* Required before any program in this object can load. Declared with the maps
  * because it belongs to the object rather than to any one probe, and because
@@ -1229,6 +1265,553 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
 	return 0;
 }
 
+/* --- The privilege pairs -------------------------------------------------------
+ *
+ * Eleven syscalls, twenty-two programs, one pair of bodies. Every credential
+ * syscall the ABI enumerates gets its own tracepoint pair because the syscall is
+ * what names the operation — struct allseer_event carries no syscall number, so
+ * `operation` is the only thing that can tell a setuid record from a capset one,
+ * and a program attached to one tracepoint knows its own answer as a constant.
+ *
+ * The alternative was raw_syscalls/sys_enter with a switch on the syscall
+ * number, which is two programs instead of twenty-two and fires on every syscall
+ * every process on the host makes. That is the opposite of the design the rest
+ * of this object follows, where the first thing a probe does is get out of the
+ * way cheaply; a per-syscall tracepoint is already not attached to anything else.
+ *
+ * # What the arguments are not used for
+ *
+ * Only unshare and setns have an argument this object reads, and both times it
+ * is the CLONE_* word the ABI calls ns_flags. Nothing reads setuid's uid,
+ * setresgid's three gids, or capset's user-space capability header.
+ *
+ * That is a decision rather than an omission. The seven identity syscalls each
+ * give their arguments a different meaning — setuid takes one uid whose effect
+ * depends on whether the caller is privileged, setreuid takes two of which
+ * either may be -1 for "leave alone", setresuid takes three on the same terms —
+ * and a probe that tried to compute the resulting credentials from them would be
+ * reimplementing the kernel's own rules, in a place where being subtly wrong
+ * produces a confident audit record rather than an error. The two snapshots make
+ * the question moot: the kernel is asked what the credentials were and then what
+ * they became, and the difference is what happened. capset is the same argument
+ * with a user-memory read attached, and skipping it costs nothing for the same
+ * reason.
+ *
+ * # Per thread, and never per process
+ *
+ * proc_exit filters to the thread group leader because a process exits once.
+ * These probes must not, and the reason is that credentials on Linux are
+ * per-task: struct cred hangs off task_struct, every thread has its own, and a
+ * worker thread that calls setuid changes its own and no one else's. Filtering
+ * to the leader would drop that change entirely, which is a blind spot a thread
+ * could be moved into deliberately.
+ *
+ * The visible consequence is that one glibc setuid() call on an N-threaded
+ * process produces N records. glibc implements the POSIX whole-process semantics
+ * the kernel does not have, by signalling every thread to make the raw syscall
+ * itself, and each of those is a real credential change on a real task. The
+ * records carry the same pid and different tids, which is what struct
+ * allseer_proc declares those fields to mean, and collapsing them is a judgment
+ * for a stage that can see more than one record at a time.
+ */
+
+/* The distance between a before-side field bit and its after-side twin.
+ *
+ * Local to this file and not an ABI constant: allseer_event.h assigns the nine
+ * values and says nothing about the relationship between them, so this is a
+ * property of those values that this object depends on and therefore has to
+ * check rather than a promise the header makes. The four assertions below are
+ * that check. */
+#define ALLSEER_PRIV_AFTER_SHIFT  1
+
+/* The after-side bits are the before-side bits shifted up one, which is what
+ * lets capture_priv_state below return one mask that both callers can use.
+ * Asserted rather than assumed: the pairing is a property of the values the
+ * header assigns, and a header edit that broke it would otherwise produce a
+ * record whose fields_present described the wrong snapshot. */
+_Static_assert(ALLSEER_PRIV_FIELD_AFTER_CRED == ALLSEER_PRIV_FIELD_BEFORE_CRED << ALLSEER_PRIV_AFTER_SHIFT,
+	       "priv fields: AFTER_CRED must be BEFORE_CRED << 1");
+_Static_assert(ALLSEER_PRIV_FIELD_AFTER_USERNS == ALLSEER_PRIV_FIELD_BEFORE_USERNS << ALLSEER_PRIV_AFTER_SHIFT,
+	       "priv fields: AFTER_USERNS must be BEFORE_USERNS << 1");
+_Static_assert(ALLSEER_PRIV_FIELD_AFTER_GROUPS == ALLSEER_PRIV_FIELD_BEFORE_GROUPS << ALLSEER_PRIV_AFTER_SHIFT,
+	       "priv fields: AFTER_GROUPS must be BEFORE_GROUPS << 1");
+_Static_assert(ALLSEER_PRIV_FIELD_AFTER_SECCOMP == ALLSEER_PRIV_FIELD_BEFORE_SECCOMP << ALLSEER_PRIV_AFTER_SHIFT,
+	       "priv fields: AFTER_SECCOMP must be BEFORE_SECCOMP << 1");
+
+/* The capability representation, which changed shape under the ABI's feet.
+ *
+ * Linux 6.3 replaced
+ *
+ *     typedef struct kernel_cap_struct { __u32 cap[2]; } kernel_cap_t;
+ *
+ * with
+ *
+ *     typedef struct { u64 val; } kernel_cap_t;
+ *
+ * The two are the same eight bytes and, on a little-endian target, the same
+ * eight bytes *in the same order*: cap[0] holds capabilities 0-31 and cap[1]
+ * holds 32-63, which is exactly where bits 0-31 and 32-63 of the u64 sit. Both
+ * targets this object is built for are little-endian. So the ABI's `__u64` is
+ * the correct wire type on every kernel and nothing in allseer_event.h depends
+ * on which one is running — the difference is entirely in the *source
+ * expression* a probe has to write, because there is no member named `val`
+ * before 6.3 and no member named `cap` after it.
+ *
+ * vmlinux.h is generated from the build host's BTF, so the compiler only ever
+ * sees one of the two. The build host is therefore 6.3 or newer, which is where
+ * `.val` is spelled — but the *runtime* floor stays where the ring buffer put
+ * it, at 5.8, and that is the whole point of what follows.
+ *
+ * struct cred___legacy is a CO-RE flavor: libbpf strips everything from `___`
+ * onward when it looks for a target type, so this is matched against the
+ * kernel's own `struct cred`. Only the five members this object reads are
+ * declared, because CO-RE resolves members by name against the target and takes
+ * the offsets from there — the offsets in this declaration are never used, and a
+ * partial declaration is the ordinary way to write one.
+ */
+struct kernel_cap_struct___legacy {
+	__u32 cap[2];
+};
+
+struct cred___legacy {
+	struct kernel_cap_struct___legacy cap_inheritable;
+	struct kernel_cap_struct___legacy cap_permitted;
+	struct kernel_cap_struct___legacy cap_effective;
+	struct kernel_cap_struct___legacy cap_bset;
+	struct kernel_cap_struct___legacy cap_ambient;
+};
+
+/* ALLSEER_READ_CAP_SET reads one capability set into a __u64, whichever shape
+ * the running kernel keeps it in.
+ *
+ * # Why this is safe to load rather than merely correct to read
+ *
+ * Both branches are compiled, and on any given kernel exactly one of them
+ * carries a CO-RE relocation that cannot resolve — `.val` before 6.3, `cap[]`
+ * after it. That is not a load failure. libbpf answers an unresolvable field
+ * relocation by *poisoning* the instruction: it rewrites it as a call to an
+ * invalid helper (the marker 0xbad2310, which is present in the libbpf this
+ * repository links against), so the object still loads and the instruction only
+ * fails if something reaches it.
+ *
+ * Nothing reaches it. bpf_core_field_exists is a different kind of relocation —
+ * it is defined to resolve to 0 when the field is absent rather than to poison —
+ * so after load the condition is a constant, and the verifier prunes the branch
+ * it did not take instead of walking into the poison. That pairing, an EXISTS
+ * relocation guarding a read relocation, is the mechanism libbpf provides for
+ * exactly this problem and is why the guard cannot be replaced by anything
+ * cheaper: an `#ifdef` decides at build time, on the build host's kernel, which
+ * is the one kernel whose answer does not matter.
+ *
+ * The two-argument form of bpf_core_field_exists is used deliberately. It takes
+ * the type rather than a value, so the test compiles without a `struct cred *`
+ * in hand and reads as a question about the kernel rather than about a pointer.
+ *
+ * # What it does not do
+ *
+ * It does not truncate. Both halves of the legacy pair are read and recombined,
+ * so all 64 bits reach the record on either kernel, and a capability above 31 —
+ * CAP_PERFMON, CAP_BPF and CAP_CHECKPOINT_RESTORE are all in that range — is not
+ * silently lost on an older host.
+ *
+ * A `do { } while (0)` writing through a destination rather than a statement
+ * expression returning a value, so the expansion is an ordinary statement and
+ * the file needs no GNU extension. */
+#define ALLSEER_READ_CAP_SET(dst, cred_ptr, field)				\
+	do {									\
+		if (bpf_core_field_exists(struct cred, field.val)) {		\
+			(dst) = BPF_CORE_READ((const struct cred *)(cred_ptr),	\
+					      field.val);			\
+		} else {							\
+			const struct cred___legacy *__legacy_cred =		\
+				(const struct cred___legacy *)(cred_ptr);	\
+			(dst) = (__u64)BPF_CORE_READ(__legacy_cred, field.cap[0]) | \
+				((__u64)BPF_CORE_READ(__legacy_cred, field.cap[1]) << 32); \
+		}								\
+	} while (0)
+
+/* capture_priv_state fills one struct allseer_priv_state from a live task and
+ * reports which groups of it were actually read.
+ *
+ * The return value is the before-side mask; the exit side shifts it left by one
+ * to get its own. Every bit it sets is a statement that the read behind those
+ * fields succeeded, and every bit it leaves clear is the ABI's way of saying
+ * "not observed" about fields whose zero would otherwise be indistinguishable
+ * from an observation — uid 0 is root, gid 0 is root, and an empty capability
+ * set is a task holding no capabilities.
+ *
+ * # Which cred, and why it agrees with the rest of the record
+ *
+ * task->cred, the subjective credentials, and not task->real_cred. It is what
+ * governs what this task may do, and it is what bpf_get_current_uid_gid reads —
+ * so uid_real here and struct allseer_proc.uid, filled from that helper by the
+ * caller, are the same number by construction rather than by coincidence. A
+ * record cannot disagree with itself about who acted.
+ *
+ * Every id is an init_user_ns value, because a kuid_t is namespace-independent
+ * and its .val is the init-namespace uid. A task inside a user namespace
+ * therefore reports its host uid rather than the one it sees, which is the
+ * correct answer for a host-level governance system and is stated in the header
+ * because it surprises.
+ *
+ * # The three pointers that can fail, and the one field that cannot
+ *
+ * seccomp.mode is embedded in task_struct, so there is no pointer to lose and
+ * its bit is always set. The other three groups hang off pointers — cred itself,
+ * cred->user_ns and cred->group_info — and each is checked before the fields
+ * behind it are read. group_info is the one that has ever legitimately been
+ * NULL; the other two are checked because a helper that trusts a pointer it did
+ * not verify is one kernel change away from reporting a page of zeroes as a
+ * credential.
+ *
+ * # Capability sets
+ *
+ * Five __u64 values, read through ALLSEER_READ_CAP_SET, which picks a
+ * representation per kernel. See the comment above that macro; the short form is
+ * that Linux 6.3 replaced `__u32 cap[2]` with a single `u64 val` and both are
+ * read here, so this object runs on either without the ABI knowing.
+ */
+static __always_inline __u32 capture_priv_state(struct task_struct *task,
+						struct allseer_priv_state *st)
+{
+	const struct cred *cred;
+	struct user_namespace *user_ns;
+	struct group_info *group_info;
+	__u32 present = 0;
+
+	__builtin_memset(st, 0, sizeof(*st));
+
+	/* No pointer to lose, so this one is always observed. */
+	st->seccomp_mode = (__u32)BPF_CORE_READ(task, seccomp.mode);
+	present |= ALLSEER_PRIV_FIELD_BEFORE_SECCOMP;
+
+	cred = BPF_CORE_READ(task, cred);
+	if (!cred)
+		return present;
+
+	ALLSEER_READ_CAP_SET(st->cap_effective, cred, cap_effective);
+	ALLSEER_READ_CAP_SET(st->cap_permitted, cred, cap_permitted);
+	ALLSEER_READ_CAP_SET(st->cap_inheritable, cred, cap_inheritable);
+	ALLSEER_READ_CAP_SET(st->cap_ambient, cred, cap_ambient);
+	ALLSEER_READ_CAP_SET(st->cap_bounding, cred, cap_bset);
+
+	st->uid_real = BPF_CORE_READ(cred, uid.val);
+	st->uid_effective = BPF_CORE_READ(cred, euid.val);
+	st->uid_saved = BPF_CORE_READ(cred, suid.val);
+	st->uid_fs = BPF_CORE_READ(cred, fsuid.val);
+	st->gid_real = BPF_CORE_READ(cred, gid.val);
+	st->gid_effective = BPF_CORE_READ(cred, egid.val);
+	st->gid_saved = BPF_CORE_READ(cred, sgid.val);
+	st->gid_fs = BPF_CORE_READ(cred, fsgid.val);
+
+	st->securebits = BPF_CORE_READ(cred, securebits);
+	present |= ALLSEER_PRIV_FIELD_BEFORE_CRED;
+
+	/* The user namespace, which the decoder needs for a reason beyond
+	 * reporting it: a capability set is scoped to the namespace it was granted
+	 * in, so the delta between two snapshots is only meaningful when both name
+	 * the same one. Leaving this bit clear withholds the delta rather than
+	 * producing a wrong one. */
+	user_ns = BPF_CORE_READ(cred, user_ns);
+	if (user_ns) {
+		st->userns_inum = BPF_CORE_READ(user_ns, ns.inum);
+		present |= ALLSEER_PRIV_FIELD_BEFORE_USERNS;
+	}
+
+	/* The count, and only the count. The list behind it is bounded by
+	 * NGROUPS_MAX at 65536 kgid_t, which is a quarter of a megabyte against a
+	 * 512-byte stack, and the ABI carries no field for it. */
+	group_info = BPF_CORE_READ(cred, group_info);
+	if (group_info) {
+		st->ngroups = (__u32)BPF_CORE_READ(group_info, ngroups);
+		present |= ALLSEER_PRIV_FIELD_BEFORE_GROUPS;
+	}
+
+	return present;
+}
+
+/* priv_enter: a thread is asking to change its credentials.
+ *
+ * Emits nothing, for the reason sys_enter_openat emits nothing: the record has a
+ * `ret` field the header defines as the syscall return, and at this instant
+ * there is no return. What it does that openat's entry side does not is capture
+ * the `before` snapshot, and that is the whole reason the pairing is mandatory
+ * here rather than merely convenient — pre-change credentials exist only until
+ * the syscall commits, and no later hook can recover them.
+ *
+ * `ns_arg` is the index of the CLONE_* argument, or negative for the operations
+ * that have none. It is a compile-time constant at every call site, so the test
+ * and the array index both fold away.
+ */
+static __always_inline int priv_enter(struct trace_event_raw_sys_enter *ctx,
+				      __u32 op, int ns_arg)
+{
+	struct task_struct *task;
+	struct allseer_priv_scratch s;
+	allseer_cgroup_id_t cgroup_id;
+	allseer_syscall_key_t key;
+	__u64 pid_tgid, uid_gid;
+
+	/* The filter, first, and before any credential is read. The standing
+	 * per-probe obligation internal/telemetry states — "every tracepoint added
+	 * after this one has to perform the same lookup or it silently reports on
+	 * cgroups nobody declared" — and the reason it is first rather than after
+	 * the cheaper work is that "no untracked cgroup is ever observed" has to
+	 * stay checkable by reading the top of each probe.
+	 *
+	 * The ID matched here is the one that ends up in the record, so the event's
+	 * attribution and its reason for existing cannot come from different
+	 * cgroups. None of these syscalls moves a task between cgroups —
+	 * unshare(CLONE_NEWCGROUP) and setns to a cgroup namespace change what the
+	 * task can see of the hierarchy, not which cgroup it is in — so unlike a
+	 * blocking openat there is not even a window in which the two could
+	 * diverge. */
+	cgroup_id = bpf_get_current_cgroup_id();
+	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
+
+	/* Zeroed in full: the verifier requires every byte of a stack value copied
+	 * into a map to have been written, and the named pad is part of that. */
+	__builtin_memset(&s, 0, sizeof(s));
+
+	/* The instant the call was made, not the instant it finished — the
+	 * convention allseer_maps.h settled for openat and connect, kept here
+	 * unchanged. It matters more for this event than for those two: it is the
+	 * instant the `before` snapshot describes, so a record whose timestamp came
+	 * from the exit would date its own evidence wrongly. */
+	s.timestamp = bpf_ktime_get_ns();
+
+	pid_tgid = bpf_get_current_pid_tgid();
+	uid_gid = bpf_get_current_uid_gid();
+	task = (struct task_struct *)bpf_get_current_task();
+
+	/* The identity stamp: the calling thread's own start time, checked at exit
+	 * against the thread running there. Not the group leader's, and not
+	 * interchangeable with proc.start_time below. */
+	s.task_start_time = BPF_CORE_READ(task, start_boottime);
+
+	/* struct allseer_proc as every other probe fills it, including
+	 * start_time from the group leader so that (PID, StartTime) is the pair
+	 * proc_exec and proc_exit report for the same process. tid is the thread
+	 * that made the call and is the field that distinguishes the N records one
+	 * glibc setuid() produces on an N-threaded process. */
+	s.proc.cgroup_id = cgroup_id;
+	s.proc.start_time = BPF_CORE_READ(task, group_leader, start_boottime);
+	s.proc.pid = (__u32)(pid_tgid >> 32);
+	s.proc.tid = (__u32)pid_tgid;
+	s.proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
+	s.proc.uid = (__u32)uid_gid;
+	s.proc.gid = (__u32)(uid_gid >> 32);
+	s.proc._pad = 0;
+	bpf_get_current_comm(&s.proc.comm, sizeof(s.proc.comm));
+
+	s.operation = op;
+	s.fields_present = capture_priv_state(task, &s.before);
+
+	/* unshare's flags or setns's nstype, as the caller supplied them. Not
+	 * validated and not interpreted: the header defines the field as what was
+	 * asked for, and what actually happened is the userns_inum pair. A setns
+	 * whose nstype is 0 names no type at all, which is legal, and the bit is
+	 * still set — the honest reading is "the caller named nothing", not "this
+	 * was not captured".
+	 *
+	 * Written as two comparisons against literals rather than one indexed by
+	 * `ns_arg`, so that the only subscripts appearing anywhere in this function
+	 * are the constants 0 and 1. Every call site passes a compile-time constant
+	 * and the optimiser would fold `ctx->args[-1]` away before the verifier ever
+	 * saw it — but "the optimiser will delete the out-of-bounds read" is a load
+	 * -bearing assumption about -O2, and an object that fails to verify fails to
+	 * load at all, taking the four probes that were already working with it. */
+	if (ns_arg == 0) {
+		s.ns_flags = (__u32)ctx->args[0];
+		s.fields_present |= ALLSEER_PRIV_FIELD_NS_FLAGS;
+	} else if (ns_arg == 1) {
+		s.ns_flags = (__u32)ctx->args[1];
+		s.fields_present |= ALLSEER_PRIV_FIELD_NS_FLAGS;
+	}
+
+	/* BPF_ANY and the return unchecked, exactly as openat_enter and
+	 * connect_enter do it: a thread's previous entry is replaced rather than
+	 * kept, an LRU insert does not fail for want of room, and an update that
+	 * did fail means the exit finds nothing and emits nothing — which is
+	 * already the documented behaviour of a missing entry. Nothing has been
+	 * reserved, so ringbuf_drops must not move. */
+	key = pid_tgid;
+	bpf_map_update_elem(&priv_scratch, &key, &s, BPF_ANY);
+	return 0;
+}
+
+/* priv_exit: the credential syscall has returned, and the record can be built.
+ *
+ * Contributes `ret` and the `after` snapshot. It performs no tracked_cgroups
+ * lookup of its own: the presence of a scratch entry is the entry side's
+ * decision carried forward, which is rule 1 of the protocol and the thing that
+ * keeps a record's cgroup_id equal to the one that admitted it.
+ *
+ * # Success and failure are the same code path
+ *
+ * `after` is captured whether the syscall succeeded or failed, and that is the
+ * ABI's contract rather than an economy. A negative `ret` means the kernel
+ * committed nothing, so the two snapshots hold the same values — and the record
+ * saying so is a stronger statement than the record being silent. It turns
+ * "nothing changed" from an absence into an assertion a reader can check against
+ * `before`, and it costs one read on a path that is already reserving 856 bytes.
+ *
+ * internal/telemetry/decode.go needs no special case for either: resultOf reads
+ * ret >= 0 as Succeeded and renders a negative value as an errno name, exactly
+ * as it does for openat and connect. A refused setuid arrives as a real event
+ * with Succeeded false and errno EPERM, which is a governance signal in its own
+ * right.
+ *
+ * # Three ways to find nothing
+ *
+ * No entry at all, an entry whose identity stamp names a thread that is gone,
+ * and an entry whose operation is not this program's. The first is an untracked
+ * cgroup, or an enter that ran before the exit programs were attached. The
+ * second is TID reuse, which the protocol describes at length. The third is the
+ * tag check a shared scratch map needs and which allseer_maps.h describes at
+ * struct allseer_priv_scratch. All three delete what they found and emit
+ * nothing; none of them counts a drop, because a correlation that was never
+ * completed is not a record that was lost.
+ */
+static __always_inline int priv_exit(struct trace_event_raw_sys_exit *ctx, __u32 op)
+{
+	struct allseer_priv_scratch *s;
+	struct task_struct *task;
+	struct allseer_event *e;
+	allseer_syscall_key_t key;
+	__u32 present;
+
+	key = bpf_get_current_pid_tgid();
+	s = bpf_map_lookup_elem(&priv_scratch, &key);
+	if (!s)
+		return 0;
+
+	task = (struct task_struct *)bpf_get_current_task();
+	if (BPF_CORE_READ(task, start_boottime) != s->task_start_time) {
+		bpf_map_delete_elem(&priv_scratch, &key);
+		return 0;
+	}
+
+	if (s->operation != op) {
+		bpf_map_delete_elem(&priv_scratch, &key);
+		return 0;
+	}
+
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e) {
+		count_ringbuf_drop();
+		bpf_map_delete_elem(&priv_scratch, &key);
+		return 0;
+	}
+
+	e->timestamp = s->timestamp;
+	e->type = ALLSEER_EVT_PRIV_CHANGE;
+	e->ret = (__s32)ctx->ret;
+	e->version = ALLSEER_ABI_VERSION;
+	e->_pad = 0;
+	e->proc = s->proc;
+
+	/* Reserved space is whatever the ring held before, so the whole union is
+	 * cleared before any of it is filled. The privilege payload is 208 bytes of
+	 * a 776-byte union, which means most of what this clears is never written
+	 * again — and a record carrying 568 bytes of the previous event under a
+	 * type that declares 208 is exactly what a raw-record dump or a later
+	 * payload member would trip over. */
+	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+
+	e->payload.priv.before = s->before;
+	e->payload.priv.operation = s->operation;
+	e->payload.priv.ns_flags = s->ns_flags;
+	e->payload.priv._pad = 0;
+
+	/* The entry side's bits, then this side's shifted into their own half.
+	 * Neither side sets a bit the other owns, so the OR cannot disagree with
+	 * itself. */
+	present = s->fields_present;
+	present |= capture_priv_state(task, &e->payload.priv.after)
+		   << ALLSEER_PRIV_AFTER_SHIFT;
+	e->payload.priv.fields_present = present;
+
+	bpf_map_delete_elem(&priv_scratch, &key);
+
+	bpf_ringbuf_submit(e, 0);
+	return 0;
+}
+
+/* One pair of programs per syscall, from one pair of bodies.
+ *
+ * A macro rather than twenty-two written-out functions, because the thing worth
+ * being able to check by eye is that every operation is handled identically
+ * apart from its enum value and its namespace argument. Twenty-two copies would
+ * make that a claim a reviewer has to verify line by line and a future edit has
+ * to remember to apply twenty-two times; one expansion makes it structural.
+ *
+ * `name` is the syscall as the tracepoint spells it, so the SEC() strings are
+ * derived from it rather than written twice, and a typo produces a program that
+ * fails to attach with the name it was asked for rather than one that silently
+ * attaches somewhere else.
+ */
+#define ALLSEER_PRIV_PAIR(name, op, ns_arg)				\
+	SEC("tracepoint/syscalls/sys_enter_" #name)			\
+	int priv_enter_##name(struct trace_event_raw_sys_enter *ctx)	\
+	{								\
+		return priv_enter(ctx, (op), (ns_arg));			\
+	}								\
+									\
+	SEC("tracepoint/syscalls/sys_exit_" #name)			\
+	int priv_exit_##name(struct trace_event_raw_sys_exit *ctx)	\
+	{								\
+		return priv_exit(ctx, (op));				\
+	}
+
+/* The seven identity syscalls. None of them has a namespace argument, and none
+ * of their arguments is read: what the credentials became is read from the
+ * kernel, not computed from what was asked for. */
+ALLSEER_PRIV_PAIR(setuid, ALLSEER_PRIV_OP_SETUID, -1)
+ALLSEER_PRIV_PAIR(setreuid, ALLSEER_PRIV_OP_SETREUID, -1)
+ALLSEER_PRIV_PAIR(setresuid, ALLSEER_PRIV_OP_SETRESUID, -1)
+ALLSEER_PRIV_PAIR(setgid, ALLSEER_PRIV_OP_SETGID, -1)
+ALLSEER_PRIV_PAIR(setregid, ALLSEER_PRIV_OP_SETREGID, -1)
+ALLSEER_PRIV_PAIR(setresgid, ALLSEER_PRIV_OP_SETRESGID, -1)
+
+/* setgroups changes the supplementary group set. The ABI carries ngroups and no
+ * list, so the record reports that the set changed and by how much it grew or
+ * shrank; a change that keeps the count is reported as the act without the
+ * magnitude, which is the granularity resolve.Observe already works at for this
+ * domain. The list itself is not carried and the argument is not read. */
+ALLSEER_PRIV_PAIR(setgroups, ALLSEER_PRIV_OP_SETGROUPS, -1)
+
+/* capset writes the effective, permitted and inheritable sets from a user-space
+ * struct this probe does not read. Both snapshots carry all five sets, so the
+ * delta is recoverable without trusting the caller's buffer — which would also
+ * have been a user-memory read on a path that can fail after it. */
+ALLSEER_PRIV_PAIR(capset, ALLSEER_PRIV_OP_CAPSET, -1)
+
+/* unshare(int flags) — args[0]. Of its flags only CLONE_NEWUSER touches
+ * credentials; the rest swap task->nsproxy and leave both snapshots identical,
+ * which is why ns_flags is the only thing in such a record that reports what
+ * happened. */
+ALLSEER_PRIV_PAIR(unshare, ALLSEER_PRIV_OP_UNSHARE, 0)
+
+/* setns(int fd, int nstype) — args[1]. The fd is not resolved: doing so means
+ * walking task->files to a struct ns_common, and the userns_inum pair already
+ * answers the question that walk would be for, from observed state rather than
+ * from a descriptor the caller could have closed. */
+ALLSEER_PRIV_PAIR(setns, ALLSEER_PRIV_OP_SETNS, 1)
+
+/* seccomp(2) only. prctl(PR_SET_SECCOMP) is deliberately not hooked — the ABI
+ * says so and the reason is that prctl is the hottest syscall of the candidates
+ * and its privilege-relevant effects are already visible as snapshot deltas.
+ *
+ * seccomp_mode comes from task->seccomp.mode on both sides rather than from
+ * args[0], so a SECCOMP_SET_MODE_FILTER that installed a filter arrives as
+ * 0 -> 2 and a SECCOMP_GET_NOTIF_SIZES that asked a question arrives with both
+ * snapshots equal and a non-negative ret. The one case the mode cannot separate
+ * is a second filter added to a task already at mode 2, which the ABI decided
+ * not to carry a filter count for. */
+ALLSEER_PRIV_PAIR(seccomp, ALLSEER_PRIV_OP_SECCOMP, -1)
+
 /* --- BTF anchor -------------------------------------------------------------
  *
  * Not read by anything in the kernel. It exists so that `struct allseer_event`
@@ -1258,6 +1841,12 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
 struct allseer_event *_allseer_record_btf_anchor;
 
 /* --- Open items -------------------------------------------------------------
+ *
+ * TODO(architecture): split this object into independently loadable telemetry
+ * modules after M5. The requirement, its exception and the reasoning are
+ * recorded once, in internal/telemetry/telemetry.go; it is repeated here as a
+ * pointer because this file is the one the milestone changes most, and because
+ * the capability compatibility macro above is the first workaround it predicts.
  *
  * TODO(bpf): carry a task's exit status. proc_exit writes ret = 0 because the
  * header defines `ret` as "syscall return; negative is -errno" and a process

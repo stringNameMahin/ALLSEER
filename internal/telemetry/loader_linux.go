@@ -100,6 +100,22 @@ const (
 	// for the same reason: the runtime tests assert on it. The name is fifteen
 	// characters, which is the most BPF_OBJ_NAME_LEN allows.
 	MapConnectScratch = "connect_scratch"
+
+	// MapPrivScratch holds one half-built privilege event per thread that is
+	// inside a credential syscall, between a ProgPriv*Enter and its matching
+	// ProgPriv*Exit.
+	//
+	// The third instance of the scratch protocol and the first shared by more
+	// than one syscall: eleven pairs write and read this one map, where openat
+	// and connect were given one each. allseer_maps.h argues why that is right
+	// here — the eleven have one value shape and none of them is hot, so
+	// neither reason for splitting them applies — and what it costs, which is a
+	// syscall tag the exit side has to check.
+	//
+	// Kernel-internal in exactly the way the other two are, and named here for
+	// the same reason: the runtime tests assert that an entry exists between
+	// the two halves and is gone after either outcome.
+	MapPrivScratch = "priv_scratch"
 )
 
 // Program names, as bpf/allseer.bpf.c declares them, for Attach. libbpf
@@ -161,6 +177,85 @@ const (
 	// spot most worth not having by accident.
 	ProgConnectExit = "connect_exit"
 )
+
+// The privilege programs, one enter/exit pair per credential syscall, all
+// emitting ALLSEER_EVT_PRIV_CHANGE.
+//
+// Eleven pairs rather than one program, because the syscall is what names the
+// operation: struct allseer_event carries no syscall identifier, so the
+// `operation` field in the payload is the only thing that separates a setuid
+// record from a capset one, and a program attached to a single tracepoint knows
+// its own answer as a compile-time constant.
+//
+// Every pair behaves like the openat and connect pairs and fails the same way
+// when half-attached: the entry side never emits and the exit side emits only
+// what it finds a scratch entry for, so one without the other is a blind spot
+// that looks exactly like a process that never changed its credentials. All
+// five privilege capabilities in the M1 catalog are graded critical or high, so
+// that is a blind spot worth not having by accident — which is why
+// ProgPrivPairs exists rather than leaving each caller to assemble the list.
+const (
+	ProgPrivSetuidEnter = "priv_enter_setuid"
+	ProgPrivSetuidExit  = "priv_exit_setuid"
+
+	ProgPrivSetreuidEnter = "priv_enter_setreuid"
+	ProgPrivSetreuidExit  = "priv_exit_setreuid"
+
+	ProgPrivSetresuidEnter = "priv_enter_setresuid"
+	ProgPrivSetresuidExit  = "priv_exit_setresuid"
+
+	ProgPrivSetgidEnter = "priv_enter_setgid"
+	ProgPrivSetgidExit  = "priv_exit_setgid"
+
+	ProgPrivSetregidEnter = "priv_enter_setregid"
+	ProgPrivSetregidExit  = "priv_exit_setregid"
+
+	ProgPrivSetresgidEnter = "priv_enter_setresgid"
+	ProgPrivSetresgidExit  = "priv_exit_setresgid"
+
+	ProgPrivSetgroupsEnter = "priv_enter_setgroups"
+	ProgPrivSetgroupsExit  = "priv_exit_setgroups"
+
+	ProgPrivCapsetEnter = "priv_enter_capset"
+	ProgPrivCapsetExit  = "priv_exit_capset"
+
+	ProgPrivUnshareEnter = "priv_enter_unshare"
+	ProgPrivUnshareExit  = "priv_exit_unshare"
+
+	ProgPrivSetnsEnter = "priv_enter_setns"
+	ProgPrivSetnsExit  = "priv_exit_setns"
+
+	ProgPrivSeccompEnter = "priv_enter_seccomp"
+	ProgPrivSeccompExit  = "priv_exit_seccomp"
+)
+
+// ProgPrivPairs is every privilege program, entry before its own exit.
+//
+// A list rather than a set of loose constants, because the failure it prevents
+// is arithmetic: twenty-two names attached by hand is twenty-two chances to
+// omit one, and an omitted exit program is silent — it produces no error, no
+// event, and no way to tell the difference between "this syscall was never
+// called" and "this half was never attached".
+//
+// It is not a general "all probes" list and does not make one: the loader still
+// has no such concept, still attaches per program, and still does not honour
+// Config.EnabledProbes. A caller that wants exec, exit, openat and connect
+// without privilege telemetry simply does not range over this.
+func ProgPrivPairs() []string {
+	return []string{
+		ProgPrivSetuidEnter, ProgPrivSetuidExit,
+		ProgPrivSetreuidEnter, ProgPrivSetreuidExit,
+		ProgPrivSetresuidEnter, ProgPrivSetresuidExit,
+		ProgPrivSetgidEnter, ProgPrivSetgidExit,
+		ProgPrivSetregidEnter, ProgPrivSetregidExit,
+		ProgPrivSetresgidEnter, ProgPrivSetresgidExit,
+		ProgPrivSetgroupsEnter, ProgPrivSetgroupsExit,
+		ProgPrivCapsetEnter, ProgPrivCapsetExit,
+		ProgPrivUnshareEnter, ProgPrivUnshareExit,
+		ProgPrivSetnsEnter, ProgPrivSetnsExit,
+		ProgPrivSeccompEnter, ProgPrivSeccompExit,
+	}
+}
 
 const (
 	// ringBufferPollMS is how long libbpf waits in epoll before checking

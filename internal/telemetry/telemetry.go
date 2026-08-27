@@ -470,6 +470,38 @@ type Config struct {
 // the defect it has been labelling CapabilityDeltaAddedOnly.
 // No probe emits the type yet. The ABI is the contract; the syscall enter/exit
 // pairs that fill it are a separate issue.
+//
+// TODO(architecture): after M5 is complete, transition the telemetry
+// architecture from the current single-BPF-object model toward independently
+// loadable telemetry modules/objects — "Option 3" in the kernel_cap_t
+// compatibility review — providing mechanism and kernel-version isolation and
+// preparing the platform architecture for future Linux kernel diversity and
+// Windows support.
+//
+// If M5 encounters a concrete problem caused by the single-object architecture
+// before M5 completes — particularly a kernel compatibility, verifier or load
+// failure, or feature-isolation problem that cannot be safely solved within the
+// current object — transition to Option 3 immediately rather than accumulating
+// additional workarounds.
+//
+// This is a mandatory architectural milestone and not a suggestion. It is not
+// "consider Option 3", it is not conditional on the current workaround failing,
+// and it is not to be deferred past M5. In particular it must not be removed
+// because Option 2 — the dual-representation capability read now in
+// bpf/allseer.bpf.c — works: that read is the first accumulated workaround, not
+// a reason the milestone was avoided, and the next kernel divergence has nowhere
+// to go inside one object.
+//
+// The reason it is recorded here rather than left to a review is that the
+// pressure runs the other way. bpf/allseer.bpf.c opens by stating "One object,
+// not one per probe", and every probe added since has made that sentence more
+// expensive to reverse: one ring buffer, one filter map, three scratch maps and
+// twenty-eight programs now share a single load. A CO-RE relocation that cannot
+// resolve is poisoned rather than fatal, which is what makes the current object
+// loadable on kernels it was not built on — but a *verifier* rejection is fatal
+// to the whole object, so one program that a future kernel refuses takes the
+// other twenty-seven down with it. That is the failure mode Option 3 exists to
+// bound, and it is not detectable by testing on the build host.
 // TODO(telemetry): decide the path resolution strategy. Full dentry walking in
 // the kernel is expensive and bounded by the verifier's loop limits; resolving
 // in user space races with rename. Neither is clean.

@@ -498,6 +498,104 @@ struct allseer_connect_scratch {
     __u32 _pad;
 };
 
+/* Capacity of `priv_scratch`, in entries.
+ *
+ * Far smaller than the other two, and the reason is the workload rather than a
+ * different appetite for risk. openat and connect are called constantly; the
+ * eleven credential syscalls behind this map are called a handful of times in
+ * the life of a process that changes identity at all, and never by one that
+ * does not. A tracked cgroup running an ordinary build reaches this map zero
+ * times.
+ *
+ * The live population is the number of tracked threads inside a credential
+ * syscall at one instant, and none of them blocks: setuid and its relatives
+ * take a lock and return, capset validates and returns, unshare allocates.
+ * There is no equivalent of connect's two-minute SYN timeout to size for. So
+ * this number, like the other two, is sized for the orphans — entries from
+ * threads killed inside the syscall — and 1024 at 184 bytes is about 188 KiB.
+ *
+ * Running out is not a failure mode here either, for the reason the protocol
+ * above gives: the LRU converts "no further privilege changes can be
+ * correlated, forever" into "the oldest pending one loses its correlation". */
+#define ALLSEER_MAX_PRIV_SCRATCH  1024
+
+/* Value of `priv_scratch`: the before snapshot and what names the operation.
+ *
+ * The same prologue and the same split as the other two — the entry side
+ * captures, the exit side contributes `ret` and emits — with one field the
+ * others have no need of and one deliberate omission.
+ *
+ * # What it holds, and what it does not
+ *
+ * It holds `before`, which is 96 of its 184 bytes and is unavoidable: the
+ * pre-change credential state exists only until the syscall commits, so a probe
+ * that did not capture it at entry could never recover it. It does *not* hold
+ * `after`, and it does not hold a built struct allseer_priv_payload. The after
+ * snapshot is read at exit, straight into the reserved ring buffer record,
+ * because at that instant it is simply the state of the task the exit program is
+ * already running on. Copying the whole 208-byte payload through this map would
+ * double the map's footprint to store a half of it that is not yet knowable.
+ *
+ * Field by field:
+ *
+ *   timestamp        bpf_ktime_get_ns() at sys_enter, copied into the record.
+ *                    The instant the call was made, as it is for openat and
+ *                    connect, and for the same reason: it is the instant every
+ *                    other field here was read, so a record's timestamp and its
+ *                    `before` snapshot describe the same moment.
+ *   task_start_time  the calling thread's start_boottime. The identity stamp the
+ *                    protocol above requires.
+ *   proc             struct allseer_proc exactly as the record carries it. Note
+ *                    that proc.uid and proc.gid are the *real* ids from
+ *                    bpf_get_current_uid_gid, which is what every other probe
+ *                    reports, while `before` carries all four views of each —
+ *                    so proc.uid and before.uid_real are the same number by
+ *                    construction and a record cannot disagree with itself.
+ *   before           the pre-change snapshot, read from task->cred before the
+ *                    kernel has touched it.
+ *   operation        the enum allseer_priv_op value for the syscall that wrote
+ *                    this entry. Its second job is described below.
+ *   ns_flags         unshare's flags argument or setns's nstype, both CLONE_*.
+ *                    Zero for every other operation.
+ *   fields_present   the bits the entry side established. The exit side ORs its
+ *                    own in; neither side sets a bit the other owns.
+ *
+ * # Why `operation` is also a discriminator
+ *
+ * One map serves eleven syscalls, where openat and connect were given one each.
+ * That is a deliberate departure and the argument above for splitting them does
+ * not carry here: the two reasons stated are that the values differ and that
+ * eviction would let a noisy syscall decide which of a quiet one's events
+ * survive. These eleven share one value shape exactly, and none of them is
+ * noisy — they are the rarest syscalls this object hooks, so there is no
+ * pressure for eviction to redistribute.
+ *
+ * What a shared map does need is the thing that section names: "A shared map
+ * would have needed a syscall tag and a check on it". `operation` is that tag,
+ * and the exit programs check it. Each exit program knows which syscall it is
+ * attached to, so it compares the entry's operation against its own and treats a
+ * mismatch exactly as it treats a stale identity stamp — delete, emit nothing.
+ *
+ * The window that check closes is narrow and real. A thread inside
+ * unshare when the exit programs are attached leaves an entry no unshare_exit
+ * will ever collect, because none was attached when the syscall returned. The
+ * next credential syscall that thread makes has its own enter, which replaces
+ * the entry, so the orphan is normally harmless — but between the two, an exit
+ * program for a *different* syscall firing on that thread would find an entry
+ * whose operation is not its own. Without the tag it would emit an unshare
+ * event carrying some other syscall's return.
+ */
+struct allseer_priv_scratch {
+    __u64 timestamp;
+    __u64 task_start_time;
+    struct allseer_proc proc;
+    struct allseer_priv_state before;
+    __u32 operation;
+    __u32 ns_flags;
+    __u32 fields_present;
+    __u32 _pad;
+};
+
 /* The shared prologue, enforced rather than described.
  *
  * The protocol above says the two scratch values begin the same way; these are
@@ -513,6 +611,23 @@ _Static_assert(__builtin_offsetof(struct allseer_connect_scratch, task_start_tim
 _Static_assert(__builtin_offsetof(struct allseer_connect_scratch, proc) ==
                __builtin_offsetof(struct allseer_open_scratch, proc),
                "scratch prologue: proc must sit at the same offset in both");
+_Static_assert(__builtin_offsetof(struct allseer_priv_scratch, timestamp) ==
+               __builtin_offsetof(struct allseer_open_scratch, timestamp),
+               "scratch prologue: timestamp must sit at the same offset in all three");
+_Static_assert(__builtin_offsetof(struct allseer_priv_scratch, task_start_time) ==
+               __builtin_offsetof(struct allseer_open_scratch, task_start_time),
+               "scratch prologue: task_start_time must sit at the same offset in all three");
+_Static_assert(__builtin_offsetof(struct allseer_priv_scratch, proc) ==
+               __builtin_offsetof(struct allseer_open_scratch, proc),
+               "scratch prologue: proc must sit at the same offset in all three");
+
+/* The before snapshot in the scratch value and the one in the record are the
+ * same type, so a field added to one is added to both. Asserted anyway, because
+ * the exit side copies it with a struct assignment and a silent divergence here
+ * would be a partially-filled snapshot rather than a compile error. */
+_Static_assert(sizeof(((struct allseer_priv_scratch *)0)->before) ==
+               sizeof(((struct allseer_priv_payload *)0)->before),
+               "priv scratch: the before snapshot must be the record's own type");
 
 /* The lifecycle of a `connect_scratch` entry is the openat one unchanged, and
  * is not restated here: created at sys_enter_connect after tracked_cgroups
