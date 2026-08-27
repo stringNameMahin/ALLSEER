@@ -12,7 +12,8 @@
 //
 // JSON Lines: one JSON-encoded pkg/event.Event per line, UTF-8, LF or CRLF
 // terminated. It is the wire form of Event, so a stream can be produced by the
-// daemon's recorder, by the synthetic generator, or by hand.
+// daemon's recorder, by the synthetic generator in
+// internal/telemetry/synth, or by hand.
 //
 //	{"id":"evt-1","session_id":"s1","sequence":1,"kernel_timestamp":1000, ...}
 //	{"id":"evt-2","session_id":"s1","sequence":2,"kernel_timestamp":1200, ...}

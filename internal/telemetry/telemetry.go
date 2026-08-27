@@ -458,8 +458,44 @@ type Config struct {
 // TODO(telemetry): decide the path resolution strategy. Full dentry walking in
 // the kernel is expensive and bounded by the verifier's loop limits; resolving
 // in user space races with rename. Neither is clean.
-// TODO(telemetry): implement the synthetic event generator sharing the replay
-// format, for benchmarks and for scenarios awkward to record.
+// Done: the synthetic event generator is internal/telemetry/synth, and it
+// shares the replay format rather than defining a second one. WriteStream emits
+// the JSON Lines internal/telemetry/replay reads, and Source hands back a
+// *replay.Source over them, so nothing downstream can tell a generated stream
+// from a recorded one — which is the only seam it needed, and the reason it
+// implements no event.Source of its own.
+// What makes it trustworthy is the direction it builds in. A Spec is written in
+// the ABI's vocabulary — an allseer_event_type, a syscall return, the one union
+// member the header designates for that type — and is rendered as the 856 bytes
+// struct allseer_event occupies, which are then handed to
+// telemetry.EventDecoder. So an open's capability comes from its flags, an
+// errno from a negative return, an address from its family, and a domain from
+// the M1 catalog, exactly as they do for a record off the ring buffer; and a
+// record this build refuses — ALLSEER_EVT_UNKNOWN, ALLSEER_EVT_PRIV_CHANGE, a
+// type outside the enum — is refused here too, in the decoder's own words.
+// Assembling event.Event values directly would have been a second decoder
+// beside the first, which is the drift the generated ABI exists to prevent,
+// arriving through the tool meant to produce evidence about it.
+// What the generator adds after decode is exactly what decode.go deliberately
+// leaves zero, and every piece of it is stated by the caller rather than
+// invented: SessionID, Sequence, and an ID in the same "<session>/<sequence>"
+// form replay synthesizes for a record that omits one; Dropped, which advances
+// the sequence and the clock along with the counter it sets, so a generated
+// stream cannot claim loss its own numbering contradicts; and the M6 enrichment
+// fields, each sitting on the payload it belongs to so a spec cannot enrich a
+// payload the event does not carry. Observation is not among them. It comes
+// from resolve.Observe over the enriched event, because an observation written
+// beside the payload it describes can contradict it, and the validator reads
+// the observation.
+// Two refusals are worth naming here rather than leaving to be found. WallClock
+// stays zero unless Config.BootWallClock states the boot offset, since the
+// offset strategy is still open in pkg/event and a synthesized wall time reads
+// as observed. And Syscall stays empty for the reason the TODO(telemetry) in
+// decode.go gives: the record carries no syscall identifier, so naming one
+// would be a guess — and a generator, which knows what it meant, is exactly
+// where that guess would look reasonable.
+// Its tests need no kernel, no root, no libbpf and no compiled object, which is
+// the property the whole thing exists for.
 // TODO(telemetry): benchmark probe overhead against a realistic build. Target
 // under 5% wall clock, measured rather than assumed.
 // TODO(telemetry): evaluate LSM BPF hooks for synchronous blocking. Tracepoints
