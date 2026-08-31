@@ -252,6 +252,52 @@ char LICENSE[] SEC("license") = "GPL";
  * looks. internal/telemetry/rodata.go records that in more detail. */
 const __u32 allseer_abi_version = ALLSEER_ABI_VERSION;
 
+/* Whether a submitted record must always wake the ring buffer's consumer.
+ *
+ * Zero — the default, and the only value any production path sets — leaves
+ * bpf_ringbuf_submit's flags at 0, which is what every submit in this file has
+ * always passed. Non-zero substitutes BPF_RB_FORCE_WAKEUP.
+ *
+ * `const volatile` and not `const`, unlike allseer_abi_version directly above,
+ * and the difference is exactly the one that declaration's comment draws: this
+ * *is* a tunable. The loader writes it before load through
+ * telemetry.Config.RingbufForceWakeup, libbpf freezes .rodata afterwards, and
+ * the verifier then reads it as a known constant — so at the default of zero
+ * allseer_submit_flags below folds to a literal 0 and every program compiles to
+ * the instructions it did before this variable existed.
+ *
+ * # Why it exists
+ *
+ * It is an instrument, not a feature. M5's W3 acceptance run measured +21.01%
+ * wall clock for the tracked configuration against an untracked baseline, and
+ * localised all of it to the A2-to-A3 transition: attaching the programs and
+ * running the cgroup filter costs +0.19%, and the entire remainder appears when
+ * a matching cgroup makes those programs actually emit. What it did not
+ * establish is which half of emitting costs the time — producing the record, or
+ * notifying the consumer that it exists.
+ *
+ * The kernel wakes the consumer on a default-flags submit only when
+ * rec_pos == cons_pos, that is, only when the consumer has caught up. Forcing
+ * the wakeup on every record removes that condition and nothing else, so the
+ * difference between the two is the cost of the wakeups the default policy was
+ * skipping. That is a lower bound on what notification costs, measured without
+ * touching the record, the reserve, the filter or the drain.
+ *
+ * # Why this direction and not the other
+ *
+ * Suppressing wakeups would have been the sharper experiment and is not
+ * available. BPF_RB_NO_WAKEUP was tried: the consumer is libbpf's
+ * ring_buffer__poll, which processes a ring only for a file descriptor epoll
+ * reported ready, and a ringbuf fd becomes ready only through the wakeup that
+ * flag suppresses. Records after the last wakeup were successfully reserved and
+ * submitted, then stranded in the ring at teardown — 161 of them in a
+ * representative run, with ringbuf_drops correctly reporting zero, because a
+ * drop is a failed reservation and these were not. The tail is structural: the
+ * last records of a run cannot trigger their own wakeup, since the trigger is a
+ * later record. Forcing wakeups can only ever deliver more of them, so it has
+ * no such failure mode. */
+const volatile __u64 allseer_ringbuf_force_wakeup = 0;
+
 /* --- Helpers ----------------------------------------------------------------
  */
 
@@ -285,6 +331,32 @@ static __always_inline void count_ringbuf_drop(void)
 		return;
 
 	__sync_fetch_and_add(slot, 1);
+}
+
+/* allseer_submit_flags returns the flags every bpf_ringbuf_submit in this file
+ * is called with.
+ *
+ * One function rather than a literal at each of the five submit sites, so that
+ * the notification policy is a property of the object and not of whichever
+ * probe happened to be edited last. A probe added later that passed its own
+ * flags would be measuring something different from the other five and nothing
+ * would say so.
+ *
+ * At the default — allseer_ringbuf_force_wakeup == 0 — this returns a constant
+ * 0 and the verifier removes the rest, because libbpf freezes .rodata before
+ * verification and a frozen read is a known value. That is the property the
+ * instrument depends on: the arms that are not being experimented on must be
+ * the object that produced the acceptance numbers, or the comparison is against
+ * a moved baseline.
+ *
+ * BPF_RB_NO_WAKEUP is deliberately not reachable from here. The value is a
+ * boolean rather than a flags word so that the abandoned suppression experiment
+ * cannot be reintroduced by writing a different number into .rodata: the only
+ * two programs this object can produce are the one that wakes when the consumer
+ * has caught up, and the one that always wakes. Both always deliver. */
+static __always_inline __u64 allseer_submit_flags(void)
+{
+	return allseer_ringbuf_force_wakeup ? BPF_RB_FORCE_WAKEUP : 0;
 }
 
 /* --- Probes -----------------------------------------------------------------
@@ -481,7 +553,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 				  sizeof(e->payload.exec.filename),
 				  (void *)ctx + filename_off);
 
-	bpf_ringbuf_submit(e, 0);
+	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
 }
 
@@ -635,7 +707,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 	 * have to discover that exit records are not clean. */
 	__builtin_memset(&e->payload, 0, sizeof(e->payload));
 
-	bpf_ringbuf_submit(e, 0);
+	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
 }
 
@@ -941,7 +1013,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	 * simple one: after an exit that found an entry, there is no entry. */
 	bpf_map_delete_elem(&openat_scratch, &key);
 
-	bpf_ringbuf_submit(e, 0);
+	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
 }
 
@@ -1263,7 +1335,7 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
 
 	bpf_map_delete_elem(&connect_scratch, &key);
 
-	bpf_ringbuf_submit(e, 0);
+	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
 }
 
@@ -1737,7 +1809,7 @@ static __always_inline int priv_exit(struct trace_event_raw_sys_exit *ctx, __u32
 
 	bpf_map_delete_elem(&priv_scratch, &key);
 
-	bpf_ringbuf_submit(e, 0);
+	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
 }
 

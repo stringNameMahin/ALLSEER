@@ -14,6 +14,12 @@
 *.so
 *.dylib
 
+# --- Benchmark sessions
+# scripts/bench-overhead.sh writes one JSONL of run records and one Markdown
+# report per session here. They are measurements of one machine on one day, so
+# the numbers worth keeping go into STATUS.md rather than into the tree.
+/bench/
+
 # --- eBPF artifacts
 *.bpf.o
 /bpf/**/vmlinux.h

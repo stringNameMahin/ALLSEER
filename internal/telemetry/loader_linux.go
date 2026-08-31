@@ -445,6 +445,15 @@ func (l *BPFLoader) Load(ctx context.Context, objectPath string) error {
 		return err
 	}
 
+	// The same window, for the same reason. .rodata becomes a frozen map at
+	// load, so a value written after it is a value written to something the
+	// kernel will refuse, and one written before it is a constant the verifier
+	// can fold.
+	if err := applyForceWakeup(module, l.cfg.RingbufForceWakeup); err != nil {
+		module.Close()
+		return err
+	}
+
 	if err := module.BPFLoadObject(); err != nil {
 		module.Close()
 		return fmt.Errorf("telemetry: loading BPF object %s: %w", objectPath, err)
@@ -474,6 +483,31 @@ func resizeRingBuffer(module *bpf.Module, size int) error {
 	}
 	if err := m.SetMaxEntries(uint32(size)); err != nil {
 		return fmt.Errorf("telemetry: sizing map %q to %d bytes: %w", MapEvents, size, err)
+	}
+	return nil
+}
+
+// RODataForceWakeup is the read-only global bpf/allseer.bpf.c reads its
+// notification policy from.
+//
+// Exported so a test can assert the name against the object rather than
+// against a copy of it: a rename on the C side that this constant did not
+// follow would otherwise be a silently ignored setting, which for an
+// experimental control is the same failure the harness exists to avoid.
+const RODataForceWakeup = "allseer_ringbuf_force_wakeup"
+
+// applyForceWakeup writes Config.RingbufForceWakeup into the object's .rodata.
+//
+// False is not written at all. The object already declares zero, so writing it
+// would be a no-op that could still fail — and failing to set a value equal to
+// the one already there would refuse a load that had nothing wrong with it.
+// Every production path leaves this false, so every production path skips this.
+func applyForceWakeup(module *bpf.Module, force bool) error {
+	if !force {
+		return nil
+	}
+	if err := module.InitGlobalVariable(RODataForceWakeup, uint64(1)); err != nil {
+		return fmt.Errorf("telemetry: setting %s=1: %w", RODataForceWakeup, err)
 	}
 	return nil
 }

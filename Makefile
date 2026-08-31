@@ -179,6 +179,26 @@ gen-check: ## Fail if the generated ABI is stale relative to the header
 	$(GO) run ./internal/telemetry/abigen/cmd/abigen \
 		-header $(ABI_HEADER) -out $(ABI_OUT) -package abi -check
 
+##@ Benchmarks
+
+# Deliberately absent from `check`. It needs root, a compiled object, a cgroup v2
+# hierarchy and several hours, and it is a measurement rather than a gate: a
+# result belongs in STATUS.md, not in a pipeline that has to pass before a merge.
+.PHONY: bench-overhead
+bench-overhead: ## Measure probe overhead against a cold build (root, hours; M5 W3)
+	@echo "This needs root and takes hours. For the full acceptance run:"
+	@echo "  sudo -E env PATH=\"\$$PATH\" GOMODCACHE=\"$$($(GO) env GOMODCACHE)\" \\"
+	@echo "    CGO_LDFLAGS=\"$(CGO_LDFLAGS)\" \\"
+	@echo "    bash scripts/bench-overhead.sh"
+	@echo ""
+	@echo "To check the harness without waiting (NOT acceptance-grade):"
+	@echo "  ... bash scripts/bench-overhead.sh --quick"
+
+.PHONY: bench-report
+bench-report: ## Re-analyse a recorded session: make bench-report RUNS=bench/<id>.jsonl
+	@test -n "$(RUNS)" || { echo "set RUNS=<session>.jsonl"; exit 2; }
+	$(GO) run ./internal/telemetry/benchstat/cmd/benchstat -runs "$(RUNS)"
+
 ##@ Schemas
 
 .PHONY: schema-check

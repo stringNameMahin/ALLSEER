@@ -236,6 +236,24 @@ type Config struct {
 	// gap in telemetry means the system can no longer make sound statements
 	// about what the agent did. Correct, and disruptive.
 	FailClosedOnDrop bool `json:"fail_closed_on_drop" yaml:"fail_closed_on_drop"`
+
+	// RingbufForceWakeup makes every ring buffer submission wake the consumer
+	// unconditionally, instead of only when the consumer has caught up.
+	//
+	// A measurement instrument rather than a tuning knob, and deliberately not
+	// something configs/allseerd.example.yaml offers. It exists to separate the
+	// two halves of what emitting a record costs — producing it, and notifying
+	// the consumer that it exists — which the M5 W3 acceptance session measured
+	// together and could not tell apart. bpf/allseer.bpf.c carries the argument
+	// at allseer_ringbuf_force_wakeup, including why the experiment forces
+	// wakeups rather than suppressing them.
+	//
+	// Setting it can only ever deliver more notifications than the default, so
+	// it cannot strand a record: there is no configuration of this field under
+	// which the consumer sees fewer events than it would have. Nothing outside
+	// an experiment has a reason to pay for the extra interrupts, which is why
+	// the default is the behaviour that has always existed.
+	RingbufForceWakeup bool `json:"ringbuf_force_wakeup" yaml:"ringbuf_force_wakeup"`
 }
 
 // Done: the replay source lives in internal/telemetry/replay. It reads recorded
