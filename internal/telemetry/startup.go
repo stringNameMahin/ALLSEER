@@ -3,16 +3,22 @@ package telemetry
 // Startup checks: the things that must be true before a single event is
 // believed, established once at load time rather than per record.
 //
-// They all live here, outside the `linux && ebpf` build tag, for the same
+// The checks here live outside the `linux && ebpf` build tag for the same
 // reason: none of them needs a kernel or libbpfgo to run, and a check that only
 // compiles on the host it guards is a check nobody runs until it is too late to
 // fix. The loader calls them; `go test ./...` exercises them anywhere.
+//
+// One check does not qualify and is not here. requireCgroupV2 reads
+// /proc/mounts, which is a kernel interface rather than a file that happens to
+// be absent elsewhere, so it cannot answer its own question off Linux. It lives
+// in startup_linux.go under a `linux` tag, which keeps it compiled and tested by
+// every Linux build while removing it from the platforms where it would fail for
+// a reason unrelated to what it checks.
 
 import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 )
 
 var (
@@ -72,17 +78,6 @@ var (
 	// because the kernel's own refusal arrives as a bare EINVAL out of
 	// bpf_object__load and names neither the map nor the field.
 	ErrRingBufferSize = errors.New("telemetry: ring buffer size must be a power of two and a multiple of the page size")
-
-	// ErrNoCgroupV2: no cgroup2 filesystem is mounted.
-	//
-	// Fatal at startup, not a degradation. The probes filter on the value
-	// bpf_get_current_cgroup_id() returns, and without a cgroup v2 hierarchy
-	// that value cannot identify anything user space can name. Every event
-	// would miss the filter and the daemon would run, attach cleanly, and
-	// report nothing — which reads downstream as an agent that did nothing.
-	// bpf/allseer.bpf.c states where this belongs: "Detecting it belongs to
-	// the loader, which is the only side that can refuse to start."
-	ErrNoCgroupV2 = errors.New("telemetry: no cgroup2 filesystem is mounted")
 )
 
 // validateRingBufferSize checks Config.RingBufferSize against what a
@@ -170,54 +165,5 @@ func checkABIVersion(objectPath string, want uint32) error {
 	return nil
 }
 
-// requireCgroupV2 returns the cgroup2 mount point, or an error if there is none.
-//
-// The unified hierarchy is what bpf_get_current_cgroup_id() reports on. A v1
-// hierarchy mounted alongside is not a substitute and is not looked for: the
-// probes key on one ID and v1 has one per controller.
-func requireCgroupV2() (string, error) {
-	const procMounts = "/proc/mounts"
-
-	b, err := os.ReadFile(procMounts)
-	if err != nil {
-		return "", fmt.Errorf("telemetry: reading %s: %w", procMounts, err)
-	}
-	for line := range strings.SplitSeq(strings.TrimRight(string(b), "\n"), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 3 || f[2] != "cgroup2" {
-			continue
-		}
-		return unescapeMountField(f[1]), nil
-	}
-	return "", ErrNoCgroupV2
-}
-
-// unescapeMountField undoes the octal escaping /proc/mounts applies to space,
-// tab, newline and backslash in a path. Trivial, and wrong to skip: an escaped
-// mount point compared literally would fail to match a real directory.
-func unescapeMountField(s string) string {
-	if !strings.Contains(s, `\`) {
-		return s
-	}
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+3 < len(s) {
-			var v byte
-			ok := true
-			for _, c := range []byte(s[i+1 : i+4]) {
-				if c < '0' || c > '7' {
-					ok = false
-					break
-				}
-				v = v*8 + (c - '0')
-			}
-			if ok {
-				b.WriteByte(v)
-				i += 3
-				continue
-			}
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
-}
+// requireCgroupV2 and unescapeMountField are in startup_linux.go. See the note
+// at the top of this file: they read /proc/mounts and cannot answer off Linux.
