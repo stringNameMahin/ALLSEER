@@ -1,5 +1,28 @@
 # Adversarial path corpus
 
+Two tables, one per path grammar:
+
+| File | Grammar | Matcher |
+|---|---|---|
+| `corpus.tsv` | POSIX | `validator.MatchPath`, `ValidatePattern`, `IsResolved` |
+| `corpus.windows.tsv` | Windows | `validator.MatchWindowsPath`, `ValidateWindowsPattern`, `IsResolvedWindows` |
+
+Separate files rather than a platform column, because the two share no row. A
+Linux path is never a valid Windows path and the reverse, so a column would
+repeat the same word on every line of both tables to separate two sets that
+never mix; the filename carries the discriminator instead. Both are loaded by
+the same three-field parser in `internal/validator/path_corpus_test.go`, so a
+malformed table fails as a format error either way.
+
+The Windows table adds one thing to the format: a byte may be written `\xNN`,
+and the escape includes its own leading backslash, so
+`C:\ws\sub\x20\secret.txt` is a directory named `sub ` holding `secret.txt`.
+Trailing space is the cheapest evasion on that platform and a literal one would
+be invisible here. Decoding is done by the Windows test only — putting it in
+the shared loader would silently reinterpret any Linux row containing the
+sequence. The Windows semantics are specified in
+[`docs/path-matching.md`](../../../docs/path-matching.md) §9.
+
 `corpus.tsv` is the shared expectation table for ALLSEER's path matcher. It is
 hand-written, not captured: every line exists because someone could plausibly
 use that spelling to make a narrow grant cover something it should not, or to

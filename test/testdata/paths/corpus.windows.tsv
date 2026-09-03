@@ -1,0 +1,178 @@
+# Adversarial path-matching corpus -- WINDOWS.
+#
+# The Linux half is corpus.tsv and is a separate file rather than a separate
+# column. A platform column would repeat the same word on every one of the
+# hundred-odd Linux rows to discriminate two sets that never mix: the two
+# grammars share no path, no pattern and no expectation, and a row from one is
+# never a valid row of the other. The filename is the discriminator.
+#
+# Same three-field format as corpus.tsv, and the same loader:
+#
+#	<expect>	<pattern>	<path>
+#
+# <expect> is one of:
+#	match		MatchWindowsPath(pattern, path) is true
+#	nomatch		MatchWindowsPath(pattern, path) is false
+#	invalid		ValidateWindowsPattern(pattern) returns an error
+#	unresolved	IsResolvedWindows(path) is false (and so nothing matches)
+#
+# One addition to the format, for this file only. A byte may be written as
+# \xNN, two hex digits, and the escape includes its own leading backslash --
+# write it where the byte goes, so "C:\ws\sub\x20\secret.txt" is a directory
+# named "sub " containing "secret.txt". Trailing space is the cheapest evasion
+# on this platform and a literal one would be invisible here, indistinguishable
+# from the control row beside it, which is exactly the failure this corpus
+# exists to prevent.
+#
+# Every row traces to an axis measured on Windows 11 build 26200, NTFS, and
+# recorded in docs/path-matching.md section 9. Each axis appears in both its
+# legitimate and its evading spelling: the value of the corpus is that the
+# evasion is written down next to the thing it evades.
+#
+# Loaded by internal/validator/path_corpus_test.go.
+
+# --- Baseline: the canonical form matches at all -----------------------------
+
+match	C:\ws\*.go	C:\ws\main.go
+match	C:\ws\**	C:\ws\sub\deep\main.go
+nomatch	C:\ws\*.go	C:\ws\sub\main.go
+# ** covers the directory it is rooted at, as on Linux, so a denial of a tree
+# also denies deleting the tree's own directory.
+match	C:\ws\**	C:\ws
+nomatch	C:\ws\*	C:\other\main.go
+# A drive root is a path. No segments, so "C:\**" spans the whole volume.
+match	C:\	C:\
+match	C:\**	C:\ws\main.go
+# The drive letter is part of file identity; the same tree on another volume is
+# another tree.
+nomatch	C:\ws\**	D:\ws\main.go
+
+# --- Case is folded for comparison, ASCII only -------------------------------
+
+# Not merely an anti-evasion rule. ETW reports the same file with two different
+# casings inside one trace -- Create(12) carries the caller's spelling while
+# NameCreate(10) and DeletePath(26) carry the on-disk one -- so a byte-exact
+# matcher could not correlate two events about one file.
+match	C:\ws\makefile	C:\ws\Makefile
+match	C:\ws\MAKEFILE	C:\ws\Makefile
+match	C:\WS\*.go	C:\ws\main.go
+# A pattern may spell the drive in either case; a path may not.
+match	c:\ws\*.go	C:\ws\main.go
+# Folding reaches inside a character class, by trying both cases of the input
+# byte rather than by rewriting the class -- lowering "[A-_]" would move a range
+# its author never wrote.
+match	C:\ws\[a-m]ain.go	C:\ws\Main.go
+nomatch	C:\ws\[!a-m]ain.go	C:\ws\Main.go
+# Non-ASCII stays case-sensitive: a documented divergence, not an oversight.
+# NTFS compares with a case table fixed at volume format time, which no
+# portable Go code reproduces.
+nomatch	C:\ws\CAFÉ.txt	C:\ws\café.txt
+
+# --- 8.3 short names must be expanded before matching ------------------------
+
+unresolved	C:\ws\**	C:\ws\LONGDI~1\main.go
+unresolved	C:\**	C:\PROGRA~1\app.exe
+invalid	C:\PROGRA~1\*	C:\ws\main.go
+# The measured false-positive class: ordinary long names containing a tilde. A
+# search for "~" over a cold build returned six hits and all six were these.
+match	C:\ws\**	C:\ws\Package~31bf3856ad364e35~amd64~.cat
+
+# --- Extended-length prefix and UNC alias are not canonical ------------------
+
+unresolved	C:\ws\*.txt	\\?\C:\ws\secret.txt
+unresolved	C:\ws\*.txt	\\?\UNC\server\share\secret.txt
+unresolved	C:\ws\*.txt	\\localhost\C$\ws\secret.txt
+unresolved	C:\ws\*.txt	\\127.0.0.1\C$\ws\secret.txt
+invalid	\\?\C:\ws\*	C:\ws\main.go
+
+# --- Dot and dot-dot are rejected, never cleaned -----------------------------
+
+unresolved	C:\ws\*.txt	C:\ws\.\secret.txt
+unresolved	C:\ws\*.txt	C:\ws\sub\..\secret.txt
+unresolved	C:\ws\**	C:\ws\..\..\Windows\System32\cmd.exe
+
+# --- Trailing dot and trailing space open the same file ----------------------
+
+# One character, no reparse point, no race: Win32 strips both before the kernel
+# sees the name, so a denial on "secret.txt" is evaded by naming "secret.txt."
+unresolved	C:\ws\secret.txt	C:\ws\secret.txt.
+unresolved	C:\ws\secret.txt	C:\ws\secret.txt\x20
+unresolved	C:\ws\**	C:\ws\sub\x20\secret.txt
+unresolved	C:\ws\**	C:\ws\sub.\secret.txt
+# Control: the same path without the trailing byte is resolved and matches.
+match	C:\ws\secret.txt	C:\ws\secret.txt
+
+# --- Alternate data streams are part of the path -----------------------------
+
+# A grant for *.txt must not authorize writing to a stream.
+nomatch	C:\ws\*.txt	C:\ws\notes.txt:hidden
+nomatch	C:\ws\notes.txt	C:\ws\notes.txt:hidden
+match	C:\ws\notes.txt:hidden	C:\ws\notes.txt:hidden
+match	C:\ws\*.txt:*	C:\ws\notes.txt:hidden
+# The unnamed stream is the plain path and nothing else.
+nomatch	C:\ws\notes.txt:*	C:\ws\notes.txt
+match	C:\ws\**	C:\ws\notes.txt
+# Mark of the web, the security-relevant stream that actually turns up.
+match	C:\ws\*.txt:Zone.Identifier	C:\ws\notes.txt:Zone.Identifier
+# A wildcard does not cross the ":" introducing a stream. This is the rule
+# docs/path-matching.md 9.4 left open, decided rather than discovered.
+nomatch	C:\ws\notes*	C:\ws\notes.txt:hidden
+
+# The three-position form, "file:stream:$type". Observed as "::$ATTRIBUTE_LIST"
+# -- an empty stream name with an explicit type -- which must not collapse into
+# a stream named ":$ATTRIBUTE_LIST".
+match	C:\ws\manifest.json::$ATTRIBUTE_LIST	C:\ws\manifest.json::$ATTRIBUTE_LIST
+match	C:\ws\manifest.json::*	C:\ws\manifest.json::$ATTRIBUTE_LIST
+nomatch	C:\ws\manifest.json:*	C:\ws\manifest.json::$ATTRIBUTE_LIST
+# A stream type must carry its "$" marker, and there are only three positions.
+unresolved	C:\ws\**	C:\ws\notes.txt:a:DATA
+unresolved	C:\ws\**	C:\ws\notes.txt:a:$DATA:b
+unresolved	C:\ws\**	C:\ws\notes.txt:
+
+# A colon outside the final segment is a literal in a directory name, which
+# Win32 cannot express. Refused rather than parsed: a cold build emitted 48
+# events under a directory literally named "$env:PATH", from an unexpanded PATH
+# entry, and a parser splitting on the first colon reads that as file
+# "C:\ALLSEER\$env" with stream "PATH\gcc.exe".
+unresolved	C:\ws\**	C:\ALLSEER\$env:PATH\gcc.exe
+
+# --- Separator and drive-root grammar ----------------------------------------
+
+unresolved	C:\ws\*.go	C:/ws/main.go
+unresolved	C:\ws\*.go	C:\ws\\main.go
+# ETW reports directory operations with a trailing separator. Enrichment strips
+# it; the matcher refuses it.
+unresolved	C:\ws\*	C:\ws\
+unresolved	C:\ws\*.go	ws\main.go
+unresolved	C:\ws\*.go	\ws\main.go
+# Drive-relative: names a different file per process, depending on that
+# process's per-drive working directory.
+unresolved	C:\ws\*.go	C:main.go
+# A path is canonical only with an uppercase drive.
+unresolved	C:\ws\*.go	c:\ws\main.go
+
+# --- Reserved device names ---------------------------------------------------
+
+# These do not name files at all; they name devices, in every directory at once.
+unresolved	C:\ws\**	C:\ws\CON
+unresolved	C:\ws\**	C:\ws\NUL.txt
+unresolved	C:\ws\**	C:\ws\COM1
+invalid	C:\ws\NUL	C:\ws\main.go
+
+# --- Bytes that cannot occur in a real name ----------------------------------
+
+unresolved	C:\ws\**	C:\ws\secret\x00.txt
+# Wildcards are illegal in a Windows filename, which is what stops a pattern
+# from being accepted as a path.
+unresolved	C:\ws\**	C:\ws\re*port.txt
+unresolved	C:\ws\**	C:\ws\re?port.txt
+
+# --- Glob semantics carry over unchanged from the Linux rules ----------------
+
+invalid	C:\ws\**.go	C:\ws\main.go
+invalid	C:\ws\[	C:\ws\main.go
+invalid	ws\**	C:\ws\main.go
+match	C:\ws\**\*.go	C:\ws\a\b\c\main.go
+match	C:\ws\*	C:\ws\.hidden
+match	C:\ws\?	C:\ws\a
+nomatch	C:\ws\?	C:\ws\ab

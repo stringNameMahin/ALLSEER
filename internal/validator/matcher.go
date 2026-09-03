@@ -244,11 +244,11 @@ func matchArgs(patterns []string, argv string) MatchResult {
 
 	args := strings.Fields(argv)
 	for _, p := range patterns {
-		if matchSegment(p, argv) {
+		if matchSegment(p, argv, false) {
 			return matched("command line matches %q", p)
 		}
 		for _, a := range args {
-			if matchSegment(p, a) {
+			if matchSegment(p, a, false) {
 				return matched("argument %q matches %q", a, p)
 			}
 		}

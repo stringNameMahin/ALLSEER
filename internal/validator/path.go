@@ -159,7 +159,7 @@ func MatchPath(pattern, path string) bool {
 	if !IsResolved(path) {
 		return false
 	}
-	return matchSegments(segments(normalize(pattern)), segments(normalize(path)))
+	return matchSegments(segments(normalize(pattern)), segments(normalize(path)), false)
 }
 
 // PatternSet is a set of path patterns with their segmentation precomputed.
@@ -243,7 +243,7 @@ func (s *PatternSet) MatchIndex(path string) int {
 		return -1
 	}
 	for i, pat := range s.segs {
-		if matchSegments(pat, pathSegs) {
+		if matchSegments(pat, pathSegs, false) {
 			return i
 		}
 	}
@@ -377,7 +377,7 @@ func segments(p string) []string {
 
 // matchSegments walks pattern and path segment by segment. "**" is the only
 // construct that consumes more than one, and it backtracks.
-func matchSegments(pattern, path []string) bool {
+func matchSegments(pattern, path []string, fold bool) bool {
 	for len(pattern) > 0 {
 		if pattern[0] == "**" {
 			rest := pattern[1:]
@@ -386,7 +386,7 @@ func matchSegments(pattern, path []string) bool {
 				return true
 			}
 			for i := 0; i <= len(path); i++ {
-				if matchSegments(rest, path[i:]) {
+				if matchSegments(rest, path[i:], fold) {
 					return true
 				}
 			}
@@ -395,7 +395,7 @@ func matchSegments(pattern, path []string) bool {
 		if len(path) == 0 {
 			return false
 		}
-		if !matchSegment(pattern[0], path[0]) {
+		if !matchSegment(pattern[0], path[0], fold) {
 			return false
 		}
 		pattern, path = pattern[1:], path[1:]
@@ -409,7 +409,7 @@ func matchSegments(pattern, path []string) bool {
 // UTF-8 would map every invalid byte to U+FFFD, making two different filenames
 // compare equal. Two visually identical names in different Unicode
 // normalizations are different paths here, exactly as they are to the kernel.
-func matchSegment(pattern, s string) bool {
+func matchSegment(pattern, s string, fold bool) bool {
 	var (
 		px, sx         int
 		starPx, starSx = -1, -1
@@ -431,7 +431,7 @@ func matchSegment(pattern, s string) bool {
 			case '[':
 				if sx < len(s) {
 					if end := classEnd(pattern, px); end >= 0 {
-						if matchClass(pattern[px:end], s[sx]) {
+						if matchClass(pattern[px:end], s[sx], fold) {
 							px = end
 							sx++
 							continue
@@ -439,7 +439,7 @@ func matchSegment(pattern, s string) bool {
 					}
 				}
 			default:
-				if sx < len(s) && c == s[sx] {
+				if sx < len(s) && equalByte(c, s[sx], fold) {
 					px++
 					sx++
 					continue
@@ -476,7 +476,14 @@ func classEnd(pattern string, start int) int {
 
 // matchClass evaluates a well-formed class, given as "[...]" including both
 // brackets, against one byte.
-func matchClass(class string, c byte) bool {
+//
+// Under fold, the class is tried against both cases of c rather than against a
+// case-folded copy of the class body. Folding the body would silently rewrite a
+// range: "[A-_]" covers six punctuation bytes that lie between "Z" and "a" in
+// ASCII, and lowering its endpoints would move the range somewhere its author
+// never wrote. Trying both cases of the single input byte adds exactly the
+// equivalence Windows has and nothing else.
+func matchClass(class string, c byte, fold bool) bool {
 	body := class[1 : len(class)-1]
 	negated := false
 	if len(body) > 0 && (body[0] == '!' || body[0] == '^') {
@@ -484,7 +491,16 @@ func matchClass(class string, c byte) bool {
 		body = body[1:]
 	}
 
-	matched := false
+	matched := classBodyMatches(body, c)
+	if !matched && fold {
+		matched = classBodyMatches(body, flipASCIICase(c))
+	}
+	return matched != negated
+}
+
+// classBodyMatches evaluates a class body -- the text between the brackets,
+// with any negation marker already stripped -- against one byte.
+func classBodyMatches(body string, c byte) bool {
 	for i := 0; i < len(body); i++ {
 		lo := body[i]
 		hi := lo
@@ -493,8 +509,34 @@ func matchClass(class string, c byte) bool {
 			i += 2
 		}
 		if lo <= c && c <= hi {
-			matched = true
+			return true
 		}
 	}
-	return matched != negated
+	return false
+}
+
+// equalByte compares two bytes, optionally folding ASCII case.
+//
+// ASCII only, and deliberately so: see the case discussion in
+// docs/path-matching.md 9.3. Unicode folding is locale- and
+// normalization-dependent, and NTFS itself compares with a case table fixed at
+// volume format time that no portable Go code reproduces. Folding beyond ASCII
+// would trade a known, documented gap for an unknown one.
+func equalByte(a, b byte, fold bool) bool {
+	if a == b {
+		return true
+	}
+	return fold && flipASCIICase(a) == b
+}
+
+// flipASCIICase returns c with its ASCII case inverted, or c unchanged if it is
+// not an ASCII letter.
+func flipASCIICase(c byte) byte {
+	switch {
+	case c >= 'a' && c <= 'z':
+		return c - 'a' + 'A'
+	case c >= 'A' && c <= 'Z':
+		return c - 'A' + 'a'
+	}
+	return c
 }
