@@ -33,6 +33,12 @@ import (
 // never changes evaluation. A rule set that lints badly still evaluates exactly
 // as written, which is what makes it safe to run the linter on a live policy.
 //
+// One check is about the running build rather than about the rule set, and is
+// therefore optional and never critical: lintObservability, which reports rules
+// naming capabilities no probe in this build reports. A rule set correct on one
+// platform and inert on another is not a defective rule set, but "this binary
+// will silently not enforce that" is exactly what an operator needs told.
+//
 // Deliberately NOT reported, each for a stated reason:
 //
 //   - A disabled rule. Rule.Enabled exists precisely so a rule can be kept for
@@ -54,13 +60,41 @@ import (
 
 // RuleLinter implements Linter over the evaluation semantics in evaluate.go.
 //
-// Stateless; the zero value is usable and safe for concurrent use.
-type RuleLinter struct{}
+// The zero value is usable and safe for concurrent use. A linter carrying a
+// catalog additionally reports rules this build cannot evaluate; see
+// NewLinterWithCatalog.
+type RuleLinter struct {
+	// catalog, when non-nil, is the observability oracle. It is optional
+	// because every other check here is a statement about the rule set alone,
+	// answerable from the file, while this one is a statement about a running
+	// build -- and a linter that demanded a catalog would be unusable at the
+	// point most linting happens, before any probe has attached.
+	catalog capability.Catalog
+}
 
 var _ Linter = RuleLinter{}
 
-// NewLinter returns a rule set linter.
+// NewLinter returns a rule set linter that checks the rule set alone.
 func NewLinter() RuleLinter { return RuleLinter{} }
+
+// NewLinterWithCatalog returns a linter that also reports rules whose
+// capabilities no probe in this build observes.
+//
+// The daemon calls this after Collector.Probes() has driven
+// MemoryCatalog.SetObservable, which is the point at which the catalog stops
+// being theoretical and starts describing what this process can see.
+//
+// Generic on purpose. The concrete case that motivated it is a Windows build,
+// where privilege telemetry is uid-and-capability shaped on Linux and token,
+// SID and integrity-level shaped on Windows, so every priv.* Kind is
+// unobservable -- and a terminal block rule on priv.escalate that can never
+// fire reads as coverage. But nothing here knows that: the check is "the
+// catalog says no probe reports this", which covers a mechanism that failed to
+// load, a capability whose probe was compiled out, and a platform that has no
+// such concept, without naming any of them.
+func NewLinterWithCatalog(cat capability.Catalog) RuleLinter {
+	return RuleLinter{catalog: cat}
+}
 
 // Lint reports every provable defect in a rule set, in document order:
 // per-rule findings in evaluation order, then rule-set-wide findings.
@@ -69,10 +103,14 @@ func NewLinter() RuleLinter { return RuleLinter{} }
 // loader has accepted it -- and reports only semantic defects. A nil rule set
 // yields no issues rather than a panic; there is nothing to say about a policy
 // that does not exist.
-func (RuleLinter) Lint(rs *RuleSet) []LintIssue { return LintRuleSet(rs) }
+func (l RuleLinter) Lint(rs *RuleSet) []LintIssue { return LintRuleSetWithCatalog(rs, l.catalog) }
 
-// LintRuleSet is Lint as a free function.
-func LintRuleSet(rs *RuleSet) []LintIssue {
+// LintRuleSet is Lint as a free function, without an observability check.
+func LintRuleSet(rs *RuleSet) []LintIssue { return LintRuleSetWithCatalog(rs, nil) }
+
+// LintRuleSetWithCatalog is LintRuleSet plus the observability check. A nil
+// catalog disables that check and nothing else.
+func LintRuleSetWithCatalog(rs *RuleSet, cat capability.Catalog) []LintIssue {
 	if rs == nil {
 		return nil
 	}
@@ -83,7 +121,7 @@ func LintRuleSet(rs *RuleSet) []LintIssue {
 
 	var issues []LintIssue
 	for i := range ordered {
-		issues = append(issues, lintRule(&ordered[i])...)
+		issues = append(issues, lintRule(&ordered[i], cat)...)
 		issues = append(issues, lintReachability(ordered, i)...)
 	}
 	issues = append(issues, lintDefaultAction(rs, ordered)...)
@@ -107,7 +145,7 @@ func BlockingIssues(issues []LintIssue) []LintIssue {
 
 // --- per-rule checks --------------------------------------------------------
 
-func lintRule(r *Rule) []LintIssue {
+func lintRule(r *Rule, cat capability.Catalog) []LintIssue {
 	if !r.Enabled {
 		// An inert rule cannot mislead anyone about what it does; it says so.
 		return nil
@@ -121,7 +159,75 @@ func lintRule(r *Rule) []LintIssue {
 	issues = append(issues, lintCapabilityDomain(r.ID, c)...)
 	issues = append(issues, lintPatterns(r.ID, "path_patterns", c.PathPatterns, validator.ValidatePattern)...)
 	issues = append(issues, lintPatterns(r.ID, "hosts", c.Hosts, validator.ValidateHostPattern)...)
+	issues = append(issues, lintObservability(r.ID, c, cat)...)
 	return issues
+}
+
+// lintObservability reports a rule this build cannot evaluate, because no probe
+// behind it reports the capabilities the rule names.
+//
+// This is the one check whose finding is about the running build rather than
+// about the rule set, and that is why none of it is critical however certain it
+// is. A rule set naming priv.escalate is not wrong; it is correct on a Linux
+// build and inert on a Windows one, and refusing to load it would mean a policy
+// covering two platforms could be loaded on neither. The finding an operator
+// needs is loud, not fatal: what this binary will silently not enforce.
+//
+// The distinction between the two severities is the same one lintPatterns
+// draws, and for the same reason. Conditions are ANDed across dimensions and
+// ORed within one, so one unobservable capability among observable ones weakens
+// a rule, while a list where every entry is unobservable removes it.
+//
+// A Kind that is not in the catalog at all is skipped rather than reported
+// here: lintClosedSets already says so, as a critical, and an unknown Kind
+// being unobservable adds nothing to that.
+func lintObservability(id string, c Condition, cat capability.Catalog) []LintIssue {
+	if cat == nil {
+		return nil
+	}
+
+	var issues []LintIssue
+
+	if blind := unobservableKinds(c.Capabilities, cat); len(blind) > 0 {
+		severity, effect := capability.SeverityMedium, "the rule still fires on the rest"
+		if len(blind) == len(c.Capabilities) {
+			severity, effect = capability.SeverityHigh, "the rule can never fire in this build"
+		}
+		issues = append(issues, LintIssue{
+			Severity: severity,
+			RuleID:   id,
+			Message:  fmt.Sprintf("no probe in this build observes %s; %s", join(blind), effect),
+		})
+	}
+
+	for _, d := range c.Domains {
+		known := capability.KindsInDomain(d)
+		if len(known) == 0 {
+			// An unknown domain, already reported by lintClosedSets.
+			continue
+		}
+		if len(unobservableKinds(known, cat)) == len(known) {
+			issues = append(issues, LintIssue{
+				Severity: capability.SeverityHigh,
+				RuleID:   id,
+				Message: fmt.Sprintf("no probe in this build observes any capability in domain %q; the rule can never fire in this build",
+					d),
+			})
+		}
+	}
+
+	return issues
+}
+
+// unobservableKinds returns the known Kinds among kinds that no probe reports.
+func unobservableKinds(kinds []capability.Kind, cat capability.Catalog) []capability.Kind {
+	var out []capability.Kind
+	for _, k := range kinds {
+		if capability.Known(k) && !cat.Observable(k) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // lintClosedSets checks the condition fields whose values come from closed
