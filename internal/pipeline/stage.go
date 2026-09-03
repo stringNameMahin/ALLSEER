@@ -21,7 +21,7 @@ import (
 //
 // The engines are taken as narrow interfaces declared here rather than as the
 // concrete types, so a test can drive a stage with a stub without standing up a
-// rule set — and so this package cannot reach past the one method it uses.
+// rule set -- and so this package cannot reach past the one method it uses.
 
 // Validator is the validation the pipeline needs. Satisfied by
 // validator.DefaultValidator.
@@ -108,7 +108,7 @@ func (s *ScoreStage) Name() string { return "score" }
 // It refuses to run without a validation result for the same reason the decide
 // stage does: every factor in the baseline model reads the validator's answer,
 // and a score computed against an absent verdict would be a number with nothing
-// behind it — which is precisely the fabricated evidence policy's no-evidence
+// behind it -- which is precisely the fabricated evidence policy's no-evidence
 // rule exists to keep out.
 //
 // A scoring failure is an error, never a zero assessment. The pipeline turns it
@@ -122,7 +122,7 @@ func (s *ScoreStage) Execute(ctx context.Context, pc *ProcessingContext) error {
 		return errors.New("score: no validation result; an event that was never validated cannot be scored")
 	}
 
-	// pc.State is passed as the history. It may be nil — a pipeline is built
+	// pc.State is passed as the history. It may be nil -- a pipeline is built
 	// with state, but the field is an interface and a nil one is the honest
 	// "no history" input the engine already handles by withholding the
 	// history-derived factors and lowering confidence.
@@ -207,7 +207,7 @@ func (s *DecideStage) Execute(ctx context.Context, pc *ProcessingContext) error 
 // It implements the rule the architecture states plainly: a stage failure must
 // never silently allow. Every failure becomes an explicit decision carrying the
 // indeterminate verdict, so a dropped stage is visible in the audit stream
-// rather than absent from it — an event that produced no record is
+// rather than absent from it -- an event that produced no record is
 // indistinguishable from an event that never happened.
 //
 // The verdict is indeterminate rather than any of the envelope-relative ones

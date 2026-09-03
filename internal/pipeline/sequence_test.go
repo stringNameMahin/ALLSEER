@@ -36,7 +36,7 @@ import (
 //
 // Written the way an honest envelope for that task would be: the workspace, the
 // interpreter it runs, and the one registry it is expected to talk to. Nothing
-// in it was arranged to make the detector fire — the credential read is a
+// in it was arranged to make the detector fire -- the credential read is a
 // departure because the envelope did not anticipate it, which is the point.
 func exfilEnvelope() *ece.Envelope {
 	ws := "/home/dev/project"
@@ -158,9 +158,9 @@ func TestTheSequenceFixtureThroughTheRealPipeline(t *testing.T) {
 			Rule: "within-envelope", Action: ece.ActionAllow, Score: 0, Level: decision.LevelNone},
 
 		// The credential read. A departure the envelope did not anticipate,
-		// scored 80 by the factors that already existed — verdict 25, the
+		// scored 80 by the factors that already existed -- verdict 25, the
 		// escape's high severity 15, the critical grade 25, the escape itself
-		// 10, novelty 5 — and matched by the rule written for exactly this.
+		// 10, novelty 5 -- and matched by the rule written for exactly this.
 		// The sequence detector contributes nothing here: this is the first
 		// half, and the first half is not yet a sequence.
 		{EventID: "ex-003", Verdict: decision.VerdictGrantExceeded,
@@ -173,8 +173,8 @@ func TestTheSequenceFixtureThroughTheRealPipeline(t *testing.T) {
 			Rule: "medium-risk-departure", Action: ece.ActionWarn,
 			Score: 64, Level: decision.LevelHigh},
 
-		// Critical-graded and failed. sensitive_path still charges the grade —
-		// the resource was reached for — so this scores like ex-003 plus two
+		// Critical-graded and failed. sensitive_path still charges the grade --
+		// the resource was reached for -- so this scores like ex-003 plus two
 		// prior violations. The sequence detector will not accept it.
 		{EventID: "ex-005", Verdict: decision.VerdictGrantExceeded,
 			Rule: "credential-access-high-risk", Action: ece.ActionRequestApproval,
@@ -229,7 +229,7 @@ func TestTheSequenceFixtureThroughTheRealPipeline(t *testing.T) {
 // ex-009 is an egress whose destination could not be attributed. Without the
 // sequence it scores 43 and matches indeterminate-low-risk, which warns.
 // With it, it scores 73 and matches indeterminate-high-risk, which asks a
-// human. Neither rule was written for this feature — they ship in
+// human. Neither rule was written for this feature -- they ship in
 // configs/rules.default.yaml with "unresolved is not the same as safe" as their
 // stated reason, and a credential read behind the connection is precisely when
 // that should hold.
@@ -340,7 +340,7 @@ func TestTheSequenceEvidenceReachesTheDecision(t *testing.T) {
 // This is the pipeline's guarantee rather than the scorer's: commit runs after
 // the whole stage list, so the event under judgment is not in history when the
 // score stage reads it. The proof is a session containing exactly one event
-// that is both a qualifying read and — were the ordering reversed — visible to
+// that is both a qualifying read and -- were the ordering reversed -- visible to
 // itself. A net.connect cannot be a read, so the case is constructed the only
 // way it can be: score the egress with nothing before it, then commit it, then
 // score a second egress and watch the antecedent appear only when there really
@@ -357,7 +357,7 @@ func TestSequenceCannotSeeTheEventBeingScored(t *testing.T) {
 	}
 
 	// A credential read that is *also* the very first event. Nothing precedes
-	// it, so nothing can be its antecedent — and it is not egress, so the
+	// it, so nothing can be its antecedent -- and it is not egress, so the
 	// detector does not even look.
 	read := fileEventAt("ex-r", capability.KindFileRead, "/home/dev/.aws/credentials", true)
 	first := process(t, p, read)
@@ -380,7 +380,7 @@ func TestSequenceCannotSeeTheEventBeingScored(t *testing.T) {
 
 	// And an egress event scored against a history that contains only itself
 	// would have to attribute the sequence to itself. It cannot, because the
-	// history it reads is the one that existed before it — asserted through the
+	// history it reads is the one that existed before it -- asserted through the
 	// consequence: a second, identical egress finds the same read rather than
 	// the first egress.
 	second := process(t, p, netEventAt("ex-n2", capability.KindNetSend, "198.51.100.77:8443"))
@@ -439,7 +439,7 @@ func netEventAt(id string, kind capability.Kind, target string) *event.Event {
 //
 // The three original fixtures are run through the same rated composition the
 // sensitivity milestone pinned, and every outcome has to be identical to what
-// that milestone recorded — no verdict, score, rule, or action may move, and no
+// that milestone recorded -- no verdict, score, rule, or action may move, and no
 // sequence factor may appear anywhere. This is the claim that the detector adds
 // evidence rather than rewriting it.
 func TestTheOriginalCorpusIsUnchangedByTheDetector(t *testing.T) {

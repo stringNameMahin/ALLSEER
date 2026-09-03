@@ -273,18 +273,12 @@ type Filter interface {
 	Allow(e *Event) bool
 }
 
-// Done: the Go view of the C struct layout is generated, by
-// internal/telemetry/abigen into internal/telemetry/abi, so kernel and user
-// space cannot drift without a test failing. It stops at the ABI shape and
-// produces no Event; turning a decoded record into this type is
-// telemetry.Decoder's job, which is where the capability catalog lives, and
-// telemetry.EventDecoder now does it.
 // TODO(event): decide the boot-time offset strategy for WallClock. Sampling
 // once at startup drifts under suspend; re-sampling periodically is more work.
 // Until it is decided, the decoder leaves WallClock zero rather than building
 // one on an unmeasured offset: a synthesized wall time reads as observed.
 // TODO(event): carry truncation. Every string a probe reports lives in a
-// fixed-size field, and one that filled its field lost the rest — the ABI
+// fixed-size field, and one that filled its field lost the rest -- the ABI
 // header states such a value "must be treated as an enrichment failure, never
 // as a complete path". Nothing on FilePayload or ExecPayload can say so, so
 // telemetry.EventDecoder refuses those records outright rather than hand an

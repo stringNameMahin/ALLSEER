@@ -57,7 +57,7 @@ func TestGeneratedFileIsNotStale(t *testing.T) {
 		t.Fatalf("layout_gen.go is stale relative to %s.\n\n"+
 			"The header changed and the generated decoder did not. Regenerate with:\n"+
 			"    go generate ./internal/telemetry/abi/\n\n"+
-			"then review the diff — a change here is a change in how kernel bytes are read.", headerPath)
+			"then review the diff -- a change here is a change in how kernel bytes are read.", headerPath)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestABIVersionIsAValueNotABound(t *testing.T) {
 
 	// Where the field sits is the whole point of it. A version a reader has to
 	// already know the layout to find cannot tell that reader the layout is
-	// wrong, so it has to live in the fixed prologue — ahead of proc, ahead of
+	// wrong, so it has to live in the fixed prologue -- ahead of proc, ahead of
 	// the payload union, and ahead of everything whose position a later version
 	// is free to move.
 	if OffsetEventVersion >= OffsetEventProc || OffsetEventVersion >= OffsetEventPayload {
@@ -203,7 +203,7 @@ func TestABIVersionIsAValueNotABound(t *testing.T) {
 //
 // Deliberate, and the reason is the same one that keeps pkg/event and
 // pkg/capability out of this package. Deciding what a mismatched version *means*
-// — refuse to attach, drop the record, fail the session closed — is a judgment,
+// -- refuse to attach, drop the record, fail the session closed -- is a judgment,
 // and the generated layer must stay free of judgments it would have to
 // regenerate. The record's version is carried up verbatim so the layer that owns
 // that judgment can act on it; see the header's remaining TODO, which puts the

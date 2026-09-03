@@ -18,7 +18,7 @@ import (
 // and hands that state to a pipeline built by the caller.
 //
 // This is the one test that shows the two halves fit. It is deliberately small
-// and does not re-test either of them — the pipeline has its own package, the
+// and does not re-test either of them -- the pipeline has its own package, the
 // decisions have a golden file. What it pins is the wiring: that the state a
 // pipeline records into is the state the manager reports on, that a session's
 // summary at End reflects what the pipeline actually did, and that the manager
@@ -169,8 +169,8 @@ func TestSessionsDoNotShareState(t *testing.T) {
 
 // allowEngine is a policy engine that allows everything.
 //
-// The decisions are not what this test is about — internal/policy has its own
-// tests and test/golden pins the composition — and a real rule set here would
+// The decisions are not what this test is about -- internal/policy has its own
+// tests and test/golden pins the composition -- and a real rule set here would
 // make a wiring test fail whenever a rule changed.
 type allowEngine struct{}
 

@@ -208,7 +208,7 @@ type Sink interface {
 	//
 	// Note that as of M4 nothing calls it: EventPipeline.Run returns when its
 	// source closes, without flushing. An implementation must therefore not
-	// rely on Flush to avoid losing records — it can only be relied on to make
+	// rely on Flush to avoid losing records -- it can only be relied on to make
 	// already-written records survive a machine crash.
 	Flush(ctx context.Context) error
 }
@@ -300,7 +300,7 @@ type ApprovalResponse struct {
 // Resolved: audit log durability, partly. internal/audit.JSONLSink writes each
 // record with one write(2) and no user-space buffering, so a record is in the
 // operating system's hands the moment Emit returns and nothing is lost by a
-// caller that never flushes — which is every caller today, since
+// caller that never flushes -- which is every caller today, since
 // EventPipeline.Run does not. Surviving a machine crash is the operator's
 // choice via config.AuditConfig.SyncWrites, off by default. What is still not
 // specified is durability across the *rest* of the path: the sink cannot record

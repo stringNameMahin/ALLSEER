@@ -42,7 +42,7 @@ type Session struct {
 	// CreatedAt is when the session was registered, which is the only time a
 	// session that never started has. Added when the lifecycle state machine
 	// was built: List orders and filters on it, and doing either on StartedAt
-	// would silently hide the sessions that failed before they began — exactly
+	// would silently hide the sessions that failed before they began -- exactly
 	// the ones a time-window query most wants to find.
 	CreatedAt time.Time `json:"created_at"`
 
@@ -77,7 +77,7 @@ const (
 	// Added when the lifecycle state machine was built, because the Manager
 	// interface implied this state without naming it. Seal is documented as
 	// moving to "StateAwaitingApproval or StateActive", and StateActive means
-	// "the agent is running" — which it is not, since Start is what supplies
+	// "the agent is running" -- which it is not, since Start is what supplies
 	// the root PID. Without a name for the gap, a sealed and approved session
 	// would be indistinguishable from one just created, and Start would have no
 	// state to guard against.
@@ -108,7 +108,7 @@ type Outcome struct {
 	//
 	// Carried here rather than derived, because Manager.End takes only an
 	// Outcome and the three terminal states are three different findings about
-	// three different subjects — the agent finished, policy stopped it, our own
+	// three different subjects -- the agent finished, policy stopped it, our own
 	// telemetry failed. Inferring which from Reason would make the audit record
 	// depend on how somebody worded a sentence.
 	Result State `json:"result"`
@@ -277,21 +277,6 @@ type Store interface {
 	List(ctx context.Context, f Filter) ([]*Session, error)
 }
 
-// Done: the in-memory State_ is MemoryState in state.go — atomic counters, a
-// bounded event ring, and a bounded seen-targets set, satisfying
-// validator.SessionState and risk.History. It has exactly one writer per
-// session and takes no lock on the hot path, because per-session serial
-// processing is an architectural guarantee rather than a hope; counter reads
-// are still safe from any goroutine, which is what a daemon status query needs.
-// The filesystem and process budgets are charged through
-// validator.ModifiesFilesystem and validator.SpawnsProcess, so the counted set
-// and the checked set are one definition rather than two that can drift.
-// Done: the history retention bound is DefaultHistorySize, 256 events, with the
-// reasoning recorded at the constant: the window has to be long enough for the
-// credential-access-then-egress detector to see both ends across a build's file
-// traffic, and short enough that memory is not a function of how long the user
-// waited. The seen-targets set is bounded separately and saturates toward
-// "novel" rather than toward "familiar".
 // TODO(session): implement the supervisor with pre-exec registration. On Linux
 // that likely means fork, register the child PID, then exec, closing the window
 // between fork and exec.

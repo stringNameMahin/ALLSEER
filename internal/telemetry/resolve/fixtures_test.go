@@ -48,8 +48,8 @@ func loadFixture(t *testing.T, path string) []event.Event {
 //
 // Kind, Domain, and Target must match exactly: those are the fields selector
 // matching reads, and a disagreement means the resolver and the corpus describe
-// different operations. Attributes are checked as a subset — every attribute
-// the fixture records must be reproduced with the same value — because the
+// different operations. Attributes are checked as a subset -- every attribute
+// the fixture records must be reproduced with the same value -- because the
 // fixtures were written by hand and are not uniform about which optional
 // attributes they include. Producing more detail than a fixture bothered to
 // write down is not a regression; producing different detail is.

@@ -143,7 +143,7 @@ func TestDryRunOverRecordedSession(t *testing.T) {
 		// and this event fell through to the posture. With the baseline scorer
 		// in the pipeline it scores 56, under the rule's max_risk_score of 60,
 		// so the rule its author wrote for exactly this case now decides it.
-		// The action is unchanged — what changed is that it can be attributed.
+		// The action is unchanged -- what changed is that it can be attributed.
 		{"gt-009", decision.VerdictGrantExceeded, "workspace-escape-read", ece.ActionWarn},
 		{"gt-010", decision.VerdictWithinEnvelope, "within-envelope", ece.ActionAllow},
 	}
@@ -264,7 +264,7 @@ func TestDryRunWithSensitivityList(t *testing.T) {
 	for i := range results {
 		r, u := results[i], unrated[i]
 		if r.Verdict != u.Verdict {
-			t.Errorf("%s: verdict %q rated, %q unrated — sensitivity must not reach validation",
+			t.Errorf("%s: verdict %q rated, %q unrated -- sensitivity must not reach validation",
 				r.EventID, r.Verdict, u.Verdict)
 		}
 		if r.EventID == "gt-009" {
@@ -279,7 +279,7 @@ func TestDryRunWithSensitivityList(t *testing.T) {
 	}
 
 	// Every event carries a sensitivity finding, including the ones the list has
-	// never heard of — reported as unrated rather than omitted, so the record
+	// never heard of -- reported as unrated rather than omitted, so the record
 	// distinguishes "not on the list" from "nobody looked".
 	for _, r := range results {
 		var found bool
@@ -536,7 +536,7 @@ func TestDryRunEvaluatesGrantBudgetsAndSessionConstraints(t *testing.T) {
 
 		// max_file_writes is 2. fs.create, fs.write and fs.rename are all
 		// filesystem modifications, so the third one is the event that takes
-		// the session past its budget — and it is the one reported, not a
+		// the session past its budget -- and it is the one reported, not a
 		// background condition attached to the session.
 		{"gt-005", decision.VerdictWithinEnvelope, "first modification"},
 		{"gt-006", decision.VerdictWithinEnvelope, "second modification"},

@@ -3,8 +3,8 @@ package synth
 // The record layer: a Spec becomes the bytes a probe would have submitted.
 //
 // Every offset below comes from internal/telemetry/abi, which is generated from
-// bpf/include/allseer_event.h. Nothing about the layout is written down here —
-// no size, no offset, no field order — so a header change moves this file with
+// bpf/include/allseer_event.h. Nothing about the layout is written down here --
+// no size, no offset, no field order -- so a header change moves this file with
 // it or fails to compile, and the one thing this package must never become is a
 // second statement of the layout. Byte order is the host's, matching the
 // generated decoder, because these bytes stand in for bytes a probe wrote on
@@ -23,13 +23,13 @@ import (
 // Errors reported for a spec that cannot be rendered as a record.
 //
 // Each is a refusal rather than a repair. The alternative in every case is to
-// emit a record that says something other than what the spec said — a truncated
+// emit a record that says something other than what the spec said -- a truncated
 // path, a dropped argument, an address the family cannot describe, a field the
-// decoder will not read — and a test fixture that quietly differs from its own
+// decoder will not read -- and a test fixture that quietly differs from its own
 // description is worse than no fixture.
 //
-// The errors a *record* can carry rather than a spec — an unset event type, a
-// type outside this build's enum, the undecided privilege mapping — are not
+// The errors a *record* can carry rather than a spec -- an unset event type, a
+// type outside this build's enum, the undecided privilege mapping -- are not
 // here. Those belong to telemetry.EventDecoder and are surfaced from there
 // unchanged, because the decoder is the authority on what a record means and a
 // second opinion in this package would be exactly the drift it exists to avoid.
@@ -42,7 +42,7 @@ var (
 
 	// ErrValueTooLong: a string does not fit its fixed-size field with room for
 	// the terminator. Writing it anyway would produce an unterminated array,
-	// which abi.CString reports as truncated and the decoder refuses outright —
+	// which abi.CString reports as truncated and the decoder refuses outright --
 	// a real property of the ABI, tested where it belongs, and not something a
 	// generator should manufacture by accident.
 	ErrValueTooLong = errors.New("synth: value does not fit its fixed-size ABI field")
@@ -69,7 +69,7 @@ var (
 //
 // Provided so a spec reads as what it means rather than as a magic number. The
 // values are Linux's on both targets the ABI supports, and they are the same
-// numbers decode.go renders back into names — which is asserted by test rather
+// numbers decode.go renders back into names -- which is asserted by test rather
 // than by inspection, since two private tables of the same constants is exactly
 // how a synthetic AF_INET quietly becomes something else.
 const (
@@ -89,8 +89,8 @@ const (
 
 // Spec describes one record for the generator to build.
 //
-// It is written in the ABI's vocabulary — an allseer_event_type, a syscall
-// return, the union member the header designates for that type — and not in the
+// It is written in the ABI's vocabulary -- an allseer_event_type, a syscall
+// return, the union member the header designates for that type -- and not in the
 // event model's. What capability the event exercises, what its domain is, and
 // what its errno is called are all decided by the decoder from these fields,
 // which is what keeps a synthetic event indistinguishable from a real one.
@@ -108,8 +108,8 @@ type Spec struct {
 	Proc *Proc
 
 	// Exactly one of these is set, and which one is decided by Type. A type
-	// that designates no union member — ALLSEER_EVT_PROC_EXIT, ALLSEER_EVT_PTRACE
-	// — takes none.
+	// that designates no union member -- ALLSEER_EVT_PROC_EXIT, ALLSEER_EVT_PTRACE
+	// -- takes none.
 	File *File
 	Net  *Net
 	Exec *Exec
@@ -117,7 +117,7 @@ type Spec struct {
 	// Dropped is how many ring buffer records were lost immediately before this
 	// one. It advances the sequence counter and the clock along with the
 	// counter it sets on the event, so the gap and the count agree by
-	// construction — which is the rule the replay corpus states for a fixture
+	// construction -- which is the rule the replay corpus states for a fixture
 	// that is about loss, and the property every fail-closed path is tested on.
 	//
 	// It is not part of the record. Loss is visible to the reader that saw the
@@ -167,7 +167,7 @@ type File struct {
 
 	// ResolvedPath is the absolute, symlink-resolved path enrichment would have
 	// produced. Selector matching uses it and never falls back to Path, so a
-	// spec that leaves it empty produces an event whose target is unevaluable —
+	// spec that leaves it empty produces an event whose target is unevaluable --
 	// which is a legitimate thing to generate and the fail-closed direction.
 	ResolvedPath string
 
@@ -201,7 +201,7 @@ type Net struct {
 	SockType uint16
 
 	// SourceAddr and DestAddr are written into the record's 16-byte address
-	// fields according to Family. An invalid Addr — the zero value — leaves the
+	// fields according to Family. An invalid Addr -- the zero value -- leaves the
 	// field zero, which is how the connect probe reports an address it could
 	// not read.
 	//
@@ -220,8 +220,8 @@ type Net struct {
 	DestPort   uint16
 
 	// Bytes is the volume the record carries. The decoder reads it for
-	// ALLSEER_EVT_NET_SEND only — it is the one net type the header gives the
-	// field a direction for — so setting it on a connect or a bind is refused
+	// ALLSEER_EVT_NET_SEND only -- it is the one net type the header gives the
+	// field a direction for -- so setting it on a connect or a bind is refused
 	// rather than dropped.
 	Bytes int64
 
@@ -355,7 +355,7 @@ func (s Spec) check() error {
 		// read it, but Spec has no member to describe one with. So a privilege
 		// spec renders a cleared payload, whose operation is
 		// ALLSEER_PRIV_OP_UNKNOWN, and telemetry.EventDecoder refuses it with
-		// ErrUnsetPrivOp — which is the correct refusal for those bytes and is
+		// ErrUnsetPrivOp -- which is the correct refusal for those bytes and is
 		// not the same as the type being undecodable. Giving Spec a privilege
 		// member belongs with the probe that emits the type.
 		if set > 0 {
@@ -437,7 +437,7 @@ func putExec(raw []byte, x *Exec) error {
 // The mirror of decode.go's addressString, and it has to be: a v4 address
 // occupies the first 4 bytes and a v6 address all sixteen, so writing an
 // address the family does not describe produces a record that decodes to a
-// different address than the spec named — or, for AF_UNIX, to a wildcard the
+// different address than the spec named -- or, for AF_UNIX, to a wildcard the
 // decoder would render as an empty string while the spec claimed an endpoint.
 //
 // An invalid Addr is not an error. It is the ordinary case of a probe that

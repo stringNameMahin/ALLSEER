@@ -221,7 +221,7 @@ func TestReadOnlyU32FromELF(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got != 7 {
-			t.Errorf("got %d, want 7 — the read took the wrong global's bytes", got)
+			t.Errorf("got %d, want 7 -- the read took the wrong global's bytes", got)
 		}
 	})
 
@@ -417,8 +417,8 @@ func objectWithABIVersion(t *testing.T, version uint32) string {
 // The companion fixture to objectWithABIVersion and built the same way, because
 // an object with no version at all is not something a compiler can be asked for
 // either. Renaming the symbol rather than deleting it keeps every offset in the
-// file where it was — the symbol table, the BTF and the programs are all
-// untouched — so the object differs from the real one in exactly the respect
+// file where it was -- the symbol table, the BTF and the programs are all
+// untouched -- so the object differs from the real one in exactly the respect
 // under test: the loader cannot find the global.
 //
 // The edit is confined to the .strtab section's own bytes. The same name also

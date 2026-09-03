@@ -39,7 +39,7 @@ func writeFileHeader(b *strings.Builder, m *Model, headerPath, pkg string) {
 	fmt.Fprintf(b, "//\n")
 	fmt.Fprintf(b, "// Regenerate with `go generate ./internal/telemetry/abi/`. TestGeneratedFileIsNotStale\n")
 	fmt.Fprintf(b, "// fails when this file and the header disagree, so the two cannot drift apart\n")
-	fmt.Fprintf(b, "// silently — which is the failure this whole arrangement exists to prevent.\n")
+	fmt.Fprintf(b, "// silently -- which is the failure this whole arrangement exists to prevent.\n")
 	fmt.Fprintf(b, "\npackage %s\n\n", pkg)
 	fmt.Fprintf(b, "import (\n\t\"encoding/binary\"\n\t\"errors\"\n\t\"fmt\"\n)\n\n")
 }
@@ -134,7 +134,7 @@ func writeEnums(b *strings.Builder, m *Model) error {
 }
 
 func writeSizes(b *strings.Builder, m *Model) {
-	fmt.Fprintf(b, "// Sizes, in bytes, under LP64 with natural alignment — the model both\n")
+	fmt.Fprintf(b, "// Sizes, in bytes, under LP64 with natural alignment -- the model both\n")
 	fmt.Fprintf(b, "// supported targets use. RecordSize is what one ring buffer record occupies\n")
 	fmt.Fprintf(b, "// and what the startup layout check compares against the loaded object.\n")
 	fmt.Fprintf(b, "const (\n")

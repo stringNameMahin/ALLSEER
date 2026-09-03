@@ -4,9 +4,9 @@ package telemetry
 
 // Runtime tests for the connect pair.
 //
-// The openat tests established the shape of these — a pinned thread whose TID
+// The openat tests established the shape of these -- a pinned thread whose TID
 // the test knows, a single non-destructive drain, and assertions on the scratch
-// map for the claims the event stream cannot make — and this file reuses that
+// map for the claims the event stream cannot make -- and this file reuses that
 // machinery rather than restating it. lockedThread, scratchKey, scratchEntry,
 // requireNoScratchEntry, collectUntil, trackThisCgroup and loadAndAttachPrograms
 // all come from openat_linux_test.go; what is new here is a map accessor for
@@ -94,7 +94,7 @@ func (lt *lockedThread) connectFrom(t *testing.T, domain int, sa []byte, addrlen
 	return ret
 }
 
-// connectPtrFrom is connectFrom for a sockaddr the test does not own — a null
+// connectPtrFrom is connectFrom for a sockaddr the test does not own -- a null
 // or unmapped pointer.
 func (lt *lockedThread) connectPtrFrom(t *testing.T, domain int, addr uintptr, addrlen int) int {
 	t.Helper()
@@ -230,7 +230,7 @@ func connectScratchMap(t *testing.T, l *BPFLoader) *bpf.BPFMap {
 			MapConnectScratch, m.Type())
 	}
 	if got, want := m.KeySize(), 8; got != want {
-		t.Errorf("%s key is %d bytes, want %d for allseer_syscall_key_t — the key is shared "+
+		t.Errorf("%s key is %d bytes, want %d for allseer_syscall_key_t -- the key is shared "+
 			"with openat and must stay so", MapConnectScratch, got, want)
 	}
 	if got := m.ValueSize(); got != connectScratchSize {
@@ -251,8 +251,8 @@ func connectScratchMap(t *testing.T, l *BPFLoader) *bpf.BPFMap {
 // events made by one thread.
 //
 // The thread is the handle, where openat used the path. A connect carries
-// nothing that names the caller's intent — two processes connecting to the same
-// port produce identical payloads — but a TID is unique across the system at any
+// nothing that names the caller's intent -- two processes connecting to the same
+// port produce identical payloads -- but a TID is unique across the system at any
 // instant, and the pinned thread makes exactly the calls the test tells it to.
 //
 // One drain, stopping as soon as `want` are in hand. The openat tests learned
@@ -389,8 +389,8 @@ func TestRuntimeConnectEventReachesUserspace(t *testing.T) {
 
 		// And what those zeroes decode to. Protocol and socket type have an
 		// "unavailable" rendering and use it; the source address does not, and
-		// renders as the wildcard. That last one is a known ABI gap — see the
-		// TODO(event) at the foot of allseer_maps.h — and it is asserted rather
+		// renders as the wildcard. That last one is a known ABI gap -- see the
+		// TODO(event) at the foot of allseer_maps.h -- and it is asserted rather
 		// than ignored so that a reader of this test learns it is not an
 		// observation.
 		if got.event.Network.Protocol != "" {
@@ -537,7 +537,7 @@ func TestRuntimeConnectReturnSemantics(t *testing.T) {
 //
 // AF_UNIX is the case that matters in practice: a governed process reaching a
 // local daemon does it this way, and the socket path does not fit in a 16-byte
-// address field. The event still exists — a connect happened — and says which
+// address field. The event still exists -- a connect happened -- and says which
 // family it was, which is everything the ABI can honestly hold.
 func TestRuntimeConnectUnsupportedFamily(t *testing.T) {
 	l, records := loadAndAttachPrograms(t, ProgConnectEnter, ProgConnectExit)
@@ -594,7 +594,7 @@ func TestRuntimeConnectUnsupportedFamily(t *testing.T) {
 //
 // Three ways for that to happen, and all three must land in the same place:
 // family AF_UNSPEC, no address, no port, and the kernel's own refusal in `ret`.
-// The failure this rules out is the one that would matter most — a record
+// The failure this rules out is the one that would matter most -- a record
 // claiming AF_INET and 0.0.0.0, which is a real address a process can connect
 // to and would be indistinguishable from an observation.
 func TestRuntimeConnectMalformedSockaddr(t *testing.T) {
@@ -732,8 +732,8 @@ func TestRuntimeUntrackedCgroupProducesNoConnectEvent(t *testing.T) {
 //
 // Only the exit program is attached, so every connect on this host reaches a
 // program holding a return and no destination. A probe that emitted anyway would
-// produce a stream of net.connect events — the catalog's highest-severity common
-// capability — with no address, attributed to whatever process happened to be
+// produce a stream of net.connect events -- the catalog's highest-severity common
+// capability -- with no address, attributed to whatever process happened to be
 // opening a socket.
 func TestRuntimeConnectExitWithoutEntryProducesNoEvent(t *testing.T) {
 	l, records := loadAndAttachPrograms(t, ProgConnectExit)
@@ -780,7 +780,7 @@ func TestRuntimeConnectExitWithoutEntryProducesNoEvent(t *testing.T) {
 // by writing the entry from user space, because a stale entry only exists after
 // a thread has been killed inside connect and its TID reused, which no test can
 // arrange on demand. The correct identity stamp is learned from the probe itself
-// under a first loaded object, then used under a second — sound because the
+// under a first loaded object, then used under a second -- sound because the
 // stamp is a property of the thread rather than of the object, and lockedThread
 // keeps the same thread alive across both.
 func TestRuntimeStaleConnectScratchEntryIsRejectedAndDeleted(t *testing.T) {
@@ -852,7 +852,7 @@ func TestRuntimeStaleConnectScratchEntryIsRejectedAndDeleted(t *testing.T) {
 				"the negative leg below would then prove nothing")
 		}
 		if got := found[0].event.Network.DestPort; got != markerPort {
-			t.Errorf("dest port = %d, want the injected %d — the record's destination comes "+
+			t.Errorf("dest port = %d, want the injected %d -- the record's destination comes "+
 				"from the entry, not from the call", got, markerPort)
 		}
 		requireNoScratchEntry(t, m, key, "an entry that was accepted and reported")
@@ -874,8 +874,8 @@ func TestRuntimeStaleConnectScratchEntryIsRejectedAndDeleted(t *testing.T) {
 
 // Concurrent connects from several threads are correlated per thread.
 //
-// Every thread here shares a TGID, so a key that used only the process — or a
-// per-CPU slot — would have these calls overwrite each other. The failure that
+// Every thread here shares a TGID, so a key that used only the process -- or a
+// per-CPU slot -- would have these calls overwrite each other. The failure that
 // produces is not a missing event: it is an event carrying one thread's
 // destination and another thread's return, which arrives and decodes and reads
 // as ordinary.
@@ -960,11 +960,11 @@ func TestRuntimeConcurrentConnectsCorrelatePerThread(t *testing.T) {
 			continue
 		}
 		if got := rec.event.Network.DestPort; got != int(c.port) {
-			t.Errorf("tid %d: dest port = %d, want %d — this record carries another thread's destination",
+			t.Errorf("tid %d: dest port = %d, want %d -- this record carries another thread's destination",
 				c.tid, got, c.port)
 		}
 		if got := rec.event.Result.ReturnCode; got != int64(c.ret) {
-			t.Errorf("tid %d: return code = %d, want %d — this record carries another call's return",
+			t.Errorf("tid %d: return code = %d, want %d -- this record carries another call's return",
 				c.tid, got, c.ret)
 		}
 		if got := int(rec.event.Process.PID); got != os.Getpid() {

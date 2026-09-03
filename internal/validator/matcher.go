@@ -109,7 +109,7 @@ func (m *SelectorMatcher) Match(g capability.Grant, obs capability.Observation) 
 
 	default:
 		// Privilege, IPC, and kernel capabilities have no selector dimension of
-		// their own, so the Kind alone decides — except that an IPC socket or a
+		// their own, so the Kind alone decides -- except that an IPC socket or a
 		// loaded module is named by a path, and a grant narrowing PathPatterns
 		// plainly means it.
 		if len(g.Selector.PathPatterns) > 0 {
@@ -182,7 +182,7 @@ func (m *SelectorMatcher) matchNetwork(sel capability.Selector, obs capability.O
 // destination: its correlated name, its literal address, or both.
 //
 // Both are tried because both are facts. Matching the address against a CIDR
-// grant is not the hopeful equivalence docs/network-matching.md forbids — the
+// grant is not the hopeful equivalence docs/network-matching.md forbids -- the
 // address is what the kernel connected to. What is forbidden is treating an
 // address as standing in for a name nobody observed, and that case ends here as
 // unevaluable rather than as a mismatch.
@@ -227,7 +227,7 @@ func (m *SelectorMatcher) matchHosts(patterns []string, host, address string) Ma
 // matchArgs applies Selector.ArgPatterns.
 //
 // A pattern matches if it covers any single argument or the whole command
-// line, whichever the author meant — "clone" and "git clone *" both work. The
+// line, whichever the author meant -- "clone" and "git clone *" both work. The
 // forgiving reading is deliberate: this dimension is a readability convenience
 // and never a security boundary, so being strict here would buy nothing and
 // surprise every envelope author.

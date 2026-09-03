@@ -2,7 +2,7 @@ package telemetry
 
 // The decoder: the interpretation boundary.
 //
-//	BPF event bytes → internal/telemetry/abi → telemetry.Decoder → pkg/event.Event
+//	BPF event bytes -> internal/telemetry/abi -> telemetry.Decoder -> pkg/event.Event
 //
 // The abi package stops at the ABI shape. It turns 856 bytes into the C structs
 // the header declares and refuses to say what any of it *means*, because
@@ -17,7 +17,7 @@ package telemetry
 // imports neither internal/pipeline nor internal/risk. It never invents a field
 // the record does not carry: an unresolved path stays unresolved, an
 // uncorrelated address stays an address, and a capability.Observation is not
-// built here at all — that is internal/telemetry/resolve, and it runs after
+// built here at all -- that is internal/telemetry/resolve, and it runs after
 // enrichment because it must match on the *resolved* path.
 //
 // Several fields of event.Event are deliberately left zero, because filling
@@ -45,9 +45,9 @@ package telemetry
 // A record this build cannot interpret is refused, never approximated. The
 // header's preamble states the failure mode being avoided: a mismatch "does not
 // produce a clean error; it produces plausible garbage that flows straight into
-// governance decisions". A decode error is loud — it lands in
+// governance decisions". A decode error is loud -- it lands in
 // event.SourceStats.DecodeErrors and the collector decides whether the session
-// can continue — while a plausible-looking event is silent.
+// can continue -- while a plausible-looking event is silent.
 //
 // The first thing refused is a record from a different ABI. Every offset below
 // is correct only under ALLSEER_ABI_VERSION, so the version field is compared
@@ -86,14 +86,14 @@ var (
 	// The check the size check cannot make, and the second of the two
 	// enforcement points internal/telemetry/abi names. That package surfaces
 	// the constant and the field and compares neither, because "deciding what a
-	// mismatch *means* is a judgment, and the judgments differ by layer" — the
+	// mismatch *means* is a judgment, and the judgments differ by layer" -- the
 	// loader's is per-object and free, this one is per-record and is the only
 	// one that can see a record at all.
 	//
 	// What it catches is what the loader's BTF size comparison provably cannot:
 	// "a layout that kept its size and changed meaning". Two same-width fields
 	// exchanged, a flags word that gained an enumerator, a timestamp that
-	// changed from nanoseconds to microseconds — every one of those passes
+	// changed from nanoseconds to microseconds -- every one of those passes
 	// sizeof(struct allseer_event) unchanged and then produces a fully
 	// plausible event, which is the failure mode the header's preamble names:
 	// "it produces plausible garbage that flows straight into governance
@@ -104,12 +104,12 @@ var (
 	// Refused, never coerced. There is no reading of a record from a different
 	// ABI that is safe to guess at: the version is the statement that the
 	// offsets mean what this build thinks they mean, and without it every field
-	// below — comm included — is an unchecked reinterpretation of somebody
+	// below -- comm included -- is an unchecked reinterpretation of somebody
 	// else's bytes.
 	ErrABIVersionMismatch = errors.New("telemetry: record's ABI version is not the one this build decodes")
 
 	// ErrUnknownEventType: the type is outside the enum this build was
-	// generated from. It means the loaded object is newer than this binary —
+	// generated from. It means the loaded object is newer than this binary --
 	// layout drift, the exact condition the generated ABI exists to surface.
 	// The value is rendered rather than hidden, per abi.EventType.String.
 	ErrUnknownEventType = errors.New("telemetry: event type is not in this build's ABI")
@@ -152,8 +152,8 @@ var (
 	//
 	// The cost is real and is not hidden: a legitimately long path or argument
 	// becomes a counted decode error rather than an event. The honest fix is a
-	// truncation flag on the wire — see the TODO(event) at the end of this file
-	// — and that is a wire-format change which does not belong inside a decoder
+	// truncation flag on the wire -- see the TODO(event) at the end of this file
+	// -- and that is a wire-format change which does not belong inside a decoder
 	// issue.
 	ErrTruncatedString = errors.New("telemetry: fixed-size string field is not NUL-terminated, so the value is truncated")
 )
@@ -255,8 +255,8 @@ func (*EventDecoder) Decode(raw []byte) (*event.Event, error) {
 // event on the hot path.
 //
 // Only the fields the header gives meaning to *for that type* are read. A field
-// the header does not define for a type is left alone rather than guessed at —
-// `bytes` on a connect, `new_path` on a chmod — and the union's tail beyond the
+// the header does not define for a type is left alone rather than guessed at --
+// `bytes` on a connect, `new_path` on a chmod -- and the union's tail beyond the
 // active member is never touched, since a probe that writes one member is under
 // no obligation to have zeroed the rest.
 func decodePayload(rec *abi.Event, e *event.Event) error {
@@ -347,7 +347,7 @@ func decodePayload(rec *abi.Event, e *event.Event) error {
 	case abi.EvtPtrace:
 		// process.ptrace, from the type name alone. No union member is
 		// designated, and the record carries no field for the *target* process
-		// — which is the resource a grant would want to constrain. That gap is
+		// -- which is the resource a grant would want to constrain. That gap is
 		// already recorded in internal/telemetry/resolve.
 		e.Capability = capability.KindProcessPtrace
 
@@ -389,7 +389,7 @@ func decodePayload(rec *abi.Event, e *event.Event) error {
 // priv.escalate is never returned, and its absence is the design rather than an
 // omission. The catalog describes it as "Gain privileges, by any mechanism",
 // which is a claim about the difference between two states and not about which
-// syscall was called — no operation value implies it, and the header says so at
+// syscall was called -- no operation value implies it, and the header says so at
 // the enum. Deriving it belongs downstream, where both snapshots are in hand
 // and where the user-namespace scope of a capability set can be taken into
 // account: unshare(CLONE_NEWUSER) hands the caller a full capability set inside
@@ -424,7 +424,7 @@ func kindForPrivOp(op abi.PrivOp) (capability.Kind, error) {
 // it.
 //
 // Short lower-case names rather than abi.PrivOp.String(), which renders the C
-// enumerator — "ALLSEER_PRIV_OP_SETUID" — because Operation is a field a human
+// enumerator -- "ALLSEER_PRIV_OP_SETUID" -- because Operation is a field a human
 // reads in an audit record and a rule author may one day match on. The names
 // here are the ones internal/risk/privilege.go's tests already use for the
 // field: "setuid", "capset", "unshare", "seccomp". That vocabulary predates the
@@ -452,8 +452,8 @@ var privOpNames = map[abi.PrivOp]string{
 //
 // Only the namespace bits, because ns_flags is documented in the header as
 // carrying unshare's flags or setns's nstype and both name namespaces. The
-// other CLONE_ bits can appear in an unshare argument — CLONE_FILES and
-// CLONE_FS are legal there — and they are deliberately not named, because they
+// other CLONE_ bits can appear in an unshare argument -- CLONE_FILES and
+// CLONE_FS are legal there -- and they are deliberately not named, because they
 // are not namespaces and namespaceName would be claiming otherwise.
 const (
 	cloneNewTime   = 0x00000080
@@ -472,15 +472,15 @@ const (
 // and that ordering is a judgment worth stating rather than an artifact of the
 // switch. unshare accepts a mask, so `unshare(CLONE_NEWUSER|CLONE_NEWNS)` is one
 // call carrying two namespaces, and NamespaceType is a single string. The user
-// namespace is the one that is a credential — it lives in struct cred, where
-// the rest live in task->nsproxy — and it is the one that changes what the
+// namespace is the one that is a credential -- it lives in struct cred, where
+// the rest live in task->nsproxy -- and it is the one that changes what the
 // process may do rather than what it can see. Naming the mount namespace on
 // that call and dropping the user namespace would report the less consequential
 // half.
 //
 // A mask with no namespace bit set, which is what an unshare of CLONE_FILES
 // alone produces, renders as the empty string. So does a zero, which is what
-// setns(fd, 0) supplies when the caller names no type — and there the
+// setns(fd, 0) supplies when the caller names no type -- and there the
 // before/after userns_inum pair in the payload is what says whether a user
 // namespace was entered. The empty string is the honest rendering of both:
 // nothing in the argument named a namespace.
@@ -580,8 +580,8 @@ func capabilityDelta(before, after uint64) []string {
 // OldUID and NewUID are the *effective* uids. The payload carries four views of
 // each identity and event.PrivPayload has room for one pair, so this is a
 // choice: euid is the one that governs what a process may do, which is what a
-// privilege record is about. The other three views are not lost — they are in
-// the record the probe wrote, and reach anything reading the ABI struct — they
+// privilege record is about. The other three views are not lost -- they are in
+// the record the probe wrote, and reach anything reading the ABI struct -- they
 // are simply not what this two-field summary reports.
 //
 // Both are int32 in pkg/event and uint32 here, so a uid above 2^31 wraps
@@ -631,7 +631,7 @@ func privPayload(p *abi.PrivPayload) *event.PrivPayload {
 //
 // AF_UNIX is ipc.unixsocket; everything else is net.connect. This is the
 // decision the open TODO in internal/telemetry asked for, and the family is
-// what settles it — the one field the probe reliably fills for a unix socket.
+// what settles it -- the one field the probe reliably fills for a unix socket.
 //
 // # Why the family is enough, and why net.connect was wrong
 //
@@ -650,14 +650,14 @@ func privPayload(p *abi.PrivPayload) *event.PrivPayload {
 //
 // The family is not inferred. bpf/allseer.bpf.c reads it out of the sockaddr the
 // process passed and writes it into the record for every family, including the
-// ones whose address it cannot represent — its default arm sets family and
+// ones whose address it cannot represent -- its default arm sets family and
 // nothing else, which is exactly the AF_UNIX case. So this reads a captured
 // value rather than deducing one from an absence.
 //
 // # What this does not establish
 //
 // Which unix socket. sun_path is 108 bytes, struct allseer_net_payload's daddr
-// is 16, and ABI v2 has no field for a path — decode.go already states the
+// is 16, and ABI v2 has no field for a path -- decode.go already states the
 // reading side of that as "a socket path is not an address and does not fit in
 // the field". So resolve.Observe produces an empty Target and no envelope can
 // say "may connect to /run/docker.sock" while saying no to the rest.
@@ -665,7 +665,7 @@ func privPayload(p *abi.PrivPayload) *event.PrivPayload {
 // That limit is not introduced here. Under net.connect the target was equally
 // empty, because addressString renders nothing for AF_UNIX and the port is
 // zero, so nothing that was matchable has stopped being matchable. What changes
-// is the kind, the domain and the severity — and those change because they were
+// is the kind, the domain and the severity -- and those change because they were
 // wrong, not because more is now known.
 //
 // # The consequence worth stating rather than discovering
@@ -692,8 +692,8 @@ func kindForConnectFamily(family uint16) capability.Kind {
 //
 // An open is the one event type whose capability is not fixed by its name, and
 // the repository settles it in two places rather than leaving it open: the
-// catalog lists open/openat/openat2 under fs.read, fs.write *and* fs.create —
-// "Kinds are coarser than syscalls" — and docs/dataflow.md traces
+// catalog lists open/openat/openat2 under fs.read, fs.write *and* fs.create --
+// "Kinds are coarser than syscalls" -- and docs/dataflow.md traces
 // `openat(..., O_WRONLY)` through the pipeline as `Kind: fs.write`. The flags
 // are what separate them, which is why the M5 issue for the openat probe
 // specifies that it emits "flags, mode, and the syscall return".
@@ -705,8 +705,8 @@ func kindForConnectFamily(family uint16) capability.Kind {
 // The residual ambiguity is stated rather than papered over: O_CREAT on a file
 // that already exists is reported as fs.create, because the record carries
 // nothing that distinguishes creation from opening an existing file. Resolving
-// it needs a convention agreed with the probe — O_EXCL, or the inode's
-// existence before the call — and inventing one here would decide on the
+// it needs a convention agreed with the probe -- O_EXCL, or the inode's
+// existence before the call -- and inventing one here would decide on the
 // probe's behalf before the probe exists.
 func kindForOpenFlags(flags uint32) capability.Kind {
 	const (
@@ -784,7 +784,7 @@ func execPayload(p *abi.ExecPayload) (*event.ExecPayload, error) {
 
 	// argc is the count the probe reports; the array holds at most
 	// ALLSEER_ARGV_MAX of them. An exec with more arguments than fit is
-	// ordinary — a compiler invocation with a dozen flags — so the record is
+	// ordinary -- a compiler invocation with a dozen flags -- so the record is
 	// decoded to what it carries rather than refused. That loss is currently
 	// invisible downstream, which is a gap rather than a choice; see the
 	// TODO(event) below. It is tolerable only because the repository already
@@ -895,7 +895,7 @@ func protocolName(proto uint16) string {
 	case 0:
 		// IPPROTO_IP, which is also what an unfilled field holds. Left empty
 		// rather than named, because claiming a protocol for a record that
-		// stated none is the invention this boundary exists to avoid — and
+		// stated none is the invention this boundary exists to avoid -- and
 		// because the matcher already treats an empty protocol as unevaluable
 		// against a grant that constrains protocols.
 		return ""
@@ -956,7 +956,7 @@ func addressString(raw [16]uint8, family uint16) string {
 // resultOf translates the raw syscall return.
 //
 // The header states the convention: "syscall return; negative is -errno". A
-// failed action is still a governance signal — pkg/event says so directly, and
+// failed action is still a governance signal -- pkg/event says so directly, and
 // the credential-egress fixture turns on it, where a read of a key that failed
 // with ENOENT must not be treated as a disclosure.
 //
@@ -974,7 +974,7 @@ func resultOf(ret int32) event.Result {
 // can decode to, in catalog order.
 //
 // It exists so the daemon can answer the coverage question the catalog is built
-// for — ProbeInfo.Capabilities, and through it MemoryCatalog.SetObservable —
+// for -- ProbeInfo.Capabilities, and through it MemoryCatalog.SetObservable --
 // from the event types a probe emits, rather than from a second table written
 // beside this file. A grant with no probe behind it is a blind spot that reads
 // as a control, and that check is only as good as the list feeding it.
@@ -984,14 +984,14 @@ func resultOf(ret int32) event.Result {
 // ALLSEER_EVT_FILE_OPEN exercised depends on the open flags; which of four
 // privilege kinds an ALLSEER_EVT_PRIV_CHANGE exercised depends on its
 // `operation`; and whether an ALLSEER_EVT_NET_CONNECT is net.connect or
-// ipc.unixsocket depends on its address family — see kindForOpenFlags,
+// ipc.unixsocket depends on its address family -- see kindForOpenFlags,
 // kindForPrivOp and kindForConnectFamily.
 //
 // ALLSEER_EVT_NET_CONNECT is the one whose two answers land in different
 // *domains*, which is worth naming because it is the thing a reader would
 // otherwise assume cannot happen: a connect over AF_UNIX is an IPC event
 // carrying a network payload. api/schema/event.v1alpha1.schema.json permits
-// that — it requires a network payload when the domain is network, and says
+// that -- it requires a network payload when the domain is network, and says
 // nothing that forbids one elsewhere.
 //
 // priv.escalate is absent from the privilege list even though the catalog
@@ -1038,25 +1038,15 @@ func CapabilitiesFor(t abi.EventType) []capability.Kind {
 	return nil
 }
 
-// Done: Decoder.Decode and EventSize are implemented above, over the generated
-// ABI, with each allseer_event_type mapped to a capability.Kind whose domain
-// comes from the M1 catalog rather than from a second table.
-//
 // TODO(event): carry truncation on the wire. A path or argument that filled its
 // fixed-size field is refused here (ErrTruncatedString) because event.Event has
 // nowhere to record that it was cut short, and handing an enricher a prefix that
 // looks whole is worse than losing the record. A `Truncated bool` on FilePayload
 // and ExecPayload, plus the argument count, would let the decoder accept these
-// and let the validator treat them as unevaluable — which is the behaviour the
+// and let the validator treat them as unevaluable -- which is the behaviour the
 // header actually asks for. It is a wire-format change and belongs to pkg/event.
 // TODO(telemetry): the record carries no syscall identifier, so Event.Syscall is
 // left empty. ALLSEER_EVT_FILE_OPEN could be open, openat, or openat2, and
 // naming one of them would be a guess in a field kept for forensics. A __u32
 // syscall number on struct allseer_event would settle it, alongside the version
 // field already open in the header.
-// Done: ALLSEER_EVT_NET_CONNECT with AF_UNIX resolves to ipc.unixsocket, and
-// every other family to net.connect. The catalog lists `connect` under both
-// kinds, so it never settled the question; the address family does, and
-// kindForConnectFamily is where. The judgment this deferred — "what a family
-// value means for governance" — was made with the connect probe in front of it,
-// which is the condition it was deferred on.

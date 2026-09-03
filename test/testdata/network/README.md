@@ -30,10 +30,10 @@ skipped.
 `uncorrelated` is the distinction the module exists for. All three of `nomatch`,
 `invalid`, and `uncorrelated` produce a false, but they are different findings:
 
-- `nomatch` — the envelope was evaluated and did not cover this destination.
-- `uncorrelated` — the envelope names hosts and we never learned this address's
+- `nomatch` -- the envelope was evaluated and did not cover this destination.
+- `uncorrelated` -- the envelope names hosts and we never learned this address's
   name. Escalates to the risk engine rather than reporting as a violation.
-- `invalid` — the selector could not be interpreted at all, which is an
+- `invalid` -- the selector could not be interpreted at all, which is an
   envelope defect and should have been caught at admission.
 
 The test asserts `CorrelationMissing` is false on every `match` and `nomatch`
@@ -49,6 +49,6 @@ list means *any* port, not *no* ports.
 ## Adding cases
 
 Add the line under the section it belongs to, with a comment naming the
-confusion it defends against — suffix collision, family mismatch, wildcard
+confusion it defends against -- suffix collision, family mismatch, wildcard
 depth, correlation gap. A line whose purpose is not stated is not worth
 keeping.

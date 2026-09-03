@@ -33,10 +33,10 @@ import (
 //     key.pem is graded critical and holds nothing.
 //   - **Nothing connects the bytes read to the bytes sent.** There is no taint
 //     tracking here and there will not be: payload inspection is out of scope
-//     (devRead §10.2), so the relationship the detector establishes is temporal
+//     (devRead section 10.2), so the relationship the detector establishes is temporal
 //     ordering and nothing stronger.
-//   - **A sequence is not an intent.** `npm install` reads `.npmrc` — graded
-//     high, and correctly so — and then connects to a registry. That is the
+//   - **A sequence is not an intent.** `npm install` reads `.npmrc` -- graded
+//     high, and correctly so -- and then connects to a registry. That is the
 //     detector firing on exactly the behavior it was built to see, on a session
 //     that is entirely honest. The factor raises a score by an amount that
 //     cannot on its own reach the top band; deciding what to do about it is
@@ -58,7 +58,7 @@ import (
 // re-derive the finding from the stream.
 //
 // **fs.read alone**, not the filesystem domain. Reading is what discloses
-// content. A write to a credential path is tampering or persistence — a real
+// content. A write to a credential path is tampering or persistence -- a real
 // concern, and a different one, belonging to a scorer that does not exist yet.
 //
 // **The read must have succeeded.** A read that returned ENOENT disclosed
@@ -72,8 +72,8 @@ import (
 // **high or critical**, read out of the shipped list's own grade vocabulary
 // rather than invented here. `configs/sensitivity.default.yaml` documents
 // `critical` as credential material reaching other systems and `high` as
-// service-scoped credentials and account shape — both are credentials. It
-// documents `medium` as "identity and history … **routinely read by ordinary
+// service-scoped credentials and account shape -- both are credentials. It
+// documents `medium` as "identity and history ... **routinely read by ordinary
 // tooling**", which is `/etc/passwd` and shell history: real signal in a
 // departure, and read by getpwnam on every build. A detector whose first half
 // fired on `/etc/passwd` would report a sequence on most sessions that touch
@@ -85,7 +85,7 @@ import (
 // risk.History carries events, not decisions, so the validator's answer about a
 // *prior* event is not available to a scorer through the interface it is given.
 // That is a limitation worth stating rather than working around, and the
-// working-around would be worse than the limitation — but it is also the right
+// working-around would be worse than the limitation -- but it is also the right
 // answer on the merits. An envelope granting a credential read does not license
 // shipping the result off the machine, so requiring the access to have been a
 // departure would make "grant the read" the way to hide the sequence.
@@ -96,7 +96,7 @@ import (
 //
 // Count is what risk.History natively supports: RecentEvents(n) is the only
 // lookup it offers and it is count-bounded. A duration would have to be derived
-// from the events themselves — from WallClock, which pkg/event states is
+// from the events themselves -- from WallClock, which pkg/event states is
 // subject to adjustment and explicitly not the ordering key, or from
 // KernelTimestamp, which is sound within a boot but would need a number of
 // seconds nobody has measured. Adding a second bound would mean two parameters
@@ -106,7 +106,7 @@ import (
 // DefaultSequenceWindow, rather than "whatever the ring happens to hold". The
 // two coincide at 256 today and that is not a coincidence:
 // session.DefaultHistorySize was chosen *for this consumer*, with the reasoning
-// written down — the read and the connection must fall inside one window even
+// written down -- the read and the connection must fall inside one window even
 // when a build's file traffic separates them, a few hundred events covers a
 // compile-and-link burst and a few dozen does not. This consumer now exists and
 // confirms that reasoning; no measurement exists to move it. Owning the number
@@ -126,7 +126,7 @@ import (
 // egress event's own verdict and violation_severity factors weigh the egress.
 // Splitting the sequence into per-half scorers would charge points on events
 // that are not part of any sequence, and would make the sequence itself the sum
-// of two independent findings — which is exactly the "two unrelated events
+// of two independent findings -- which is exactly the "two unrelated events
 // happened" arithmetic a sequence detector exists to avoid. This factor is
 // charged only when the relationship is proven, and its evidence names both
 // ends so the proof is checkable.
@@ -207,7 +207,7 @@ const (
 	EvidenceAccessReason = "access_reason"
 
 	// EvidenceAccessSucceeded records that the read returned successfully. It
-	// is always "true" — a failed read does not qualify — and it is stated
+	// is always "true" -- a failed read does not qualify -- and it is stated
 	// anyway, because the rule is one an auditor should be able to see applied
 	// rather than have to know.
 	EvidenceAccessSucceeded = "access_succeeded"
@@ -262,7 +262,7 @@ func IsEgress(k capability.Kind) bool {
 // SensitivityUnknown never qualifies, and that is the load-bearing case: an
 // unrated path is one the list has never heard of, and treating it as
 // credential material would make every unlisted read the first half of a
-// sequence. It is also why an `info` rating cannot qualify — an explicit "we
+// sequence. It is also why an `info` rating cannot qualify -- an explicit "we
 // looked, and this is ordinary" must not become credential access by accident.
 func AccessSensitivityQualifies(g capability.Severity) bool {
 	if !KnownSensitivity(g) {
@@ -337,7 +337,7 @@ func (s CredentialEgressScorer) Evaluate(_ context.Context, req ScoreRequest) (*
 // evaluate proves the relationship or says nothing.
 //
 // Silence here means "no qualifying access was found in the window", which is a
-// complete answer rather than an absent one — unlike sensitive_path, whose
+// complete answer rather than an absent one -- unlike sensitive_path, whose
 // silence would be indistinguishable from having no oracle at all. This scorer
 // is present in the set exactly when an oracle is, so a reader can tell from
 // Scorers() that the search happened, and emitting a negative finding on every
@@ -346,7 +346,7 @@ func (s CredentialEgressScorer) Evaluate(_ context.Context, req ScoreRequest) (*
 // # Cost, measured
 //
 // The first check is the capability of the *current* event, so an event that is
-// not egress — which is almost every event a session produces — costs one
+// not egress -- which is almost every event a session produces -- costs one
 // comparison and reads no history at all. That is the claim the feature lives
 // or dies on, and it holds exactly: BenchmarkProcessWithSequenceDetector is
 // identical to BenchmarkProcessRated at 2374 B and 43 allocs per event, so a
@@ -354,22 +354,22 @@ func (s CredentialEgressScorer) Evaluate(_ context.Context, req ScoreRequest) (*
 //
 // Only an egress event pays for the scan, and the scan walks backwards and
 // stops at the first qualifying access, so the case that finds something is
-// cheap: 1.4 µs and 14 allocs at the engine level, against 0.9 µs for the same
+// cheap: 1.4 us and 14 allocs at the engine level, against 0.9 us for the same
 // engine with no sequence to find.
 //
 // The number that bounds the feature is an egress event over a full window
 // containing *no* qualifying access, since that is the one that runs to the end:
 //
-//	BenchmarkScoreSequenceEgressHit          1.4 µs      14 allocs
-//	BenchmarkScoreSequenceEgressMixedWindow   85 µs      70 allocs
-//	BenchmarkScoreSequenceEgressFullScan     340 µs     262 allocs
-//	BenchmarkProcessEgressOverAFullWindow    120 µs      99 allocs, 98 KB
+//	BenchmarkScoreSequenceEgressHit          1.4 us      14 allocs
+//	BenchmarkScoreSequenceEgressMixedWindow   85 us      70 allocs
+//	BenchmarkScoreSequenceEgressFullScan     340 us     262 allocs
+//	BenchmarkProcessEgressOverAFullWindow    120 us      99 allocs, 98 KB
 //
 // Two components, both linear in the window and neither surprising once
 // measured. The 98 KB is History.RecentEvents copying the ring, which it does
 // by contract so a caller cannot reach back into it. The microseconds are one
-// oracle lookup per retained *successful read*, at roughly 1.3 µs each against
-// the shipped forty-pattern list — the mixed-window figure is lower purely
+// oracle lookup per retained *successful read*, at roughly 1.3 us each against
+// the shipped forty-pattern list -- the mixed-window figure is lower purely
 // because only a quarter of that window is reads.
 //
 // This is charged to connect and send and to nothing else, on syscalls that
@@ -457,7 +457,7 @@ func (s CredentialEgressScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, e
 
 // factor renders the finding.
 //
-// Points are withheld — the finding is not — when the envelope covered this
+// Points are withheld -- the finding is not -- when the envelope covered this
 // egress, which is the same arrangement sensitive_path makes and is there for
 // the same invariant: an event a grant covered scores exactly zero, so that
 // LevelNone keeps meaning "nothing departed" rather than "nothing was looked
@@ -517,12 +517,12 @@ func (s CredentialEgressScorer) factor(
 // TODO(risk): the scan allocates 98 KB per egress event, because
 // History.RecentEvents copies the ring so a caller cannot reach back into it.
 // The scan wants none of that: it walks backwards and usually stops early. The
-// fix is a reverse iterator alongside RecentEvents — probed for the way
-// SeenTargetsSaturated already is, so a History without one keeps working —
+// fix is a reverse iterator alongside RecentEvents -- probed for the way
+// SeenTargetsSaturated already is, so a History without one keeps working --
 // which would take the copy to zero. Deliberately not built here: it widens an
 // interface two packages implement, and the milestone is the detector.
 // TODO(risk): the scan's microseconds are one PathSensitivity call per retained
-// successful read, ~1.3 µs each against a forty-pattern list. sensitivity.go
+// successful read, ~1.3 us each against a forty-pattern list. sensitivity.go
 // already specifies the fix and already declined to build it, on the grounds
 // that scoring one unrated path was proportionate at 982 ns; this consumer
 // makes that call happen up to 256 times per egress event instead of once per

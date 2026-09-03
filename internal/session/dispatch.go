@@ -24,7 +24,7 @@ import (
 // convention. A collector, by contrast, reads one ring buffer for every
 // governed session on the host. Something has to stand between them and decide
 // which pipeline an event belongs to. That decision needs a registry of
-// sessions, their envelopes, and their tracking state — which is this package —
+// sessions, their envelopes, and their tracking state -- which is this package --
 // and it was deliberately split out of internal/pipeline, where a component
 // that looked sessions up would have been a session registry with a stage list
 // attached.
@@ -44,7 +44,7 @@ import (
 //
 // It is routing, not parallelism. A Dispatcher processes one stream on one
 // goroutine, in arrival order, exactly as EventPipeline.Run does. That is what
-// preserves per-session ordering — and per-session ordering is not a nicety,
+// preserves per-session ordering -- and per-session ordering is not a nicety,
 // since history-dependent risk scoring reaches different verdicts on reordered
 // events.
 //
@@ -86,7 +86,7 @@ type EventProcessor interface {
 // whoever assembled the daemon rather than to a router.
 //
 // Returning an error refuses the session. The events are counted as
-// unprocessable and the factory is asked again on the next one — there is no
+// unprocessable and the factory is asked again on the next one -- there is no
 // negative cache, because a factory that failed on a transient condition should
 // not have the session written off for the rest of its life.
 type ProcessorFactory func(b Binding) (EventProcessor, error)
@@ -108,7 +108,7 @@ type Registry interface {
 //
 // State_ alone is too narrow to hand to a pipeline: every method on it is a
 // write, which is exactly what its documentation promises, and a pipeline also
-// reads — the validator compares counters against a budget and the risk engine
+// reads -- the validator compares counters against a budget and the risk engine
 // scores against history. Widening State_ would break the promise; naming the
 // union here does not.
 //
@@ -130,8 +130,8 @@ var _ TrackingState = (*MemoryState)(nil)
 // Binding is everything routing an event needs to know about a session.
 //
 // A value with no allocation in it, because it is built once per event. The
-// envelope is shared rather than copied — it is sealed and read only, the same
-// rule Session.clone applies — and State_ is shared deliberately: it is what
+// envelope is shared rather than copied -- it is sealed and read only, the same
+// rule Session.clone applies -- and State_ is shared deliberately: it is what
 // the session's processor records into, and a copy would be a pipeline
 // recording into nothing.
 type Binding struct {
@@ -292,7 +292,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, e *event.Event) (*decision.De
 	if err != nil {
 		// Counted and returned, never fatal to the stream. One session's
 		// processor falling over must not end governance for every other
-		// session sharing the host — the same containment argument that puts
+		// session sharing the host -- the same containment argument that puts
 		// panic recovery around each pipeline stage. Run acts on that by
 		// continuing; a caller of Dispatch decides for itself.
 		d.stats.processorErrors.Add(1)
@@ -314,7 +314,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, e *event.Event) (*decision.De
 // Nothing an individual event can do ends the run. Unroutable events and
 // processor failures are counted and skipped, because a stream carrying every
 // session on the host must not be stoppable by one of them. What does end it is
-// context cancellation and the source closing — the two things that are about
+// context cancellation and the source closing -- the two things that are about
 // the stream rather than about an event on it.
 func (d *Dispatcher) Run(ctx context.Context, src event.Source) error {
 	if src == nil {
@@ -386,7 +386,7 @@ func (d *Dispatcher) processorFor(b Binding) (EventProcessor, error) {
 // A sink failure is counted and never returned, for the reason
 // EventPipeline.emit gives: recording what was decided and acting on it are
 // different responsibilities with different failure modes, and an audit sink
-// that cannot write must not be able to stop governance — that would turn a
+// that cannot write must not be able to stop governance -- that would turn a
 // full disk into an outage.
 func (d *Dispatcher) emit(ctx context.Context, dec *decision.Decision) {
 	if dec == nil || d.sink == nil {
@@ -410,7 +410,7 @@ func (d *Dispatcher) emit(ctx context.Context, dec *decision.Decision) {
 //   - active is the ordinary case.
 //   - suspended accepts, deliberately. Suspension pauses the agent, not
 //     governance. Events observed while a tree is stopped are either genuinely
-//     in flight — submitted before the stop landed — or evidence that the tree
+//     in flight -- submitted before the stop landed -- or evidence that the tree
 //     did not actually stop, and the second is precisely the event that must
 //     not be discarded. Refusing them would make suspension a hole in the
 //     record exactly when scrutiny is highest.
@@ -431,7 +431,7 @@ func AcceptsEvents(s State) bool {
 //
 // The four refusal counters are the honest half. Every one of them is an event
 // the kernel observed that produced no decision, and a nonzero value qualifies
-// every conclusion drawn from the audit stream for that period — the same way
+// every conclusion drawn from the audit stream for that period -- the same way
 // Outcome.TelemetryComplete qualifies a session. They are reported rather than
 // logged because a number a caller can assert on is the only form in which
 // "some events were not governed" survives into a test.
@@ -449,7 +449,7 @@ type DispatchStats struct {
 	Unidentified uint64 `json:"unidentified"`
 
 	// Unattributed named a session the registry does not hold. On a live host
-	// this is misattribution — most likely PID reuse, which M6's ProcessTracker
+	// this is misattribution -- most likely PID reuse, which M6's ProcessTracker
 	// keyed on (PID, StartTime) exists to prevent.
 	Unattributed uint64 `json:"unattributed"`
 
@@ -479,8 +479,8 @@ type DispatchStats struct {
 }
 
 // dispatchStats is the mutable half. Atomics rather than a lock because the
-// writer is the dispatch goroutine and the readers are whoever asks — a status
-// query, a test — which is the arrangement MemoryState's counters already use.
+// writer is the dispatch goroutine and the readers are whoever asks -- a status
+// query, a test -- which is the arrangement MemoryState's counters already use.
 type dispatchStats struct {
 	observed        atomic.Uint64
 	routed          atomic.Uint64
@@ -510,9 +510,9 @@ func (s *dispatchStats) snapshot() DispatchStats {
 }
 
 // TODO(session): decide what a governed host does with an unroutable event
-// beyond counting it. It cannot become a decision — there is no envelope to
+// beyond counting it. It cannot become a decision -- there is no envelope to
 // judge it against, and fabricating one would be granting capabilities nobody
-// authorized — but "we observed something we could not attribute" is a
+// authorized -- but "we observed something we could not attribute" is a
 // governance finding in its own right, and today it reaches nobody but a status
 // query. The shape it probably wants is an envelope-less record on the audit
 // stream, which needs the unscored-decision wire format (M4 issue 3c) settled

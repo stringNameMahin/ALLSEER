@@ -29,7 +29,7 @@ import (
 // what is asserted is that the records on disk are the decisions the pipeline
 // produced, and that attaching the sink changed none of them. The golden test
 // is the next feature and needs committed envelope fixtures, which do not exist
-// yet — every envelope in the tree, including the one below, is written inside
+// yet -- every envelope in the tree, including the one below, is written inside
 // a test.
 
 const (
@@ -151,8 +151,8 @@ func replayEvents(t *testing.T) []event.Event {
 	return out
 }
 
-// sliceSource replays an already-read slice through event.Source, so Run — the
-// only path that reaches the sink — can be driven over the same events the
+// sliceSource replays an already-read slice through event.Source, so Run -- the
+// only path that reaches the sink -- can be driven over the same events the
 // reference run saw.
 type sliceSource struct{ ch chan event.Event }
 
@@ -233,7 +233,7 @@ func TestReplayThroughTheSinkWritesEveryDecision(t *testing.T) {
 }
 
 // A sink is an output mechanism, not a stage. Attaching one must not change
-// what the system decided — otherwise the audit log would be a record of a
+// what the system decided -- otherwise the audit log would be a record of a
 // session that only happens when auditing is on.
 func TestSinkChangesNoDecision(t *testing.T) {
 	events := replayEvents(t)
@@ -285,8 +285,8 @@ func TestSinkChangesNoDecision(t *testing.T) {
 
 // The record on disk is deterministic across runs, which is the property the
 // golden test that follows this feature will depend on. Anything that made the
-// bytes vary between two identical replays — an emission timestamp, a random
-// identifier, a map iterated in place — would surface here rather than as a
+// bytes vary between two identical replays -- an emission timestamp, a random
+// identifier, a map iterated in place -- would surface here rather than as a
 // flaky golden file later.
 func TestTwoIdenticalReplaysProduceIdenticalBytes(t *testing.T) {
 	events := replayEvents(t)
@@ -317,7 +317,7 @@ func TestTwoIdenticalReplaysProduceIdenticalBytes(t *testing.T) {
 	}
 }
 
-// With the shipped default — record_all_events false — an audit of this
+// With the shipped default -- record_all_events false -- an audit of this
 // recording is shorter than the recording, and every record it keeps is a
 // finding rather than a routine allow.
 func TestRecordAllEventsFalseKeepsOnlyFindings(t *testing.T) {

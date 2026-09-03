@@ -23,7 +23,7 @@ import (
 //
 // # Ownership
 //
-// Exactly one goroutine writes a session's state — the pipeline worker that
+// Exactly one goroutine writes a session's state -- the pipeline worker that
 // processes that session's events serially. That is an architectural guarantee
 // rather than a convention (see internal/pipeline: ordering within a session is
 // preserved, which requires a single processor), and it is what lets this type
@@ -35,17 +35,17 @@ import (
 // explicitly because a reader that guesses wrong gets a data race rather than a
 // wrong answer:
 //
-//   - Counters — everything reachable through validator.SessionState, plus
+//   - Counters -- everything reachable through validator.SessionState, plus
 //     CapabilityCount, ViolationCount, BlockedCount, DroppedEvents and
-//     TelemetryComplete — are backed by atomics and may be read from any
+//     TelemetryComplete -- are backed by atomics and may be read from any
 //     goroutine. They cost the writer nothing extra (a single-writer atomic add
 //     needs no contention handling) and they are what a daemon status query
 //     wants. Each is individually consistent; a reader sampling several is not
 //     guaranteed to see them from the same instant, which is fine for reporting
 //     and is why nothing on the decision path samples more than one.
 //
-//   - Structures — SeenTargets, TargetSeen, RecentEvents, Snapshot,
-//     UnusedGrantIndexes — are read on the owner goroutine only. They are backed
+//   - Structures -- SeenTargets, TargetSeen, RecentEvents, Snapshot,
+//     UnusedGrantIndexes -- are read on the owner goroutine only. They are backed
 //     by a map and a ring buffer, and giving them the same freedom would mean
 //     either copying on every event or locking on every read, both of which buy
 //     nothing the design needs today. The decision path reads them from the
@@ -65,7 +65,7 @@ const (
 	// The bound exists because history is per session and sessions are
 	// long-lived: an agent building a large project emits events for minutes,
 	// and keeping all of them would make memory a function of how long the user
-	// waited. The number is chosen from what the history is *for* — the
+	// waited. The number is chosen from what the history is *for* -- the
 	// credential-access-then-egress sequence detector (internal/risk), which
 	// needs the read and the connection to fall inside one window even when a
 	// build's file traffic separates them. A few hundred events covers the
@@ -90,7 +90,7 @@ const (
 	// rather than a window, and what happens at the ceiling is chosen for the
 	// direction it fails in: new targets stop being recorded, so they keep
 	// reporting as unseen, so they keep reading as novel and raising scrutiny.
-	// The alternative — reporting an unrecorded target as familiar — would let a
+	// The alternative -- reporting an unrecorded target as familiar -- would let a
 	// session past the ceiling launder every subsequent access.
 	DefaultMaxSeenTargets = 4096
 )
@@ -105,7 +105,7 @@ const (
 // The zero value is not usable; use NewState or NewStateWith. A nil
 // *MemoryState is usable and reports the state of a session with no history:
 // every counter zero, nothing seen, no budget spent. That is deliberate and
-// matches what the validator already does with a nil SessionState — an absent
+// matches what the validator already does with a nil SessionState -- an absent
 // history means nothing has been spent, never that everything has.
 type MemoryState struct {
 	// --- immutable after construction ---------------------------------------
@@ -125,7 +125,7 @@ type MemoryState struct {
 	//
 	// One exception, and it is here rather than buried at the field: startNanos
 	// and hostClock are also written by SetStartedAt, which the session
-	// lifecycle manager calls from whichever goroutine drives the lifecycle —
+	// lifecycle manager calls from whichever goroutine drives the lifecycle --
 	// not the event writer. Both are atomic and the write happens once, guarded
 	// by a compare-and-swap, so the two writers cannot interleave into a
 	// half-set start. Nothing else here has a second writer.
@@ -292,7 +292,7 @@ func (s *MemoryState) SessionID() string {
 //
 // The single writer for a session's mutable state, and the one that has to
 // agree with the validator about what it is counting. It classifies the event
-// through validator.ObservationOf — the same bridge the validator uses — so the
+// through validator.ObservationOf -- the same bridge the validator uses -- so the
 // Kind charged to a budget is the Kind the budget check will ask about, and
 // then charges the budgets through validator.ModifiesFilesystem and
 // validator.SpawnsProcess rather than restating either set.
@@ -387,7 +387,7 @@ func (s *MemoryState) RecordDecision(d *decision.Decision) {
 // An index outside the envelope's grants is ignored rather than fatal. It can
 // only come from a caller that mismatched a result with a state, and panicking
 // on the hot path would end governance for the whole session over an accounting
-// error — the wrong trade when the alternative is one uncharged use.
+// error -- the wrong trade when the alternative is one uncharged use.
 func (s *MemoryState) RecordGrantUse(grantIndex int) {
 	if s == nil || grantIndex < 0 || grantIndex >= len(s.grantUses) {
 		return
@@ -398,7 +398,7 @@ func (s *MemoryState) RecordGrantUse(grantIndex int) {
 // --- validator.SessionState --------------------------------------------------
 
 // GrantUseCount reports how many times the grant at grantIndex has been
-// exercised. An unknown index reports zero, which reads as "no budget spent" —
+// exercised. An unknown index reports zero, which reads as "no budget spent" --
 // the same thing an absent history reports, and the safe direction for a
 // counter the validator compares against a limit.
 func (s *MemoryState) GrantUseCount(grantIndex int) int {
@@ -437,7 +437,7 @@ func (s *MemoryState) ProcessCount() int {
 // ElapsedSeconds reports how long the session has been running.
 //
 // Which clock measures it is fixed at construction, and the split is the same
-// one the validator makes about envelope expiry — a recorded session must reach
+// one the validator makes about envelope expiry -- a recorded session must reach
 // the verdicts it reached live, so an archived stream cannot be measured
 // against today.
 //
@@ -474,8 +474,8 @@ func (s *MemoryState) ElapsedSeconds() float64 {
 // The lifecycle manager calls this at Start, so that elapsed time in a session
 // constraint and elapsed time in the lifecycle record are the same measurement
 // rather than two clocks started moments apart. A state constructed with a zero
-// Config.StartedAt is on the *stream* clock — elapsed time derived from the
-// events themselves — which is what a replay wants and what a session that has
+// Config.StartedAt is on the *stream* clock -- elapsed time derived from the
+// events themselves -- which is what a replay wants and what a session that has
 // not begun should report; this switches it to the host clock at the moment the
 // agent actually starts.
 //
@@ -484,7 +484,7 @@ func (s *MemoryState) ElapsedSeconds() float64 {
 // duration reset, and a duration that can decrease is a spent time budget that
 // can come back.
 //
-// Safe from any goroutine, unlike most of the writes here — the manager calls
+// Safe from any goroutine, unlike most of the writes here -- the manager calls
 // it from whichever goroutine drives the lifecycle, which is not the session's
 // event writer.
 func (s *MemoryState) SetStartedAt(t time.Time) {
@@ -609,8 +609,8 @@ func (s *MemoryState) PeakRiskScore() float64 {
 // exercised, in envelope order.
 //
 // The precise form of what Summary.UnusedGrants reports as Kinds. A caller that
-// needs to name the grant — an approval UI explaining that the envelope asked
-// for more than the task used — wants the index, because two grants can share a
+// needs to name the grant -- an approval UI explaining that the envelope asked
+// for more than the task used -- wants the index, because two grants can share a
 // Kind and differ entirely in scope.
 //
 // Owner-goroutine only.
@@ -633,7 +633,7 @@ func (s *MemoryState) UnusedGrantIndexes() []int {
 // Outcome builds the session outcome from what was recorded.
 //
 // The counters already hold everything Outcome states, and deriving it here
-// stops each caller from assembling it slightly differently — in particular
+// stops each caller from assembling it slightly differently -- in particular
 // from computing BlockedCount without the Enforced guard.
 func (s *MemoryState) Outcome(reason string) Outcome {
 	return Outcome{
@@ -721,9 +721,9 @@ func (s *MemoryState) topViolations() []string {
 	}
 	entries := make([]entry, 0, len(s.violationTally))
 	for k, n := range s.violationTally {
-		text := fmt.Sprintf("%s ×%d (no rule matched)", k.verdict, n)
+		text := fmt.Sprintf("%s x%d (no rule matched)", k.verdict, n)
 		if k.rule != "" {
-			text = fmt.Sprintf("%s ×%d (rule %s)", k.verdict, n, k.rule)
+			text = fmt.Sprintf("%s x%d (rule %s)", k.verdict, n, k.rule)
 		}
 		entries = append(entries, entry{text: text, n: n})
 	}
@@ -750,7 +750,7 @@ func (s *MemoryState) topViolations() []string {
 //
 // The latest instant only ever moves forward. Wall clock is subject to
 // adjustment and is explicitly not the ordering key (pkg/event), so a record
-// that arrives with an earlier timestamp must not shorten the session — a
+// that arrives with an earlier timestamp must not shorten the session -- a
 // duration that could decrease would let an exhausted budget come back.
 func (s *MemoryState) advanceClock(t time.Time) {
 	if t.IsZero() {

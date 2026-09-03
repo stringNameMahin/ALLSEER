@@ -15,8 +15,8 @@ package telemetry
 // kernel interface and not a file that merely happens to be absent elsewhere.
 // Off Linux the read fails with a path error rather than ErrNoCgroupV2, so the
 // function cannot report the finding it exists to report, and the test written
-// against it — which deliberately asserts against the real host rather than a
-// mock — fails for a reason that says nothing about the check.
+// against it -- which deliberately asserts against the real host rather than a
+// mock -- fails for a reason that says nothing about the check.
 //
 // So the tag is `linux` and not `linux && ebpf`. The narrower tag would have
 // been wrong in the direction startup.go warns about: BPFLoader.Load is the only
@@ -43,7 +43,7 @@ import (
 // Fatal at startup, not a degradation. The probes filter on the value
 // bpf_get_current_cgroup_id() returns, and without a cgroup v2 hierarchy that
 // value cannot identify anything user space can name. Every event would miss
-// the filter and the daemon would run, attach cleanly, and report nothing —
+// the filter and the daemon would run, attach cleanly, and report nothing --
 // which reads downstream as an agent that did nothing. bpf/allseer.bpf.c states
 // where this belongs: "Detecting it belongs to the loader, which is the only
 // side that can refuse to start."

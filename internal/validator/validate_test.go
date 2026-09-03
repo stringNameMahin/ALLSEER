@@ -377,7 +377,7 @@ func TestValidateWorkspaceEscapeIsDistinct(t *testing.T) {
 	}
 
 	// Inside the workspace, outside the granted glob: a mismatch and nothing
-	// more. This is the pair the milestone says must not be conflated —
+	// more. This is the pair the milestone says must not be conflated --
 	// editing the wrong source file is not the same event as writing to /etc.
 	inside := validate(t, env, fileEvent(capability.KindFileRead, "/ws/docs/notes.md"), nil)
 	if !hasViolation(inside, ViolationSelectorMismatch) {
@@ -396,8 +396,8 @@ func TestValidateWorkspaceEscapeIsDistinct(t *testing.T) {
 }
 
 func TestValidateWorkspaceEscapeNotReportedWhenGranted(t *testing.T) {
-	// A grant that deliberately reaches outside the workspace — a module cache,
-	// a toolchain — is authorized. Flagging it would make the signal useless in
+	// A grant that deliberately reaches outside the workspace -- a module cache,
+	// a toolchain -- is authorized. Flagging it would make the signal useless in
 	// exactly the sessions where it matters.
 	env := envelope([]capability.Grant{
 		pathGrantOf(capability.KindFileRead, "/ws/**", "/home/dev/.cache/go-build/**"),

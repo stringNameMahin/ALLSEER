@@ -107,7 +107,7 @@ func seq(a *decision.RiskAssessment) *decision.Factor {
 
 // A successful read of credential material followed by an outbound connection.
 // The factor has to name both ends, the window it searched, and the distance
-// between them — a score with no decomposition cannot be defended, and a
+// between them -- a score with no decomposition cannot be defended, and a
 // sequence with no attribution cannot be checked.
 func TestSensitiveAccessThenEgressIsASequence(t *testing.T) {
 	h := history().withRecent(
@@ -201,7 +201,7 @@ func TestSequenceStacksWithoutDisturbingTheOtherFactors(t *testing.T) {
 // --- 2. the negatives, one per rule ---------------------------------------------------
 
 // Credential access with nothing after it is not a sequence. The detector runs
-// on the egress event, so an access on its own has nothing to attach to — and,
+// on the egress event, so an access on its own has nothing to attach to -- and,
 // just as importantly, an access followed by an ordinary file operation must
 // not manufacture one.
 func TestSensitiveAccessWithNoEgressIsNotASequence(t *testing.T) {
@@ -265,8 +265,8 @@ func TestTwoUnrelatedEventsAreNotASequence(t *testing.T) {
 }
 
 // A read that failed disclosed nothing, so there is nothing that could
-// subsequently leave. The corpus already carries this exact case — gt-009, an
-// ENOENT on ~/.ssh/id_rsa — and counting it would build a sequence on an event
+// subsequently leave. The corpus already carries this exact case -- gt-009, an
+// ENOENT on ~/.ssh/id_rsa -- and counting it would build a sequence on an event
 // that transferred no bytes.
 func TestAFailedAccessDoesNotQualify(t *testing.T) {
 	a := scoreWith(t, seqEngine(t), egressReq("e-1", capability.KindNetConnect, egressTarget,
@@ -278,7 +278,7 @@ func TestAFailedAccessDoesNotQualify(t *testing.T) {
 }
 
 // Only reading discloses. Writing to a credential path is tampering or
-// persistence — a real concern and a different one, belonging to a scorer that
+// persistence -- a real concern and a different one, belonging to a scorer that
 // does not exist.
 func TestOnlyAReadQualifiesAsAccess(t *testing.T) {
 	e := seqEngine(t)
@@ -354,7 +354,7 @@ func TestUnknownSensitivityIsNotCredentialAccess(t *testing.T) {
 }
 
 // An `info` rating means "we looked, and this is ordinary". It must not become
-// credential access by accident, and neither must `low` or `medium` — the
+// credential access by accident, and neither must `low` or `medium` -- the
 // shipped list describes medium as identity and history routinely read by
 // ordinary tooling, which is exactly the traffic a detector must not fire on.
 func TestGradesBelowHighAreNotCredentialAccess(t *testing.T) {
@@ -561,8 +561,8 @@ func TestEveryEgressEventIsEvaluatedIndependently(t *testing.T) {
 
 // An event cannot be its own antecedent.
 //
-// The pipeline guarantees this structurally — commit runs after the whole stage
-// list, so the event under judgment is not in history — and internal/pipeline
+// The pipeline guarantees this structurally -- commit runs after the whole stage
+// list, so the event under judgment is not in history -- and internal/pipeline
 // asserts that end to end. Asserted here too, against a request assembled by
 // hand with the current event planted in its own history, because the scorer
 // must not depend on a caller getting the ordering right to avoid fabricating a
@@ -598,7 +598,7 @@ func TestTheCurrentEventCannotSatisfyItsOwnSequence(t *testing.T) {
 
 // --- 7. the invariant a covered event keeps ---------------------------------------------
 
-// An event the envelope covered scores exactly zero, sequence or not — LevelNone
+// An event the envelope covered scores exactly zero, sequence or not -- LevelNone
 // has to keep meaning "nothing departed". The finding is still reported, with
 // not_charged saying why, because a granted connection after a credential read
 // is the envelope author's decision and an auditor should see it happened.
@@ -795,7 +795,7 @@ func BenchmarkScoreSequenceEgressFullScan(b *testing.B) {
 
 // The realistic shape of a build's window: reads, writes, execs and network
 // traffic mixed, so only some candidates reach the oracle at all. The two cheap
-// pre-checks — the syscall's result and the observation's Kind — are what stand
+// pre-checks -- the syscall's result and the observation's Kind -- are what stand
 // between this number and the one above.
 func BenchmarkScoreSequenceEgressMixedWindow(b *testing.B) {
 	h := history()

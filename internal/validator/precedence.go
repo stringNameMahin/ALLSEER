@@ -197,7 +197,7 @@ var dimensionNames = [numDimensions]string{
 //
 // Only entries that already matched reach precedence, so a selector dimension
 // left empty is genuinely unconstrained rather than merely unmatched, and
-// scores zero — the broadest possible value.
+// scores zero -- the broadest possible value.
 func SpecificityOf(g capability.Grant) Specificity {
 	var s Specificity
 	sel := g.Selector

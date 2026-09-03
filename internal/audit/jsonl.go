@@ -8,8 +8,8 @@
 // # Format
 //
 // Append-only JSON Lines, one decision.Decision per line. Fixed by
-// docs/architecture.md as a communication decision — an audit record has to be
-// greppable and consumable by external tooling without a library — and by
+// docs/architecture.md as a communication decision -- an audit record has to be
+// greppable and consumable by external tooling without a library -- and by
 // config.AuditConfig.Format, which names "jsonl". The record is exactly what
 // encoding/json produces for a Decision: this package adds no envelope, no
 // wrapper, and no field of its own. A second decision schema, invented here so
@@ -46,8 +46,8 @@
 //  2. Nothing calls Flush. pipeline.EventPipeline.Run returns as soon as its
 //     source closes and never flushes, so a sink that buffered in user space
 //     would silently lose its last records on a clean shutdown. Rather than
-//     invent a lifecycle the interfaces do not have — a background flusher, a
-//     Close the interface does not declare, a Run that flushes — this sink does
+//     invent a lifecycle the interfaces do not have -- a background flusher, a
+//     Close the interface does not declare, a Run that flushes -- this sink does
 //     not buffer across Emit calls. Every Emit performs one write. A record is
 //     therefore in the operating system's hands the moment Emit returns, and
 //     nothing is lost by never calling Flush. Flush remains meaningful and is
@@ -64,7 +64,7 @@
 //     to make, and the resolution taken here is that SyncWrites is that
 //     operator's explicit choice and therefore permits the synchronous
 //     durability operation the interface otherwise discourages. With SyncWrites
-//     false — the default — Emit issues one write and never waits for a disk.
+//     false -- the default -- Emit issues one write and never waits for a disk.
 //     With it true, Emit additionally fsyncs and does block, visibly, because
 //     that is what was asked for. Neither setting buffers or drops, so the
 //     interface's suggested escape hatch is not implemented: dropping under
@@ -92,7 +92,7 @@ import (
 //
 // config.AuditConfig documents "jsonl" or "cbor". CBOR is named and not
 // implemented, and an unimplemented format is refused at Open rather than
-// silently downgraded to this one — an operator who configured cbor and got
+// silently downgraded to this one -- an operator who configured cbor and got
 // JSONL would have an audit log in a format nothing they built expects, and
 // would not find out until they tried to read it.
 const FormatJSONL = "jsonl"
@@ -141,7 +141,7 @@ type syncWriteCloser interface {
 // JSONLSink is an append-only JSONL implementation of decision.Sink.
 //
 // Safe for concurrent use. The pipeline processes one session serially on one
-// goroutine, so a sink serving a single pipeline would need no lock — but that
+// goroutine, so a sink serving a single pipeline would need no lock -- but that
 // is a guarantee about a pipeline, not about a sink. One audit file is a
 // process-wide resource that several session pipelines are expected to share,
 // and Flush and Close arrive from whichever goroutine is running shutdown. The
@@ -232,7 +232,7 @@ func (s *JSONLSink) Path() string { return s.path }
 //
 // The Decision is taken by value and only read. Its slices and maps are shared
 // with the caller and are not modified, so a caller may keep using the value it
-// passed — a sink that normalized a record in place would silently change what
+// passed -- a sink that normalized a record in place would silently change what
 // the rest of the pipeline sees.
 //
 // ctx is accepted for the interface and deliberately not honored as a
@@ -286,7 +286,7 @@ func (s *JSONLSink) Emit(_ context.Context, d decision.Decision) error {
 
 // Flush makes everything written so far durable.
 //
-// One fsync, no buffer drain, because there is no buffer to drain — see the
+// One fsync, no buffer drain, because there is no buffer to drain -- see the
 // package doc on why this sink does not buffer across calls. Flush is therefore
 // about surviving a machine crash rather than about not losing records at
 // shutdown, and it is safe and meaningful to call on a sink that has emitted
@@ -312,8 +312,8 @@ func (s *JSONLSink) Flush(_ context.Context) error {
 //
 // Not part of decision.Sink, which declares only Emit and Flush. It is on the
 // concrete type because this one owns a file descriptor and something has to
-// hand it back; adding it to the interface would oblige every sink — a stdout
-// printer, a test recorder — to have a lifecycle it does not have.
+// hand it back; adding it to the interface would oblige every sink -- a stdout
+// printer, a test recorder -- to have a lifecycle it does not have.
 //
 // Idempotent, so it can be deferred beside an explicit call. Emit and Flush
 // after Close report ErrClosed rather than silently discarding, since a
@@ -353,14 +353,14 @@ func (s *JSONLSink) Stats() Stats {
 // The question config.AuditConfig poses and does not answer is whether an allow
 // is recorded. It is: routine means the envelope covered the operation *and*
 // policy allowed it. Both halves are required, because they are separate
-// findings — a within-envelope event can still be warned on by a risk-
+// findings -- a within-envelope event can still be warned on by a risk-
 // conditioned rule, and that rule firing is the whole reason the rule exists.
 // Anything else, including every verdict that is not within_envelope and every
 // indeterminate decision from a stage failure, is recorded whatever this
 // setting says.
 //
-// The default is false — configs/allseerd.example.yaml sets record_all_events
-// to false and calls the alternative expensive — so the shipped posture is
+// The default is false -- configs/allseerd.example.yaml sets record_all_events
+// to false and calls the alternative expensive -- so the shipped posture is
 // violations only, and replay-based development turns it on.
 func routine(d decision.Decision) bool {
 	return d.Verdict == decision.VerdictWithinEnvelope && d.Action == ece.ActionAllow
@@ -374,7 +374,7 @@ func routine(d decision.Decision) bool {
 // rather than stubbed, so the gap is loud.
 // TODO(audit): hash chaining for tamper evidence, which TODO(decision) in
 // pkg/decision raises and does not settle. It needs the threat-model answer
-// first — the agent may run as the same user as the daemon in the single-user
+// first -- the agent may run as the same user as the daemon in the single-user
 // development case, and a chain that user can recompute proves nothing.
 // TODO(audit): the drop-with-a-counter behavior decision.Sink's contract
 // suggests. It cannot be written before the end-to-end backpressure policy

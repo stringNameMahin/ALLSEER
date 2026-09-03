@@ -20,8 +20,8 @@ import (
 // Rules are ordered once, by priority descending and then by declaration order,
 // and the first eligible rule whose conditions all hold decides the action. No
 // rule after it is consulted, no scores are combined, and no action is
-// synthesized from several matches. The alternative — evaluating everything and
-// merging — produces outcomes no operator can predict by reading the file, and
+// synthesized from several matches. The alternative -- evaluating everything and
+// merging -- produces outcomes no operator can predict by reading the file, and
 // an unpredictable policy is one that gets disabled.
 //
 // Three properties are load-bearing and each is pinned by a test:
@@ -63,7 +63,7 @@ var _ Engine = (*RuleEngine)(nil)
 //
 // Refusing at construction is deliberate. A malformed rule discovered at
 // evaluation time would have to fail somehow on the hot path, and every
-// available failure — skip the rule, block the event, allow the event — is
+// available failure -- skip the rule, block the event, allow the event -- is
 // worse than not starting with it. The checks here are structural admission,
 // not linting: whether a rule is shadowed or can never match is Linter's
 // question, and it is answered separately because it is advisory.
@@ -112,8 +112,8 @@ func (e *RuleEngine) Evaluate(_ context.Context, req EvaluateRequest) (*Outcome,
 		}, nil
 	}
 
-	// The posture. Reaching here is not a failure — most rule sets deliberately
-	// leave the common case to the default — but it is the outcome an operator
+	// The posture. Reaching here is not a failure -- most rule sets deliberately
+	// leave the common case to the default -- but it is the outcome an operator
 	// should be able to predict, so it names itself rather than the last rule
 	// considered.
 	return &Outcome{
@@ -340,7 +340,7 @@ func matches(c Condition, req EvaluateRequest) bool {
 //
 // A missing assessment fails every one of them. Treating it as a zero score
 // would be worse than it looks: min_risk_score conditions would behave, but a
-// max_risk_score rule — "low risk, just warn" — would fire on every event whose
+// max_risk_score rule -- "low risk, just warn" -- would fire on every event whose
 // risk was never computed, attaching a reassuring classification to evidence
 // that does not exist. Until internal/risk lands, rules with risk conditions
 // simply do not fire, which is visible in the outcome's RuleID rather than
@@ -362,7 +362,7 @@ func riskMatches(c Condition, risk *decision.RiskAssessment) bool {
 	// (min 50) with indeterminate-low-risk (max 50), and medium-risk-departure
 	// (min 40, max 75) with high-risk-departure (min 75). Under an inclusive
 	// maximum a score of exactly 50 or 75 would satisfy both rules of each
-	// pair, and first-match-wins would quietly pick one — hiding the ambiguity
+	// pair, and first-match-wins would quietly pick one -- hiding the ambiguity
 	// precisely at the threshold an operator chose deliberately.
 	if c.MaxRiskScore != nil && risk.Score >= *c.MaxRiskScore {
 		return false
@@ -381,7 +381,7 @@ func riskMatches(c Condition, risk *decision.RiskAssessment) bool {
 // It borrows the validator's matchers rather than reimplementing them, for the
 // reason the envelope linter does: a rule that means something different from
 // the grant it was written to complement is a bug nobody can see. An event that
-// cannot be resolved to an observation matches neither dimension — the same
+// cannot be resolved to an observation matches neither dimension -- the same
 // no-evidence rule as risk, and the same reason.
 func targetMatches(c Condition, req EvaluateRequest) bool {
 	if req.Event == nil {

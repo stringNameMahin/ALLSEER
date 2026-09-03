@@ -16,8 +16,8 @@
 // # Why a deliberately narrow parser
 //
 // This is not a C parser. It understands exactly the constructs
-// allseer_event.h uses — integer #defines, one enum, plain structs of
-// fixed-width scalars and char arrays, and a single named union — and it
+// allseer_event.h uses -- integer #defines, one enum, plain structs of
+// fixed-width scalars and char arrays, and a single named union -- and it
 // **refuses everything else with an error naming the line**.
 //
 // That refusal is the design. A parser that skipped a construct it did not
@@ -31,7 +31,7 @@
 // It emits the ABI shape and nothing above it. Translating a decoded record
 // into event.Event, and mapping allseer_event_type onto capability.Kind
 // through the M1 catalog, is a separate concern with a separate milestone issue
-// — so this package imports neither pkg/event nor pkg/capability, and the
+// -- so this package imports neither pkg/event nor pkg/capability, and the
 // generated code has no dependency beyond encoding/binary.
 package abigen
 
@@ -50,7 +50,7 @@ import (
 // leaves source to the developer's core.autocrlf, so allseer_event.h is CRLF on
 // a Windows checkout and LF on a Linux one. Without this, the digest embedded
 // in the generated file would differ between the two and the staleness check
-// would fail on whichever platform did not generate it — reporting drift that
+// would fail on whichever platform did not generate it -- reporting drift that
 // is not drift, which is worse than no check at all.
 func Normalize(b []byte) []byte {
 	return []byte(strings.ReplaceAll(string(b), "\r\n", "\n"))
@@ -63,7 +63,7 @@ func Normalize(b []byte) []byte {
 // as ../../../bpf/include/allseer_event.h, while the Makefile target and the
 // staleness test reach it from the repository root. The path is recorded in the
 // generated file's comment, so without this the two invocations produce
-// different bytes and each reports the other's output as stale — a check that
+// different bytes and each reports the other's output as stale -- a check that
 // fires on how it was called rather than on what changed is worse than none.
 func canonicalSourcePath(p string) string {
 	p = strings.ReplaceAll(p, "\\", "/")

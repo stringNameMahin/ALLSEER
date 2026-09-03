@@ -236,7 +236,7 @@ func TestEveryTransitionPairIsClassified(t *testing.T) {
 	}
 
 	// Every non-terminal state must have some way out, or a session can enter
-	// it and never leave — holding its tracking state and never appearing in a
+	// it and never leave -- holding its tracking state and never appearing in a
 	// completed-session query.
 	for _, from := range AllStates() {
 		if IsTerminal(from) {
@@ -331,7 +331,7 @@ func TestTerminalStatesAreFinal(t *testing.T) {
 }
 
 // A session is started once. Two Starts would mean two root PIDs for one
-// governed tree, and the second would silently replace the first — leaving the
+// governed tree, and the second would silently replace the first -- leaving the
 // events attributed to a process nothing was watching.
 func TestSessionCannotBeStartedTwice(t *testing.T) {
 	m, _, id := managerFor(t, ManagerConfig{})
@@ -722,7 +722,7 @@ func TestEndRefusesANonTerminalResult(t *testing.T) {
 	}
 }
 
-// A session can fail before it ever starts — an inadmissible envelope, a shim
+// A session can fail before it ever starts -- an inadmissible envelope, a shim
 // that never launched, a daemon shutting down mid-approval. A lifecycle that
 // could only end started sessions would leave those in a non-terminal state
 // forever.
@@ -882,7 +882,7 @@ func TestListIsOrderedAndFiltered(t *testing.T) {
 
 // A pending session that never started has no StartedAt at all. Filtering a
 // time window on it would silently hide exactly the sessions someone querying a
-// window is most likely to want — the ones that failed before they began.
+// window is most likely to want -- the ones that failed before they began.
 func TestListWindowsOnCreatedAtNotStartedAt(t *testing.T) {
 	c := newClock()
 	m := NewManager(ManagerConfig{Now: c.now})
@@ -1089,8 +1089,8 @@ func equal(a, b []string) bool {
 
 // --- benchmarks ---------------------------------------------------------------------------------
 
-// The whole lifecycle of one session. Not a hot path — this runs once or twice
-// per agent invocation rather than once per syscall — measured so that a
+// The whole lifecycle of one session. Not a hot path -- this runs once or twice
+// per agent invocation rather than once per syscall -- measured so that a
 // daemon creating many short sessions has a number rather than an assumption.
 func BenchmarkSessionLifecycle(b *testing.B) {
 	c := newClock()

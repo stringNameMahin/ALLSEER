@@ -8,7 +8,7 @@ package telemetry
 // and most of what is asserted here is about the seam between them rather than
 // about either half. An open event is only correct if the arguments captured at
 // sys_enter and the return captured at sys_exit belong to the same syscall, made
-// by the same thread, in the cgroup that admitted it — and every way of getting
+// by the same thread, in the cgroup that admitted it -- and every way of getting
 // that wrong produces an event that arrives, decodes, and reads as ordinary.
 //
 // Same tag and the same skip discipline as loader_linux_test.go: without root
@@ -24,8 +24,8 @@ package telemetry
 //
 // The tests do it because two of the contract's claims are claims about the map
 // and cannot be observed from the event stream at all. "The entry is deleted on
-// every terminal path" is invisible from outside — a leak looks exactly like
-// correct behaviour until the map fills — and "a stale entry is rejected rather
+// every terminal path" is invisible from outside -- a leak looks exactly like
+// correct behaviour until the map fills -- and "a stale entry is rejected rather
 // than completed" needs a stale entry to exist, which no sequence of ordinary
 // syscalls can produce on demand. These live in the test package, on an
 // unexported field, and nothing outside this file uses them.
@@ -154,7 +154,7 @@ func (lt *lockedThread) open(path string, flags int, mode uint32) int {
 // struct allseer_open_scratch, as bpf/include/allseer_maps.h declares it.
 //
 // Written out here rather than generated, because abigen parses
-// allseer_event.h alone — the record ABI — and the scratch value is deliberately
+// allseer_event.h alone -- the record ABI -- and the scratch value is deliberately
 // not part of that file. scratchMap below checks the total against the loaded
 // map's ValueSize, so a field added to the struct fails these tests loudly
 // instead of shifting what they read.
@@ -239,7 +239,7 @@ func requireNoScratchEntry(t *testing.T, m *bpf.BPFMap, key []byte, when string)
 // whose path matches.
 //
 // The path is the only handle. Unlike an exec, an open says nothing about which
-// binary made it, and unlike an exit it is not one-per-process — this process's
+// binary made it, and unlike an exit it is not one-per-process -- this process's
 // cgroup is the tracked one and the Go runtime opens files constantly, so a test
 // that matched on PID alone would be reading its own noise.
 func collectOpens(t *testing.T, records <-chan []byte, want string, d time.Duration) []decoded {
@@ -544,7 +544,7 @@ func TestRuntimeOpenCarriesFlagsModeAndReturn(t *testing.T) {
 		{
 			// O_CREAT takes precedence over the access mode in
 			// kindForOpenFlags, and mode is only meaningful when a file may be
-			// created — which is the case that has to carry it correctly.
+			// created -- which is the case that has to carry it correctly.
 			name: "create", path: filepath.Join(dir, "allseer-open-created"),
 			flags: syscall.O_CREAT | syscall.O_WRONLY, mode: 0o640,
 			wantKind: capability.KindFileCreate, wantOK: true,
@@ -606,7 +606,7 @@ func TestRuntimeOpenCarriesFlagsModeAndReturn(t *testing.T) {
 // the string short, so abi.CString sees a terminated array and reports the
 // prefix as whole. If the probe ever filled the field without a terminator the
 // decoder would start refusing these records instead, which is a different and
-// louder failure — so this asserts the contract that exists rather than the one
+// louder failure -- so this asserts the contract that exists rather than the one
 // the TODO(event) in decode.go would like.
 func TestRuntimeOpenPathTruncation(t *testing.T) {
 	l, records := loadAndAttachPrograms(t, ProgOpenatEnter, ProgOpenatExit)
@@ -687,8 +687,8 @@ func TestRuntimeUntrackedCgroupProducesNoOpenEvent(t *testing.T) {
 //
 // Only the exit program is attached, so every openat on this host reaches a
 // program holding a return value and no arguments. A probe that emitted anyway
-// would produce a stream of file events with an empty path, a zero flags word —
-// which kindForOpenFlags reads as fs.read — and a real descriptor, all
+// would produce a stream of file events with an empty path, a zero flags word --
+// which kindForOpenFlags reads as fs.read -- and a real descriptor, all
 // attributed to whatever process happened to be opening a file.
 func TestRuntimeOpenExitWithoutEntryProducesNoEvent(t *testing.T) {
 	l, records := loadAndAttachPrograms(t, ProgOpenatExit)
@@ -744,7 +744,7 @@ drain:
 // This is the PID-reuse guard, and it is the one part of the design that cannot
 // be exercised by making syscalls: a stale entry only exists after a thread has
 // been killed inside openat and its TID reused, which no test can arrange on
-// demand. So the entry is written from user space instead — see the note at the
+// demand. So the entry is written from user space instead -- see the note at the
 // top of this file about why nothing outside a test may do that.
 //
 // The two legs are the whole test. The rejected entry proves the guard fires;
@@ -752,8 +752,8 @@ drain:
 // guard's doing and not a program that ignores injected entries or bytes this
 // test assembled wrongly.
 //
-// The correct stamp is not computable from user space — start_boottime is
-// nanoseconds since boot and /proc reports a task's start in clock ticks — so it
+// The correct stamp is not computable from user space -- start_boottime is
+// nanoseconds since boot and /proc reports a task's start in clock ticks -- so it
 // is learned from the probe itself, under a first loaded object with only the
 // entry side attached, and then used under a second. That is sound because the
 // stamp is a property of the thread rather than of the object, and lockedThread
@@ -823,7 +823,7 @@ func TestRuntimeStaleScratchEntryIsRejectedAndDeleted(t *testing.T) {
 				"the negative leg below would then prove nothing")
 		}
 		if got := int(found[0].event.Process.TID); got != thread.tid {
-			t.Errorf("tid = %d, want %d — the record's identity comes from the entry", got, thread.tid)
+			t.Errorf("tid = %d, want %d -- the record's identity comes from the entry", got, thread.tid)
 		}
 		requireNoScratchEntry(t, m, key, "an entry that was accepted and reported")
 	})
@@ -845,8 +845,8 @@ func TestRuntimeStaleScratchEntryIsRejectedAndDeleted(t *testing.T) {
 // Concurrent opens from several threads are correlated per thread.
 //
 // The key is bpf_get_current_pid_tgid() and every thread here shares a TGID, so
-// a key that used only the process — or a per-CPU slot, which is the other
-// tempting shape for scratch state — would have these calls overwrite each
+// a key that used only the process -- or a per-CPU slot, which is the other
+// tempting shape for scratch state -- would have these calls overwrite each
 // other. The failure that produces is not a missing event: it is an event with
 // one thread's path and another thread's return, which arrives and decodes and
 // reads as ordinary.
@@ -924,15 +924,15 @@ func TestRuntimeConcurrentOpensCorrelatePerThread(t *testing.T) {
 		}
 		got := match.event
 		if int(got.Process.TID) != c.tid {
-			t.Errorf("%s: tid = %d, want %d — this record was correlated to the wrong thread",
+			t.Errorf("%s: tid = %d, want %d -- this record was correlated to the wrong thread",
 				c.path, got.Process.TID, c.tid)
 		}
 		if got.File.Mode != uint32(0o600+i) {
-			t.Errorf("%s: mode = %#o, want %#o — this record carries another call's arguments",
+			t.Errorf("%s: mode = %#o, want %#o -- this record carries another call's arguments",
 				c.path, got.File.Mode, 0o600+i)
 		}
 		if got.Result.ReturnCode != int64(c.ret) {
-			t.Errorf("%s: return code = %d, want %d — this record carries another call's return",
+			t.Errorf("%s: return code = %d, want %d -- this record carries another call's return",
 				c.path, got.Result.ReturnCode, c.ret)
 		}
 		requireNoScratchEntry(t, m, scratchKey(os.Getpid(), c.tid), "a concurrent open that completed")
@@ -1039,8 +1039,8 @@ func TestRuntimeExecExitAndOpenShareOneRingBuffer(t *testing.T) {
 	execPath, pid := execMarker(t, "allseer-coexist-exec")
 
 	// One drain, three record shapes. All three were emitted before any of them
-	// was read — the open, then the exec and exit of a process execMarker waits
-	// for — and reading the stream removes what it reads, so a drain looking for
+	// was read -- the open, then the exec and exit of a process execMarker waits
+	// for -- and reading the stream removes what it reads, so a drain looking for
 	// the open would consume the exec and the exit on its way past them. Two
 	// sequential drains here find the first thing and nothing else, which is not
 	// a property of the probes but of the channel.

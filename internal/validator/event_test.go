@@ -80,7 +80,7 @@ func TestMatchEvent(t *testing.T) {
 // TestMatchEventUnresolvableIsNeverAMatch is the property that makes the bridge
 // safe to put in front of the matcher.
 //
-// The dangerous shape is a Kind-only grant — no selector at all — against an
+// The dangerous shape is a Kind-only grant -- no selector at all -- against an
 // event that could not be resolved. An empty observation would satisfy such a
 // grant and the operation would read as expected behavior, so an unresolvable
 // event has to stop at the bridge rather than arrive as a blank observation.

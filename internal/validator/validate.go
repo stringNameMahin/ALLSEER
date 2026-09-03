@@ -41,8 +41,8 @@ var (
 
 // DefaultValidator is the pure-function implementation of Validator.
 //
-// It composes the pieces that already exist — the event bridge, the selector
-// matcher, and grant precedence — and adds only the ordering above. Safe for
+// It composes the pieces that already exist -- the event bridge, the selector
+// matcher, and grant precedence -- and adds only the ordering above. Safe for
 // concurrent use; holds no per-session state, which is what keeps it a function
 // of its inputs.
 type DefaultValidator struct {
@@ -305,7 +305,7 @@ func (v *DefaultValidator) expired(env *ece.Envelope, eventTime time.Time) (bool
 // workspaceEscape reports a filesystem operation that left the workspace root.
 //
 // Only for uncovered operations: a grant that deliberately reaches outside the
-// workspace — a module cache, a toolchain — is authorized, and flagging it
+// workspace -- a module cache, a toolchain -- is authorized, and flagging it
 // would make the signal useless in exactly the sessions where it matters.
 func (v *DefaultValidator) workspaceEscape(env *ece.Envelope, obs capability.Observation) (Violation, bool) {
 	root := env.Constraints.WorkspaceRoot
@@ -378,24 +378,6 @@ func (v *DefaultValidator) sessionConstraint(env *ece.Envelope, obs capability.O
 // ModifiesFilesystem reports whether a capability changes the filesystem, and
 // so draws on the session's write budget.
 //
-// Done: this is the single definition. It is exported because the session
-// manager must count exactly this set into SessionState.FileWriteCount, and two
-// definitions — one deciding when the budget is breached, one deciding when it
-// is spent — would disagree the first time a Kind was added to only one of
-// them. The disagreement would be silent in both directions: a budget that
-// never runs out, or an event blamed for a budget it never contributed to. The
-// definition lives here, beside the check that consumes it, and
-// internal/session calls it rather than restating it.
-//
-// Deliberately a function of Kind alone. A failed write still counts: a failed
-// action is a governance signal in its own right (pkg/event.Result), and
-// filtering on the syscall return here would make the counted set different
-// from the set this predicate names everywhere else it is used.
-//
-// fs.chmod, fs.chown, and fs.mount are absent on purpose. They change metadata
-// or topology rather than file content, the budget an envelope writes as
-// max_file_writes is about content, and each has its own capability a grant can
-// name directly.
 func ModifiesFilesystem(k capability.Kind) bool {
 	switch k {
 	case capability.KindFileWrite, capability.KindFileCreate, capability.KindFileDelete,
@@ -410,7 +392,7 @@ func ModifiesFilesystem(k capability.Kind) bool {
 //
 // Exported for the same reason ModifiesFilesystem is: SessionState.ProcessCount
 // has to be a count of exactly these events. Note that it counts processes
-// *started*, not processes alive — MaxProcesses is a budget on how much the
+// *started*, not processes alive -- MaxProcesses is a budget on how much the
 // session spawned, and reclaiming budget on exit would make the limit depend on
 // when children happened to be reaped.
 func SpawnsProcess(k capability.Kind) bool {

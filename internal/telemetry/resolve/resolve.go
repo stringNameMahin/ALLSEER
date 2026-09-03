@@ -5,7 +5,7 @@
 // capabilities as grants, the collector resolves each kernel event to an
 // observation, and the validator asks whether the observation is covered. It
 // lives under telemetry because resolution is the last enrichment step, not a
-// validation step — keeping it here is what lets internal/validator stay
+// validation step -- keeping it here is what lets internal/validator stay
 // payload-agnostic, never reaching into FilePayload or NetworkPayload.
 //
 // It is pure: no I/O, no kernel, no DNS. Everything it needs was already
@@ -23,7 +23,7 @@
 // it as unevaluable.
 //
 // That division is deliberate. An empty or unresolved target is not an error
-// here — it is a fact about the observation, and the validator already knows
+// here -- it is a fact about the observation, and the validator already knows
 // what to do with facts it cannot evaluate. Errors are reserved for events that
 // cannot be interpreted at all.
 package resolve
@@ -41,7 +41,7 @@ import (
 
 // Errors reported when an event cannot be turned into an observation.
 //
-// Both mean the same thing operationally — this event cannot be validated —
+// Both mean the same thing operationally -- this event cannot be validated --
 // and neither may be treated as "nothing happened". A caller that cannot
 // resolve an event must surface it, not drop it.
 var (
@@ -200,7 +200,7 @@ func observeProcess(e *event.Event, obs capability.Observation) (capability.Obse
 	// resource these name in the current event model.
 	//
 	// For fork and exit that is the right answer: the process is what acted and
-	// what was acted upon. For signal and ptrace it is not — the resource is
+	// what was acted upon. For signal and ptrace it is not -- the resource is
 	// the *target* process, which the event carries no field for, so a grant's
 	// Executables constrains who may signal rather than who may be signalled.
 	//
@@ -216,7 +216,7 @@ func observeOther(e *event.Event, obs capability.Observation) (capability.Observ
 	// These carry no selector dimension of their own: exercising the capability
 	// is the whole observation, and the Kind alone is what a grant matches.
 	//
-	// Some are nonetheless named by a path — a unix socket, a loaded module —
+	// Some are nonetheless named by a path -- a unix socket, a loaded module --
 	// and the event model has no payload of its own for them. When such an
 	// event arrives carrying a file payload, its resolved path is the resource,
 	// which is what makes a PathPatterns selector on ipc.unixsocket work.

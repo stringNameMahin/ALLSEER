@@ -2,14 +2,14 @@
 #
 # This file is a security claim. Every entry below asserts "this location should
 # be treated as consequential", and ALLSEER ships that assertion rather than
-# leaving the list empty — because an empty list is not neutral. An empty list
+# leaving the list empty -- because an empty list is not neutral. An empty list
 # says nothing is sensitive, which is a claim too, and a false one.
 #
 # What the list does, precisely: `internal/risk`'s sensitive_path scorer adds
 # points to an event's risk score when the *file* it touched matches a `paths`
 # entry, and its sensitive_host scorer does the same when the *destination* it
 # reached matches a `hosts` entry. It only ever *raises* a score. There is no
-# entry, and no grading, that can lower one — a list that could lower a score
+# entry, and no grading, that can lower one -- a list that could lower a score
 # would make "add a path here" a way to launder access, and would make a missing
 # entry indistinguishable from an exemption.
 #
@@ -26,7 +26,7 @@
 # a filesystem glob written under `hosts` is refused at load, and so is a
 # hostname written under `paths`.
 #
-# Patterns are matched by internal/validator's GlobPathMatcher — the same
+# Patterns are matched by internal/validator's GlobPathMatcher -- the same
 # matcher an envelope's grants and denials use, called rather than
 # reimplemented, so an entry here cannot come to mean something different from
 # an identically written grant. That fixes the vocabulary:
@@ -161,7 +161,7 @@ paths:
   - patterns: [/**/.ssh/**]
     sensitivity: high
     reason: >
-      The rest of an SSH directory — config, known_hosts, authorized_keys.
+      The rest of an SSH directory -- config, known_hosts, authorized_keys.
       Reading it enumerates the hosts the user reaches and the identities they
       use; writing authorized_keys is a persistence mechanism.
 
@@ -220,7 +220,7 @@ paths:
   #
   # These entries add nothing to a score. They exist so the audit record can say
   # "rated, and unremarkable" rather than "unrecognized" for the traffic that
-  # dominates every build — which is the difference this module refuses to
+  # dominates every build -- which is the difference this module refuses to
   # collapse, and the reason the oracle has an unknown state at all.
 
   - patterns: [/usr/include/**, /usr/share/**, /usr/lib/**, /usr/local/include/**]
@@ -239,7 +239,7 @@ paths:
       the private counterparts live elsewhere and are rated critical above.
 
 # ===========================================================================
-# hosts — network destinations
+# hosts -- network destinations
 # ===========================================================================
 #
 # Read by `internal/risk`'s sensitive_host scorer, which rates the destination
@@ -247,18 +247,18 @@ paths:
 # an unlisted destination is **unknown**, not unremarkable.
 #
 # ---------------------------------------------------------------------------
-# Host vocabulary — NOT the path vocabulary
+# Host vocabulary -- NOT the path vocabulary
 # ---------------------------------------------------------------------------
 #
 # Patterns here go through internal/validator's ValidateHostPattern and
-# MatchHost — the same functions an envelope's network grants use — so an entry
+# MatchHost -- the same functions an envelope's network grants use -- so an entry
 # means exactly what an identically written grant means. See
 # docs/network-matching.md, which is the normative specification.
 #
 #   api.github.com     an exact name. Compared case-insensitively, with the
 #                      root's trailing dot ignored, on WHOLE names. It does not
 #                      cover evil-github.com, notgithub.com, or
-#                      api.github.com.attacker.tld — careless suffix matching is
+#                      api.github.com.attacker.tld -- careless suffix matching is
 #                      the classic way an attacker-registered domain slips past
 #                      a host list.
 #   *.github.com       a wildcard domain covering EXACTLY ONE additional label,
@@ -274,7 +274,7 @@ paths:
 #
 # There is deliberately **no filesystem-style globbing**. `*` is only ever a
 # whole leading label: `api-*.github.com`, `*.*.github.com`, `**.github.com`,
-# and a bare `*` are all refused at load. Names are ASCII only — an envelope or
+# and a bare `*` are all refused at load. Names are ASCII only -- an envelope or
 # a list carrying a Cyrillic lookalike of `github.com` would grant a host that
 # can never be observed, and rejecting removes the homoglyph problem outright.
 # Ports do not belong in a pattern: `github.com:443` is refused.
@@ -284,7 +284,7 @@ paths:
 # ---------------------------------------------------------------------------
 #
 # The kernel observes addresses; DNS correlation recovers the name when it can,
-# and it is best-effort by construction — DNS-over-HTTPS, a hardcoded address,
+# and it is best-effort by construction -- DNS-over-HTTPS, a hardcoded address,
 # and an expired cache entry all defeat it. The matcher never bridges that gap,
 # so **a destination is rated by the identity the observation carries**: a name
 # entry can only rate an observed name, and an address or block entry can only
@@ -304,7 +304,7 @@ paths:
 # intelligence: a list of bad domains goes stale the week it is written, and
 # ALLSEER's threat model does not include knowing who the attacker is. What a
 # grade says is how consequential *reaching this destination* is, independent
-# of what was sent — because payload inspection is explicitly out of scope.
+# of what was sent -- because payload inspection is explicitly out of scope.
 #
 #   critical  Reaching it hands out credentials, or hands over control of the
 #             host, to whoever asked.
@@ -363,7 +363,7 @@ hosts:
     sensitivity: medium
     reason: >
       Loopback. Ordinary for a dev server or a test suite, and also how an
-      agent reaches an unauthenticated daemon listening only to localhost — a
+      agent reaches an unauthenticated daemon listening only to localhost -- a
       container runtime socket over TCP, a debugger, a language server. Graded
       to be visible in a departure without being alarming on its own.
 
@@ -382,7 +382,7 @@ hosts:
   #
   # These add nothing to a score. They exist so the audit record can say
   # "rated, and unremarkable" rather than "unrecognized" for the destinations
-  # that dominate every build — the same reason /usr/include/** is rated info
+  # that dominate every build -- the same reason /usr/include/** is rated info
   # above, and the reason the oracle has an unknown state at all.
 
   - patterns:

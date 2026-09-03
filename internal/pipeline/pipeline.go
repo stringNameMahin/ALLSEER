@@ -71,8 +71,8 @@ type Stage interface {
 // stays confined to one goroutine for its whole lifetime.
 //
 // The intermediate results are **typed fields, not entries in Values**. They are
-// the system's central artifacts — the validator's answer is what policy reads,
-// and it is what the audit record is assembled from — and routing them through
+// the system's central artifacts -- the validator's answer is what policy reads,
+// and it is what the audit record is assembled from -- and routing them through
 // an `any` map would turn a rename or a type change into a runtime type
 // assertion failure on the hot path, in the one component whose whole job is to
 // not lose events. Values survives for genuinely private stage-to-stage data,
@@ -107,7 +107,7 @@ type ProcessingContext struct {
 
 	// Validation is what the validator concluded. Nil until the validate stage
 	// has run, and a later stage that needs it must fail rather than proceed
-	// without it — a policy decision made against an absent verdict is a
+	// without it -- a policy decision made against an absent verdict is a
 	// decision made about nothing.
 	Validation *validator.Result
 
@@ -134,8 +134,8 @@ type ProcessingContext struct {
 	// event could not be classified, not whether that was the validator's
 	// honest answer about an unresolvable path or the pipeline falling over.
 	// Those are the same finding about the agent and opposite findings about
-	// the system, and a caller that has to tell them apart — a dry run
-	// reporting on a policy, a daemon deciding whether to keep going — should
+	// the system, and a caller that has to tell them apart -- a dry run
+	// reporting on a policy, a daemon deciding whether to keep going -- should
 	// not have to parse a reason string to do it.
 	FailedStage string
 	Err         error
@@ -178,7 +178,7 @@ type State interface {
 //
 // Distinct from session.Session, which is the lifecycle record. This is only
 // the binding a pipeline needs to process events, and the pipeline deliberately
-// does not import internal/session to get it — a pipeline is constructed for a
+// does not import internal/session to get it -- a pipeline is constructed for a
 // session, not the other way round.
 type Session struct {
 	// ID is the session identifier stamped onto every decision. Defaults to
@@ -244,46 +244,23 @@ type ErrorHandler interface {
 	Handle(ctx context.Context, pc *ProcessingContext, stage string, err error) *decision.Decision
 }
 
-// Done: per-session serial processing is EventPipeline in process.go. A
-// pipeline is bound to one session and processes it on one goroutine, which is
-// what makes session.MemoryState's single-writer assumption a guarantee rather
-// than a convention. The stages read, the pipeline writes, and the write
-// happens after the whole stage list — so a budget stays inclusive and the risk
-// stage can still tell a novel target from a familiar one.
-// Done: the risk stage is ScoreStage in stage.go, over internal/risk. It sits
-// between validate and decide, and NewWithRisk in process.go is the composition
-// a daemon should run; New is kept as the unscored one the equivalence test
-// pins against the original hand-written loop. Nothing else in this package
-// changed to accommodate it, which is what the write-last ordering was for.
-// TestRiskStageSeesHistoryBeforeCommit is the end-to-end proof that the scorer
-// sees the session as it stood before the event under judgment.
-// Done: every stage runs under panic recovery in process.go. A panic becomes an
-// ordinary stage error and travels the same route to an indeterminate decision,
-// so one scorer mishandling one malformed path cannot end governance for the
-// session, or for every session sharing the process.
-// Done, in the half that could be built: cross-session *dispatch* — routing an
-// event to the pipeline governing its session — is session.Dispatcher. It is
-// not here for the reason it never was: a pipeline that looked sessions up
-// would be a session registry with a stage list attached, and it reaches this
-// package through a one-method EventProcessor interface it declares itself, so
-// internal/session depends on nothing here.
 // TODO(pipeline): cross-session *parallelism*, keyed by session ID, remains
 // unbuilt and is a different thing from dispatch. It needs a queue and a worker
 // per session, and a bounded queue needs an overflow policy, which is the
-// backpressure decision below. session.Dispatcher is therefore serial — one
-// stream on one goroutine — which is also what keeps each session's
+// backpressure decision below. session.Dispatcher is therefore serial -- one
+// stream on one goroutine -- which is also what keeps each session's
 // single-writer guarantee true by construction. Builder.WithConcurrency still
 // refuses anything above one rather than accepting a number it would ignore.
 // TODO(pipeline): define the backpressure policy end to end, from the kernel
 // ring buffer through to the audit sink, and document where events can be lost.
-// Nothing here buffers yet — Process is synchronous and Run holds no queue —
+// Nothing here buffers yet -- Process is synchronous and Run holds no queue --
 // which is why Stats.QueueDepth is a measured zero rather than an unmeasured
 // one. It stops being trivially true the moment a queue exists.
 // TODO(pipeline): add a tracing decorator so a single event's path through all
 // stages can be inspected during development. ProcessContext already exposes
 // every intermediate result, so this is presentation rather than plumbing.
-// TODO(pipeline): benchmark the number that actually matters — added latency
+// TODO(pipeline): benchmark the number that actually matters -- added latency
 // per governed syscall in enforce mode. BenchmarkProcess covers the
-// deterministic path (2.5 µs/op, 38 allocs/op over validate and decide) but
+// deterministic path (2.5 us/op, 38 allocs/op over validate and decide) but
 // enforcement is M12, and the cost that will decide whether this can be left
 // enabled is the one charged to the agent's syscall.

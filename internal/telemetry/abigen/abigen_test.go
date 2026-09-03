@@ -15,7 +15,7 @@ import (
 //
 // The single most important property of this generator. A parser that silently
 // skipped a construct it did not understand would emit a Go struct missing a
-// field — which is exactly the drift the generator exists to prevent, arriving
+// field -- which is exactly the drift the generator exists to prevent, arriving
 // through the tool meant to stop it. Every one of these must be an error.
 
 func TestParseRefusesUnsupportedConstructs(t *testing.T) {
@@ -81,7 +81,7 @@ func TestParseRefusesUnsupportedConstructs(t *testing.T) {
 			h, err := Parse(tc.src)
 			if err == nil {
 				// Some refusals only become visible at layout time, which is
-				// fine — what matters is that the pipeline as a whole refuses.
+				// fine -- what matters is that the pipeline as a whole refuses.
 				if _, lerr := Layout(h); lerr != nil {
 					err = lerr
 				}
@@ -350,7 +350,7 @@ func TestNamingRules(t *testing.T) {
 // array uses is a value the kernel and user sides compare. Emitting the second
 // under the first's comment would put a false statement about the ABI into the
 // one file nobody is supposed to edit by hand, which is the failure the whole
-// generator exists to prevent — arriving as prose instead of as a wrong offset.
+// generator exists to prevent -- arriving as prose instead of as a wrong offset.
 
 func TestGenerateSeparatesBoundsFromPlainConstants(t *testing.T) {
 	src := `#define MINI_ABI_VERSION 3
@@ -468,7 +468,7 @@ func TestStripCommentsPreservesLineNumbers(t *testing.T) {
 }
 
 // miniHeader is a stand-in with every construct the real header uses, small
-// enough to reason about. It is not a copy of allseer_event.h — that one is
+// enough to reason about. It is not a copy of allseer_event.h -- that one is
 // exercised against its own expectations in internal/telemetry/abi.
 const miniHeader = `#ifndef __MINI_H
 #define __MINI_H

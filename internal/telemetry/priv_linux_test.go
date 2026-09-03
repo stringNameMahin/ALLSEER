@@ -20,7 +20,7 @@ package telemetry
 // The raw syscalls are made with syscall.RawSyscall and never with the
 // syscall package's Setuid and friends. Since Go 1.16 those implement the POSIX
 // whole-process semantics the kernel does not have, by signalling every thread
-// to make the call itself — which is precisely the behaviour these probes are
+// to make the call itself -- which is precisely the behaviour these probes are
 // designed to observe one thread at a time, and precisely what a test asserting
 // per-thread identity must not go through.
 
@@ -229,7 +229,7 @@ func hasField(e decoded, f abi.PrivField) bool {
 // ORs CLONE_THREAD and CLONE_FS into the flags whenever CLONE_NEWUSER is
 // present, and check_unshare_flags then refuses unless thread_group_empty(),
 // so the call returns EINVAL for a caller with siblings. A Go program always has
-// siblings — the runtime starts several Ms before main does — and
+// siblings -- the runtime starts several Ms before main does -- and
 // runtime.LockOSThread does not help, because the restriction is about the
 // thread group rather than about which thread is calling. The same gate closes
 // setns(fd, CLONE_NEWUSER) for a Go process, by way of the CLONE_FS sharing
@@ -271,7 +271,7 @@ func unshareUserNamespace(t *testing.T) int {
 //
 // The single most important claim this feature makes. struct allseer_event
 // carries no syscall identifier, so `operation` is the only thing that separates
-// a setuid record from a capset one — and configs/rules.default.yaml blocks
+// a setuid record from a capset one -- and configs/rules.default.yaml blocks
 // three of the five privilege capabilities terminally while not naming the other
 // two at all, so an operation attributed to the wrong syscall decides the wrong
 // action.
@@ -282,7 +282,7 @@ func unshareUserNamespace(t *testing.T) int {
 // values back; unshare is given no flags; setns is pointed at the namespace the
 // caller is already in; seccomp is asked a question rather than told to install
 // a filter. What is under test is the correlation and the operation, and none of
-// those needs a transition to exercise it — the transitions are asserted
+// those needs a transition to exercise it -- the transitions are asserted
 // separately below.
 func TestRuntimePrivEveryOperationCarriesItsOwnEnum(t *testing.T) {
 	l, records := attachPrivPairs(t)
@@ -428,7 +428,7 @@ func setgroupsOfSelf(t *testing.T, thread *lockedThread) int {
 //
 // This is the claim that makes the whole two-snapshot design worth its bytes.
 // setresuid(-1, uid, -1) moves only the effective uid and leaves real and saved
-// alone, and no argument in the call says so — a probe that had guessed "the
+// alone, and no argument in the call says so -- a probe that had guessed "the
 // new uid is the argument" would have reported all three as changed. The record
 // has to show euid moving and the other two standing still.
 //
@@ -642,7 +642,7 @@ func TestRuntimePrivCapsetReportsCapabilityChange(t *testing.T) {
 	if p.After.CapEffective&(1<<capChownBit) != 0 {
 		t.Errorf("after.cap_effective = %#x; CAP_CHOWN was dropped by the call", p.After.CapEffective)
 	}
-	// Permitted was not touched, so the two sets must now differ — which is
+	// Permitted was not touched, so the two sets must now differ -- which is
 	// also what makes the effective read above a read rather than a copy.
 	if p.After.CapPermitted&(1<<capChownBit) == 0 {
 		t.Errorf("after.cap_permitted = %#x; capset dropped CAP_CHOWN from effective only",
@@ -711,7 +711,7 @@ func TestRuntimePrivNamespaceFlags(t *testing.T) {
 // unshare(CLONE_NEWUSER) does not become a capability-escalation signal.
 //
 // Creating a user namespace hands the caller a full capability set inside the
-// namespace it just created — set_cred_user_ns writes CAP_FULL_SET into
+// namespace it just created -- set_cred_user_ns writes CAP_FULL_SET into
 // permitted, effective and the bounding set, and empties inheritable and
 // ambient. configs/rules.default.yaml blocks priv.escalate terminally, so a
 // consumer that subtracted the two snapshots across that call would hard-block
@@ -727,7 +727,7 @@ func TestRuntimePrivNamespaceFlags(t *testing.T) {
 // changed. That is what a kernel can be asked for and what a BPF bug would
 // break, so it is asserted here.
 //
-// The decoder's half is the response to that input — withholding the delta when
+// The decoder's half is the response to that input -- withholding the delta when
 // the inodes differ. Asserting it *here* is not possible against a root caller,
 // and the reason is worth stating rather than leaving as a weak assertion: root
 // already holds CAP_FULL_SET before the call, so the after snapshot is not a
@@ -735,7 +735,7 @@ func TestRuntimePrivNamespaceFlags(t *testing.T) {
 // exists or not. A test that read a passing result as proof of the guard would
 // be reading a tautology. The case where the sets genuinely appear to grow needs
 // a before-state the kernel will not hand a root caller, so it is constructed
-// directly in TestDecodePrivilegeComputesCapabilityDelta — the
+// directly in TestDecodePrivilegeComputesCapabilityDelta -- the
 // "a user namespace change withholds the delta" subtest, which feeds the decoder
 // before=0, after=nearly-everything and differing inodes.
 //
@@ -807,7 +807,7 @@ func TestRuntimePrivUserNamespaceProducesNoFalseCapabilityDelta(t *testing.T) {
 // snapshots are equal.
 //
 // The ABI's attempted-change semantics, asserted end to end. A negative ret
-// means the kernel committed nothing, so `after` must equal `before` — and the
+// means the kernel committed nothing, so `after` must equal `before` -- and the
 // record saying so is a stronger statement than the record being absent. An
 // agent repeatedly failing to reach uid 0 has said something about itself.
 func TestRuntimePrivFailedSyscallIsReportedAsAnAttempt(t *testing.T) {
@@ -857,7 +857,7 @@ func TestRuntimePrivFailedSyscallIsReportedAsAnAttempt(t *testing.T) {
 //
 // fields_present is what separates "this field holds zero" from "this field was
 // never filled", and the header is explicit that without it the most important
-// transition the record can carry — a process arriving at uid 0 — would be
+// transition the record can carry -- a process arriving at uid 0 -- would be
 // indistinguishable from a record that carried no identity at all. On a live
 // task every group is reachable, so this is the case where all eight bits must
 // be set; a bit missing here would mean the probe silently failed a read.
@@ -977,7 +977,7 @@ func TestRuntimeUntrackedCgroupProducesNoPrivEvent(t *testing.T) {
 	requireNoPrivScratchEntry(t, privScratchMap(t, l), scratchKey(os.Getpid(), thread.tid),
 		"a privilege syscall the cgroup filter rejected")
 
-	// And the same call, once the cgroup is declared, does produce one — which
+	// And the same call, once the cgroup is declared, does produce one -- which
 	// is what rules out the probe simply being broken.
 	trackThisCgroup(t, l)
 	if ret := thread.priv(syscall.SYS_SETRESUID, ^uintptr(0), ^uintptr(0), ^uintptr(0)); ret != 0 {
@@ -1156,7 +1156,7 @@ func TestRuntimePrivProbeCountsDropsAndStillDeletesScratch(t *testing.T) {
 // Every privilege program attaches and detaches together with the rest.
 //
 // Twenty-two programs is enough that an omission would be easy to miss, so this
-// ranges over ProgPrivPairs rather than a list written here — the same list the
+// ranges over ProgPrivPairs rather than a list written here -- the same list the
 // production caller would use.
 func TestRuntimePrivProgramsAttachAndDetachTogether(t *testing.T) {
 	requireRoot(t)

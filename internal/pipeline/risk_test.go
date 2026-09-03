@@ -17,7 +17,7 @@ import (
 	"github.com/stringNameMahin/ALLSEER/pkg/event"
 )
 
-// This file covers the score stage: the composition validate → score → decide,
+// This file covers the score stage: the composition validate -> score -> decide,
 // and the two claims that only hold end to end. That the scorer reads the
 // session history *before* the pipeline commits the event is one of them, and it
 // is unobservable from either package alone. That a risk-conditioned policy rule
@@ -73,7 +73,7 @@ func buildScored(t *testing.T, env *ece.Envelope, st State, rs *policy.RuleSet) 
 	return p
 }
 
-// shippedOracle loads configs/sensitivity.default.yaml — the list the project
+// shippedOracle loads configs/sensitivity.default.yaml -- the list the project
 // actually ships, not a fixture. The defaults are a security claim, and a claim
 // exercised only against a test-local list is a claim nothing checks.
 func shippedOracle(t *testing.T) *risk.ResourceOracle {
@@ -108,7 +108,7 @@ func buildRated(t *testing.T, env *ece.Envelope, st State, rs *policy.RuleSet) *
 }
 
 // escapeEnvelope grants reads inside a workspace, so a read outside it is a
-// grant_exceeded that is also a workspace escape — the highest-scoring shape the
+// grant_exceeded that is also a workspace escape -- the highest-scoring shape the
 // baseline model produces without an explicit denial.
 func escapeEnvelope() *ece.Envelope {
 	env := envelope(
@@ -121,7 +121,7 @@ func escapeEnvelope() *ece.Envelope {
 
 // --- the composition ----------------------------------------------------------------
 
-// Event → validate → score → decide, with each stage's output visible on the
+// Event -> validate -> score -> decide, with each stage's output visible on the
 // context and the finished Decision carrying the assessment.
 func TestPipelineScoresBetweenValidateAndDecide(t *testing.T) {
 	env := escapeEnvelope()
@@ -249,7 +249,7 @@ func TestRiskConditionedRulesStayInertWithoutAScoreStage(t *testing.T) {
 // pass the target has never been seen, so the novelty factor fires; on the
 // second the pipeline has committed the first event, so it does not. If commit
 // ran before the score stage the first pass would already read as familiar and
-// the factor could never fire at all — which is the failure this pins.
+// the factor could never fire at all -- which is the failure this pins.
 func TestRiskStageSeesHistoryBeforeCommit(t *testing.T) {
 	env := escapeEnvelope()
 	st := session.NewState("s-1", env)
@@ -296,7 +296,7 @@ func TestRiskStageSeesHistoryBeforeCommit(t *testing.T) {
 	}
 
 	// A within-envelope event reads no history at all, which is what keeps the
-	// common path free — asserted through the observable consequence, that it
+	// common path free -- asserted through the observable consequence, that it
 	// scores zero however noisy the session already is.
 	clean := process(t, p, fileEvent("e-3", capability.KindFileRead, "/ws/a.go"))
 	if clean.Risk.Score != 0 || clean.Risk.Level != decision.LevelNone {
@@ -312,7 +312,7 @@ func TestRiskStageSeesHistoryBeforeCommit(t *testing.T) {
 // Without one, a private key and a system header are the same event to the
 // scorer: both are reads outside the workspace, both produce the same verdict
 // and the same violation severities, so both score identically. With the
-// shipped list behind it, they separate — and they separate by exactly the
+// shipped list behind it, they separate -- and they separate by exactly the
 // difference between a critical grade and an info one, which is the whole
 // mechanism, checkable by hand.
 //
@@ -354,7 +354,7 @@ func TestSensitivityIsWhatSeparatesAKeyFromAHeader(t *testing.T) {
 			t.Errorf("key %v, header %v; want the key higher by exactly the critical grade (25)",
 				key.Score, header.Score)
 		}
-		// Both still bucket to "high" — 55 and 80 sit inside the same band, and
+		// Both still bucket to "high" -- 55 and 80 sit inside the same band, and
 		// that is the honest reading of the level scale rather than a defect.
 		// What the 25 points buy is crossing the threshold the shipped rule set
 		// actually keys on, which is the separation that changes an outcome.
@@ -367,7 +367,7 @@ func TestSensitivityIsWhatSeparatesAKeyFromAHeader(t *testing.T) {
 				key.Score, credentialRuleFloor)
 		}
 
-		// The header is *rated*, not merely unlisted — which is the distinction
+		// The header is *rated*, not merely unlisted -- which is the distinction
 		// the sensitivity list exists to make and the reason it contributes an
 		// info entry that scores nothing.
 		hf := riskFactor(header, risk.FactorSensitivePath)
@@ -580,7 +580,7 @@ type scoredOutcome struct {
 // corpus, and must not change any action.
 //
 // What it does change is which rule produced that action, and only in one
-// direction — an event that used to fall through to the posture now matches a
+// direction -- an event that used to fall through to the posture now matches a
 // rule whose risk condition it could not previously satisfy. That is the point
 // of the milestone, so it is asserted event by event rather than tolerated.
 func TestScoredPipelineOnTheReplayCorpus(t *testing.T) {
@@ -635,7 +635,7 @@ func TestScoredPipelineOnTheReplayCorpus(t *testing.T) {
 				}
 				// No action changes anywhere in the corpus.
 				if s.Action != u.Action {
-					t.Errorf("%s: action %q scored, %q unscored — a scored run changed what would happen",
+					t.Errorf("%s: action %q scored, %q unscored -- a scored run changed what would happen",
 						s.EventID, s.Action, u.Action)
 				}
 				if s.Rule != u.Rule {
@@ -674,9 +674,9 @@ func TestScoredPipelineOnTheReplayCorpus(t *testing.T) {
 type corpusMode int
 
 const (
-	corpusUnscored corpusMode = iota // validate → decide
-	corpusScored                     // validate → score → decide, no oracle
-	corpusRated                      // …with the shipped sensitivity list
+	corpusUnscored corpusMode = iota // validate -> decide
+	corpusScored                     // validate -> score -> decide, no oracle
+	corpusRated                      // ...with the shipped sensitivity list
 )
 
 func runCorpus(t *testing.T, events []event.Event, mode corpusMode) []scoredOutcome {
@@ -745,7 +745,7 @@ func TestScoredPipelineIsDeterministic(t *testing.T) {
 //
 // This is the regression the milestone has to survive twice over: the oracle
 // reads only the resource, so no verdict may move, and no event the list has
-// never heard of may move either. The single change is gt-009 — a read of
+// never heard of may move either. The single change is gt-009 -- a read of
 // ~/.ssh/id_rsa that used to warn as an ordinary workspace escape and now
 // requests approval under the rule written for it. It is asserted as an exact
 // map, so both an unlisted change and a lost one fail.
@@ -774,7 +774,7 @@ func TestSensitivityChangesExactlyOneEventInTheCorpus(t *testing.T) {
 				s, r := scored[i], rated[i]
 
 				if r.Verdict != s.Verdict {
-					t.Errorf("%s: verdict %q rated, %q unrated — sensitivity must not reach validation",
+					t.Errorf("%s: verdict %q rated, %q unrated -- sensitivity must not reach validation",
 						r.EventID, r.Verdict, s.Verdict)
 				}
 				if r.Score < s.Score {
@@ -846,7 +846,7 @@ func BenchmarkProcessRated(b *testing.B) {
 	}
 }
 
-// The scored hot path, against BenchmarkProcess's unscored 2.5 µs. The delta is
+// The scored hot path, against BenchmarkProcess's unscored 2.5 us. The delta is
 // what adding risk costs per governed syscall.
 func BenchmarkProcessScored(b *testing.B) {
 	env := envelope([]capability.Grant{pathGrant(capability.KindFileWrite, 0, "/ws/**")}, nil, ece.Constraints{})

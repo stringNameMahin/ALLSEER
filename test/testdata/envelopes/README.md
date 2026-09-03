@@ -10,7 +10,7 @@ Committed Expected Capability Envelopes, one per replay recording it governs.
 Until these existed, every envelope in the tree was built in Go inside a test.
 That was workable for unit tests and blocking for two things: `allseerctl policy
 dry-run`'s `--envelope` flag had nothing to point at, and the end-to-end golden
-test would have had to construct half its own input in code — which is the
+test would have had to construct half its own input in code -- which is the
 failure mode where a fixture quietly becomes an argument for the behavior it is
 supposed to be testing.
 
@@ -28,7 +28,7 @@ what it was told to find.
 `git-operation.json` is the one shape that could not be written naively: a
 workspace-wide `fs.write` grant would swallow `.github/workflows/`, so the
 envelope carries an explicit denial carving it back out. That is a real
-authoring pattern rather than a test construction — a broad grant plus a
+authoring pattern rather than a test construction -- a broad grant plus a
 narrower denial is how any envelope covering a repository has to be written,
 and denials winning over grants is what makes it safe.
 

@@ -18,14 +18,14 @@ import (
 // What these tests are about is routing, and only routing. The stages have
 // their own package, the decisions have a golden file, and the lifecycle has
 // manager_test.go. What is unproven until here is that putting several sessions
-// on one stream changes nothing about any of them — which is the whole claim a
+// on one stream changes nothing about any of them -- which is the whole claim a
 // dispatcher makes.
 
 // --- which states accept events ----------------------------------------------
 
 // AcceptsEvents is walked over the closed State enum for the same reason the
 // transition table is: a state added to the enum must not quietly inherit a
-// default. Here the default is "does not accept", which is the safe direction —
+// default. Here the default is "does not accept", which is the safe direction --
 // a new state that should accept events fails this test loudly, while one that
 // should not is already correct.
 func TestAcceptsEventsCoversEveryState(t *testing.T) {
@@ -301,8 +301,8 @@ func TestSuspendedSessionsStillAcceptEvents(t *testing.T) {
 // session, which is what every caller does today.
 //
 // It is the strongest test in this file, because a routing bug that mixed two
-// sessions' state would still produce plausible decisions — just the wrong
-// ones — and only a comparison against the isolated runs shows it.
+// sessions' state would still produce plausible decisions -- just the wrong
+// ones -- and only a comparison against the isolated runs shows it.
 func TestInterleavedSessionsMatchIsolatedRuns(t *testing.T) {
 	ctx := context.Background()
 
@@ -329,8 +329,8 @@ func TestInterleavedSessionsMatchIsolatedRuns(t *testing.T) {
 		isolated[id] = runIsolated(t, id, events)
 	}
 
-	// The interleaving is deliberately uneven — two of one, one of the other,
-	// then a tail — so that no session's events are contiguous.
+	// The interleaving is deliberately uneven -- two of one, one of the other,
+	// then a tail -- so that no session's events are contiguous.
 	order := []struct {
 		session string
 		index   int
@@ -826,7 +826,7 @@ func (s *stubSource) Stats() event.SourceStats    { return event.SourceStats{} }
 
 // What routing costs on top of processing: one registry lookup under a read
 // lock, one map read, and the emit check. Measured against a processor that
-// returns a preallocated decision, so what is left is the routing itself — the
+// returns a preallocated decision, so what is left is the routing itself -- the
 // number to add to BenchmarkProcess in internal/pipeline to get the per-event
 // cost on a multi-session stream.
 func BenchmarkDispatch(b *testing.B) {

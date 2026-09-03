@@ -23,8 +23,8 @@ import (
 // What these tests are about is that a synthetic event is indistinguishable
 // from a decoded one. The decoder has its own tests and the replay source has
 // its own; the claim that is unproven until here is that this package adds
-// nothing to what those two already decide, and that what it *does* add —
-// identity, sequence, the enrichment M6 will produce — is deterministic and
+// nothing to what those two already decide, and that what it *does* add --
+// identity, sequence, the enrichment M6 will produce -- is deterministic and
 // stated by the caller rather than invented.
 //
 // Nothing in this file needs root, a kernel, libbpf, cgroup v2 or a compiled
@@ -216,8 +216,8 @@ func TestRecordCarriesThisBuildsABIVersion(t *testing.T) {
 // The claim this package rests on: what Next returns is what the collector's
 // own decoder makes of the same bytes, plus identity and enrichment and nothing
 // else. Asserted by decoding the record independently and comparing field by
-// field, so a judgment added here later — a capability chosen, a domain filled
-// in, an errno named — fails rather than being reviewed for.
+// field, so a judgment added here later -- a capability chosen, a domain filled
+// in, an errno named -- fails rather than being reviewed for.
 func TestGeneratedEventIsWhatTheDecoderProduces(t *testing.T) {
 	s := Spec{
 		Type: abi.EvtFileOpen,
@@ -361,7 +361,7 @@ func TestIdentityBoundaryValuesSurviveTheRoundTrip(t *testing.T) {
 
 // Sequence is dense and 1-based, timestamps increase, and the ID follows the
 // same "<session>/<sequence>" form replay synthesizes for a record that omits
-// one — so a generated stream and a replayed one identify events identically.
+// one -- so a generated stream and a replayed one identify events identically.
 func TestStreamIsDenseMonotonicAndIdentified(t *testing.T) {
 	g := gen(t)
 

@@ -18,7 +18,7 @@ type Header struct {
 	Structs []Struct
 }
 
-// Define is an integer #define. Valueless defines — the include guard — are
+// Define is an integer #define. Valueless defines -- the include guard -- are
 // skipped rather than recorded, since they name nothing the ABI needs.
 type Define struct {
 	Name  string
@@ -29,7 +29,7 @@ type Define struct {
 	//
 	// Recorded because the two kinds of define mean different things and the
 	// generated file should not describe them as one. A bound is a cap on what
-	// a probe can report — exceed it and the value is truncated. A define no
+	// a probe can report -- exceed it and the value is truncated. A define no
 	// array uses is a value the kernel and user sides compare, and calling it a
 	// limit in the emitted comment would be a plain misstatement about the
 	// contract, in the one file nobody is supposed to edit by hand.
@@ -210,7 +210,7 @@ func parseDeclarations(src string, h *Header) error {
 		_ = rest
 
 		// A declaration ends at the semicolon after the closing brace. Anything
-		// between them — a variable name, an attribute — is unsupported.
+		// between them -- a variable name, an attribute -- is unsupported.
 		for i < len(src) && isSpace(src[i]) {
 			i++
 		}

@@ -17,9 +17,9 @@
 # Two families of case are deliberately absent, because both depend on exact
 # bytes that a text file cannot show a reviewer:
 #
-#   - Unicode normalization and homoglyphs — TestMatchUnicode, which spells the
+#   - Unicode normalization and homoglyphs -- TestMatchUnicode, which spells the
 #     code points out as escapes.
-#   - Symlink chains and symlinked roots — TestWithinRootSymlinkedRoot, which
+#   - Symlink chains and symlinked roots -- TestWithinRootSymlinkedRoot, which
 #     needs a real filesystem.
 
 # --- Baseline: the rules working as advertised ------------------------------

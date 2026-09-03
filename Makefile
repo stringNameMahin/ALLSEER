@@ -159,7 +159,7 @@ tidy: ## Tidy and verify go.mod / go.sum
 #
 # Note that `make test` already enforces staleness, through
 # TestGeneratedFileIsNotStale in internal/telemetry/abi. That is the stronger
-# check of the two, because it runs anywhere `go test` runs — including hosts
+# check of the two, because it runs anywhere `go test` runs -- including hosts
 # with no make at all. These targets exist so the check is also invocable by
 # name, which is what the milestone issue asks for.
 

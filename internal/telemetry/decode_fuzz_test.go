@@ -21,7 +21,7 @@ import (
 //
 // abi.FuzzDecodeRecord covers the layout half: for any input, DecodeRecord
 // either errors or returns a record, and never panics or reads out of bounds.
-// It asserts nothing about meaning, because the generated layer has none — it
+// It asserts nothing about meaning, because the generated layer has none -- it
 // deliberately imports neither pkg/event nor pkg/capability.
 //
 // Every property below is about meaning, and none of them can be stated one
@@ -108,7 +108,7 @@ func FuzzDecode(f *testing.F) {
 			}
 			if len(raw) == abi.RecordSize && readType(raw).IsKnown() {
 				// Refusing a correctly sized record of a declared type is
-				// allowed — three conditions do it — but each has a sentinel,
+				// allowed -- three conditions do it -- but each has a sentinel,
 				// and an error outside that set means something was refused for
 				// a reason nobody wrote down.
 				if !isDeclaredRefusal(err) {
@@ -158,7 +158,7 @@ func FuzzDecode(f *testing.F) {
 			}
 		}
 		// A privilege payload appears on exactly one type and on no other. The
-		// inverse — a privilege event with no payload — is not asserted here,
+		// inverse -- a privilege event with no payload -- is not asserted here,
 		// because privPayload always returns a struct: which of its fields are
 		// filled is decided by fields_present, not by whether the pointer is
 		// set.

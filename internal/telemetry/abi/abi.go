@@ -10,9 +10,9 @@
 //
 // It is the boundary where kernel bytes become Go values, and nothing more. It
 // deliberately does **not** import pkg/event or pkg/capability, and it produces
-// no event.Event. Turning a decoded record into the system's vocabulary — which
+// no event.Event. Turning a decoded record into the system's vocabulary -- which
 // allseer_event_type corresponds to which capability.Kind, what an unresolved
-// path means, how a truncated string is reported — is the decoder's job, and
+// path means, how a truncated string is reported -- is the decoder's job, and
 // the decoder is a separate milestone issue. Keeping the split means this
 // package can be regenerated from a changed header without touching any code
 // that makes a judgment.
@@ -29,14 +29,14 @@
 //
 // The header declares ALLSEER_ABI_VERSION and every record carries it in the
 // fixed prologue, ahead of proc and the payload union. This package surfaces
-// both — the constant as ABIVersion, the field as Event.Version — and compares
+// both -- the constant as ABIVersion, the field as Event.Version -- and compares
 // neither.
 //
 // That is the split, not an omission. Reading the version is an ABI concern and
 // belongs here; deciding what a mismatch *means* is a judgment, and the
 // judgments differ by layer. The loader can read the constant out of the
 // compiled object and refuse to attach anything, which is the only
-// point at which a mismatch costs nothing — no probes are running and no events
+// point at which a mismatch costs nothing -- no probes are running and no events
 // have been believed. A decoder that discovers it one record at a time is
 // already too late for that and has a different question to answer: drop the
 // record, fail the session closed, or surface it as VerdictIndeterminate. None
@@ -45,7 +45,7 @@
 // changed.
 //
 // So the field is a backstop with a reader, and the enforcement points are the
-// loader and telemetry.Decoder — telemetry.Decoder.EventSize already exists for
+// loader and telemetry.Decoder -- telemetry.Decoder.EventSize already exists for
 // exactly this purpose, "to catch layout drift between the loaded object and
 // this binary at startup rather than at the first event". Both now exist:
 // telemetry.BPFLoader.Load compares this package's RecordSize, by way of
@@ -58,8 +58,8 @@
 // `allseer_abi_version` global, and the same Load compares it against
 // ABIVersion below before it opens the object. Event.Version remains the
 // backstop for a record that reaches the decoder anyway, which is a different
-// question — the loader's answer is "do not start", the decoder's is what to do
-// with one record — and that split is why neither check lives in this file.
+// question -- the loader's answer is "do not start", the decoder's is what to do
+// with one record -- and that split is why neither check lives in this file.
 //
 //go:generate go run github.com/stringNameMahin/ALLSEER/internal/telemetry/abigen/cmd/abigen -header ../../../bpf/include/allseer_event.h -out layout_gen.go -package abi
 package abi
@@ -77,7 +77,7 @@ import "bytes"
 //
 // An array with no NUL in it is exactly that case. Returning the bytes as a
 // string with no signal would let a truncated path be matched against a grant
-// as though it were the whole path — and a prefix that matches a granted glob
+// as though it were the whole path -- and a prefix that matches a granted glob
 // while the real path does not is the cheapest possible way past a selector.
 // So truncation is reported here, at the only place that can still see it, and
 // what to do about it is decided by the caller.

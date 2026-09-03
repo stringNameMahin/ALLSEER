@@ -98,8 +98,8 @@ type Loader interface {
 	//
 	// The other half of UpdateMap, and the only way to say "stop watching this
 	// cgroup". The filter map's contract is that presence is the entire signal
-	// — bpf/allseer.bpf.c tests the lookup for NULL and never dereferences what
-	// it returns — so a session that ends cannot be un-watched by writing a
+	// -- bpf/allseer.bpf.c tests the lookup for NULL and never dereferences what
+	// it returns -- so a session that ends cannot be un-watched by writing a
 	// zero value over its entry. There is nothing a value could say. The key
 	// has to go.
 	//
@@ -123,7 +123,7 @@ type Loader interface {
 	// Nothing here resets it. The counter is monotonic for the lifetime of the
 	// loaded object because both users of it need that: SourceStats
 	// .DroppedEvents is cumulative by definition, and the per-record delta
-	// Event.Dropped wants is current minus last-observed — a subtraction any
+	// Event.Dropped wants is current minus last-observed -- a subtraction any
 	// reader can do, and one a reader that reset the counter would break for
 	// every other reader.
 	ReadCounter(ctx context.Context, mapName string) (uint64, error)
@@ -238,428 +238,30 @@ type Config struct {
 	FailClosedOnDrop bool `json:"fail_closed_on_drop" yaml:"fail_closed_on_drop"`
 }
 
-// Done: the replay source lives in internal/telemetry/replay. It reads recorded
-// JSONL streams behind event.Source, reproducing sequence gaps and Dropped
-// counters verbatim so fail-closed paths are exercisable without a kernel. Seed
-// fixtures are in test/testdata/replay.
+// TODO(architecture): after M5, split the single BPF object into independently
+// loadable modules ("Option 3" in the kernel_cap_t compatibility review), for
+// mechanism and kernel-version isolation and to prepare for Windows support.
+// Transition early if M5 hits a load, verifier or feature-isolation problem the
+// single object cannot safely absorb.
+//
+// This is a mandatory milestone, not a suggestion, and it is recorded here
+// because the pressure runs the other way: bpf/allseer.bpf.c opens with "One
+// object, not one per probe", and every probe added since makes that harder to
+// reverse -- one ring buffer, one filter map, three scratch maps and 28
+// programs now share a single load. An unresolvable CO-RE relocation is
+// poisoned rather than fatal, which is what makes the object loadable on
+// kernels it was not built on; a verifier rejection is fatal to the whole
+// object, so one program a future kernel refuses takes the other 27 with it.
+// That failure mode is what Option 3 bounds, and it is not detectable by
+// testing on the build host.
 
-// Done: Loader is implemented in loader_linux.go as BPFLoader, over libbpfgo,
-// behind `//go:build linux && ebpf`. Load establishes the three things that
-// must be true before any event is believed — a cgroup2 hierarchy exists, the
-// object's record layout matches Decoder.EventSize, read from the object's BTF,
-// and the object was compiled against the ALLSEER_ABI_VERSION this binary
-// decodes, read from the read-only `allseer_abi_version` global in its .rodata
-// — and refuses to open anything if any of them fails, which is the only point
-// at which a mismatch costs nothing. The last two are a pair rather than a
-// repetition: the size catches a layout that changed size, the version catches
-// one that kept its size and changed meaning. RingBuffer returns raw records and decodes
-// none of them; UpdateMap and DeleteMap are how tracked_cgroups is populated
-// and unpopulated, with key and value widths checked against the loaded map
-// because nothing else can check them. DetachAll and Close are idempotent. The
-// loader owns no session state and makes no decision: that is Collector, and it
-// does not exist yet.
-// `make test-ebpf` runs its tests; the ones that load BPF skip unless root.
-// Done: ring buffer loss is counted in the kernel and readable from Go.
-// bpf/allseer.bpf.c increments the per-CPU `ringbuf_drops` map at the one place
-// a record is lost — a bpf_ringbuf_reserve that returned NULL — and
-// Loader.ReadCounter sums it. Before this, Config.FailClosedOnDrop and
-// pkg/event.Event.Dropped were both written against a signal that did not
-// exist, which is worse than an absent control because it reads as a present
-// one. Three things stay distinct and are worth naming here because they are
-// easy to conflate: an event the cgroup filter rejected is not a drop, a record
-// that failed to decode is not a drop, and only a reservation that failed is.
-// What is still missing is the consumer: nothing turns the counter into
-// SourceStats.DroppedEvents or into Event.Dropped, because that is Collector's
-// and Collector does not exist.
+// TODO(telemetry): decide the path resolution strategy. Kernel-side dentry
+// walking is expensive and bounded by the verifier's loop limits; resolving in
+// user space races with rename. Neither is clean.
 
-// Done, for the last of the four: connect is implemented in bpf/allseer.bpf.c
-// as the pair `connect_enter` and `connect_exit`, under
-// SEC("tracepoint/syscalls/sys_enter_connect") and .../sys_exit_connect,
-// emitting one ALLSEER_EVT_NET_CONNECT between them. It is the second instance
-// of the correlation protocol rather than a second mechanism: the same
-// allseer_syscall_key_t, the same LRU, the same identity stamp, the same
-// "entry decides, exit deletes, no entry no event" rules. What connect state is
-// told apart from openat state *by* is the map it lives in — `connect_scratch`
-// — which is what allseer_maps.h already specified when it wrote the protocol
-// down ("connect will want the same mechanism and will not share this map"),
-// and which keeps a burst of opens from evicting pending connects. The two
-// values share a byte-identical prologue and a _Static_assert now enforces it.
-// What the pair can honestly report is narrower than struct
-// allseer_net_payload's nine fields, and the boundary is the hook rather than
-// the ABI. From connect's arguments come the family, the destination address
-// and the destination port — the port converted to host byte order, because the
-// header declares it __u16 and not __be16. The local address, the local port,
-// the protocol and the socket type are all properties of the *socket*, reachable
-// only by walking task->files to a struct file, which is the same kernel-internal
-// trade proc_exec refused for argv; they are left zero and allseer_maps.h names
-// each one. Three of those four have an honest "unavailable" rendering in the
-// decoder already — protocol and sock_type render empty, which the matcher
-// treats as unevaluable — and `saddr` does not: sixteen zero bytes under AF_INET
-// decode to "0.0.0.0", the wildcard, which is a real address. That gap is a
-// record-layout problem and is recorded as a TODO(event) at the foot of
-// allseer_maps.h rather than papered over.
-// The family rule is the load-bearing decision on the capture side: AF_INET and
-// AF_INET6 are written into the record *only* when the address they describe was
-// captured, so a record naming either always carries the address the process
-// passed. Everything else — a short addrlen, a negative addrlen, an unreadable
-// or null pointer — leaves AF_UNSPEC and an empty destination, which is the
-// unevaluable case decode.go documents. Families that carry no address of this
-// shape are reported as themselves with no address, AF_UNIX above all.
-// Two limitations are stated at the probe rather than left to be found. A
-// non-blocking connect returns -EINPROGRESS and completes later, out of sight of
-// sys_exit_connect, so its record reads as a failure when it is really
-// "attempted, outcome unknown to this stream". And the timestamp is the
-// entry-side ktime, as openat's is — which matters more here, because a connect
-// can block for minutes, so a record can reach the ring long after the instant
-// it carries.
-// Done: an AF_UNIX connect resolves to ipc.unixsocket, and every other family
-// to net.connect. decode.go decides it in kindForConnectFamily, on the address
-// family, which is the one field bpf/allseer.bpf.c reliably fills for a unix
-// socket — its default arm writes the family and nothing else, so this reads a
-// captured value rather than deducing one from an absence.
-// The catalog is what left the question open and the family is what closes it.
-// pkg/capability lists `connect` under both kinds, so it could not settle
-// itself; but it also defines net.connect as "Open an outbound connection to a
-// remote endpoint" and grounds the whole network block on "an outbound
-// connection is how data leaves, and that cannot be undone after the fact". An
-// AF_UNIX socket has no remote endpoint and nothing leaves the host through
-// one, so net.connect was not a conservative reading of the record — it was a
-// false statement about an observed fact, in the field the validator matches
-// on. ipc.unixsocket is defined as "Connect to or create a Unix domain socket"
-// and already lists `connect`, so the answer was the catalog's own.
-// The precedent is ALLSEER_EVT_FILE_OPEN, whose kind the open flags decide in
-// the same file for the same reason. ALLSEER_EVT_NET_CONNECT is now the third
-// type whose payload picks its kind, and the only one whose two answers land in
-// different domains — which the event schema permits, since it requires a
-// network payload when the domain is network and forbids one nowhere else.
-// Two consequences are recorded rather than left to be found.
-// The first is a limit that this decision does not introduce and cannot lift:
-// the record cannot say *which* unix socket. sun_path is 108 bytes against a
-// 16-byte address field and ABI v2 has no field for a path, so resolve.Observe
-// produces an empty target and no envelope can permit /run/docker.sock while
-// refusing the rest. That was equally true under net.connect — addressString
-// renders nothing for AF_UNIX and the port is zero — so nothing that was
-// matchable has stopped being matchable. Closing it needs a wire-format change,
-// which is a different issue from this one.
-// The second is a real reduction in what the shipped policy does.
-// configs/rules.default.yaml matches unexpected-network-egress on the
-// capability rather than on a score, so every ungranted unix-socket connect was
-// requested for approval regardless of risk; no shipped rule names any IPC
-// capability, so such an event now falls through to the score-based rules and
-// is warned instead. That is deliberate and it is not this decision's to
-// reverse: the rule set's own closing TODO says "Any rule that fires on routine
-// work needs tightening or removal before enforce mode is credible", and a
-// prompt on every connect to the journal, the resolver and the session bus is
-// that rule. Whether the IPC domain deserves a rule of its own is a policy
-// question, to be answered in configs/rules.default.yaml where the reasoning is
-// visible, and it is not answered here.
-// Done, for the first of the four: sched_process_exec is implemented in
-// bpf/allseer.bpf.c as the program `proc_exec`, under
-// SEC("tracepoint/sched/sched_process_exec"). It emits ALLSEER_EVT_PROC_EXEC
-// carrying struct allseer_exec_payload, reserving the record in the `events`
-// ring buffer and filling it in place — the record is larger than the eBPF
-// stack, so that is the only shape it can be written in. The hook is the
-// scheduler's rather than the syscall's: an exec that failed never reaches it
-// and one that succeeded never returns, which is why `ret` is 0 and why comm
-// already names the new image. Identity is struct allseer_proc and nothing
-// else. Every kernel read is CO-RE-relocated — the tracepoint's __data_loc
-// field and the task_struct walks alike — so no offset from the build kernel is
-// compiled in; the ring buffer helpers set the floor at 5.8.
-// Not carried, and stated here rather than left to be discovered: argv. The
-// tracepoint does not expose it, `argc` is written 0, and reaching the arguments
-// means task->mm->arg_start or struct linux_binprm — both kernel-internal, and
-// so both a trade against the stable-ABI reason for choosing a tracepoint in the
-// first place. Selector.ArgPatterns is already documented as "a convenience for
-// readable envelopes, not a security boundary", so the gap costs convenience and
-// not a control.
-// Done, for the second of the four: sched_process_exit is implemented in
-// bpf/allseer.bpf.c as the program `proc_exit`, under
-// SEC("tracepoint/sched/sched_process_exit"), emitting ALLSEER_EVT_PROC_EXIT.
-// It is the pair to proc_exec and the reason it comes before the two syscall
-// probes is that without it a governed process has a beginning and no end:
-// ProcessTracker.Untrack is declared as "removes a process on exit" and had
-// nothing to call it, and a (PID, StartTime) pair cannot be retired until
-// something observes the death that frees the number. The two records agree on
-// that pair by construction — exec does not replace the task_struct, so
-// start_boottime is the same value read twice — and the runtime tests assert it
-// rather than assuming it.
-// It reads nothing at all from the tracepoint context. Identity comes from the
-// same helpers and the same CO-RE walks proc_exec uses, so there is no context
-// layout this probe can be wrong about.
-// Two limits are stated at the probe and carried as TODOs in the C file rather
-// than left to be discovered. The tracepoint fires per thread and the probe
-// emits only on the thread group leader, which is one record per process with
-// the right identity but fires early in the one case where a leader exits while
-// its siblings run on; `group_dead` is the exact signal and reading it is a
-// portability trade. And `ret` is written 0, because the header defines it as a
-// syscall return and task->exit_code is an encoded wait status — carrying
-// whether a governed agent's build failed needs a field of its own, which is a
-// record-layout change.
-// Done, for the third of the four, and for the mechanism the fourth will reuse:
-// openat is implemented in bpf/allseer.bpf.c as a *pair* of programs,
-// `openat_enter` under SEC("tracepoint/syscalls/sys_enter_openat") and
-// `openat_exit` under SEC("tracepoint/syscalls/sys_exit_openat"), emitting one
-// ALLSEER_EVT_FILE_OPEN between them. A syscall's arguments and its return are
-// on opposite sides of the call: the entry has the path, the flags and the mode
-// and no outcome; the exit has the outcome and no arguments. struct
-// allseer_event needs both, and emitting at entry would mean writing something
-// into `ret` — a field the header defines as "syscall return; negative is
-// -errno" — before there is a return, which would make every failed open decode
-// as Succeeded.
-// The pairing is a scratch map, `openat_scratch`, and its contract is written
-// down in bpf/include/allseer_maps.h rather than at the probe, because connect
-// will declare a second map under the same protocol. The decisions, in short:
-//   - the key is bpf_get_current_pid_tgid(), the thread, because a thread is
-//     what enters a syscall and is inside at most one at a time. No two openats
-//     from one thread can overlap, so the key needs no sequence number.
-//   - a TID is reused, so the key alone is not enough. Every entry carries the
-//     calling thread's start_boottime and the exit side compares it against the
-//     thread it is running on. Without that check a thread killed inside openat
-//     leaves an entry that a later, possibly *untracked*, holder of its TID
-//     would complete — an untracked cgroup producing a governed event.
-//   - BPF_MAP_TYPE_LRU_HASH, which is the opposite of the choice made for
-//     tracked_cgroups and for the opposite reason. That map holds user-space
-//     policy, where eviction silently un-governs a session; this one holds
-//     kernel-owned ephemeral state, where a plain hash filled with orphans from
-//     killed tasks would reject every insert forever and stop openat being
-//     observed at all. Eviction costs one event; the alternative costs all of
-//     them.
-//   - the entry side decides and the exit side obeys. The cgroup lookup happens
-//     once, at entry, and the ID it matched on is the one in the record — so a
-//     task moved between cgroups mid-syscall cannot produce a record whose
-//     attribution and whose reason for existing disagree. The event belongs to
-//     the cgroup the task was in when it made the call.
-//   - the exit side owns deletion and deletes on every path that found an entry:
-//     the identity check failing, the reservation failing, and the record being
-//     submitted alike.
-//   - no entry, no event. An exit that finds nothing returns, and never
-//     synthesises a record from the one field it holds.
-// The path is captured with bpf_probe_read_user_str, because the pointer is a
-// user-space address — proc_exec's kernel-side read is not a precedent for it —
-// and is stored as the process supplied it. It is not joined to dirfd and not
-// resolved: that is M6's, and internal/telemetry/resolve already refuses to fall
-// back to an unresolved path, so a relative open arrives unevaluable rather than
-// wrongly evaluated. Truncation behaves as proc_exec's filename does — a
-// terminated prefix, which abi.CString cannot distinguish from a whole path, and
-// which the TODO(event) in decode.go is the fix for.
-// One gap is stated rather than left to be found: an open whose correlation is
-// lost — to eviction, or to a scratch update that failed — produces no event and
-// nothing counts it. It is not folded into ringbuf_drops, which is defined as
-// counting reservation failures; the TODO at the foot of allseer_maps.h is what
-// would close it, and it waits on Collector because a counter needs a consumer.
-// Done: kernel-side cgroup filtering is implemented in bpf/allseer.bpf.c.
-// proc_exec looks the current cgroup ID up in `tracked_cgroups` before it
-// reserves anything, so an exec in an undeclared cgroup costs a hash lookup and
-// a return rather than a reservation, a wakeup, a decode and a discard.
-// Presence in the map is the whole test, as allseer_maps.h defines it: the
-// returned pointer is checked against NULL and never dereferenced. Two
-// consequences are worth stating here rather than leaving to be found. While no
-// loader populates the map, the filter set is empty and this object reports
-// nothing — the correct direction to fail in, but not an obvious one from the
-// Go side. And the filter is per-probe rather than a property of the object, so
-// every tracepoint added after this one has to perform the same lookup or it
-// silently reports on cgroups nobody declared. proc_exit, the first probe added
-// after it, does perform the lookup and does it first, and
-// TestRuntimeUntrackedCgroupProducesNoExitEvent is what proves it rather than
-// the reviewer's eye. The same now goes for count_ringbuf_drop, which is a
-// second per-probe obligation of exactly the same shape.
-// Done, in its first half: the Go view of the ABI is generated from
-// bpf/include/allseer_event.h by internal/telemetry/abigen into
-// internal/telemetry/abi. Sizes, offsets, the event-type enum, the struct
-// mirrors, and the byte-level decode functions are all derived; nothing about
-// the layout is written down twice. TestGeneratedFileIsNotStale fails when the
-// header and the generated file disagree, and `make gen` regenerates.
-// Done, in its second half: Decoder.Decode and EventSize are implemented in
-// decode.go as EventDecoder, over internal/telemetry/abi. Each
-// allseer_event_type maps to a capability.Kind and the Kind's domain comes from
-// the M1 catalog, never from a second table. ALLSEER_EVT_FILE_OPEN is the one
-// type whose kind the payload decides — the open flags separate fs.read,
-// fs.write, and fs.create, which is the mapping docs/dataflow.md already traces.
-// ALLSEER_EVT_PRIV_CHANGE is the second type whose kind the payload decides,
-// and it became decodable when ALLSEER_ABI_VERSION 2 gave the header an `enum
-// allseer_priv_op` to select on: the operation names the syscall, and
-// kindForPrivOp maps it to priv.setuid, priv.capset, priv.namespace or
-// priv.seccomp. priv.escalate is deliberately not among them — it is a
-// comparison of the record's two credential snapshots rather than a property of
-// any syscall, so it stays a downstream classification.
-// One declared type is still refused rather than guessed at: ALLSEER_EVT_UNKNOWN,
-// which states no operation. A privilege record is refused on the same grounds
-// when its own operation is ALLSEER_PRIV_OP_UNKNOWN, or outside this build's
-// enum.
-// The abi package deliberately stops at the ABI shape: it imports neither
-// pkg/event nor pkg/capability, because deciding what a record *means* is a
-// judgment and the generated layer must stay free of judgments it would have to
-// regenerate.
-// Done: bpf/include/allseer_event.h declares `enum allseer_priv_op` and
-// `enum allseer_priv_field`, and struct allseer_priv_payload carries two
-// `struct allseer_priv_state` snapshots — before and after — so
-// ALLSEER_EVT_PRIV_CHANGE decodes. ALLSEER_ABI_VERSION is 2 for it. The record
-// stays 856 bytes: the payload grew from 32 to 208 and the union is sized by
-// struct allseer_exec_payload at 776, so nothing outside the priv payload moved.
-// What the two snapshots buy is the thing one snapshot could not: a capability
-// delta with both operands present, which internal/risk/privilege.go names as
-// the defect it has been labelling CapabilityDeltaAddedOnly.
-// The probes that fill it were a separate issue and are the two entries below.
-//
-// Done: the privilege probes are implemented in bpf/allseer.bpf.c as eleven
-// syscall enter/exit pairs — setuid, setreuid, setresuid, setgid, setregid,
-// setresgid, setgroups, capset, unshare, setns and seccomp — and every one of
-// them emits ALLSEER_EVT_PRIV_CHANGE. Twenty-two programs from one pair of
-// bodies, because the syscall is what names the operation: struct allseer_event
-// carries no syscall identifier, so `operation` is the only thing separating a
-// setuid record from a capset one, and a program attached to a single tracepoint
-// knows its own answer as a compile-time constant.
-// Correlation is the protocol allseer_maps.h settled for openat, used a third
-// time and shared for the first time. `priv_scratch` is keyed by the thread
-// rather than the process — credentials on Linux hang off task_struct, every
-// thread has its own, and every thread of a process can be inside setuid at
-// once — and it carries the `before` snapshot, which exists only until the
-// syscall commits and which no later hook could recover. One map serves all
-// eleven, which the two reasons for splitting openat from connect do not cover:
-// the eleven share one value shape exactly and none of them is hot. What a
-// shared map does need is the thing allseer_maps.h named when it declined one —
-// "a syscall tag and a check on it" — and `operation` is that tag, checked by
-// each exit program against its own.
-// Per thread and never per process, which is the opposite of proc_exit's
-// answer and deliberate: proc_exit filters to the group leader because a process
-// exits once, while a worker thread that calls setuid changes its own
-// credentials and no one else's. The visible cost is that one glibc setuid() on
-// an N-threaded process produces N records, because glibc implements the POSIX
-// whole-process semantics the kernel does not have by signalling every thread to
-// make the raw syscall itself. Collapsing them is a judgment for a stage that
-// can see more than one record at a time.
-// A refused syscall is a record rather than a silence. `ret` is copied verbatim
-// and the `after` snapshot is captured on both paths, so a negative return
-// arrives with the two snapshots equal — which is a stronger statement than the
-// record being absent, because it turns "nothing changed" from an absence into
-// an assertion a reader can check against `before`. decode.go needs no special
-// case for it: resultOf already reads ret >= 0 as Succeeded.
-// The obligations every probe in this object carries are carried here too. The
-// tracked_cgroups lookup is the first thing each entry program does, before any
-// credential is read, and the ID it matched on is the one in the record. The
-// exit side performs no lookup of its own, so the entry side's decision is what
-// admitted the event. Every exit path that found a scratch entry deletes it —
-// a stale identity stamp, a mismatched operation tag, a failed reservation and a
-// submitted record alike — and count_ringbuf_drop() is called on the failed
-// reservation and on nothing else, because a correlation that was never
-// completed is not a record that was lost.
-// ABI v2 is unchanged by any of it: the probes fill the layout the entry above
-// defines, struct allseer_event is still 856 bytes, and the object still exposes
-// the same ALLSEER_ABI_VERSION the loader checks before it attaches anything.
-// Verified against a running kernel rather than by inspection:
-// internal/telemetry/priv_linux_test.go covers every operation's enum, the
-// before/after snapshots against real uid, gid, capability and group
-// transitions, fields_present, the user-namespace case, per-thread identity,
-// cgroup filtering both ways, drop accounting, scratch deletion on success,
-// failure and tag mismatch, attach and detach of all twenty-two, and coexistence
-// with the four probes that were there first.
-
-// Done: the capability sets are read in whichever shape the running kernel
-// keeps them in, so the privilege probes did not raise this object's runtime
-// floor. Linux 6.3 replaced `struct kernel_cap_struct { __u32 cap[2]; }` with
-// `struct { u64 val; }`, and the two are the same eight bytes in the same order
-// on a little-endian target — cap[0] holds capabilities 0-31 and cap[1] holds
-// 32-63, which is where bits 0-31 and 32-63 of the u64 sit. Both targets this
-// ABI is generated for are little-endian, so the header's __u64 was always the
-// correct wire type and nothing in allseer_event.h is contingent on a kernel
-// version. The difference is entirely in the source expression, because there is
-// no member named `val` before 6.3 and none named `cap` after it.
-// ALLSEER_READ_CAP_SET in bpf/allseer.bpf.c picks between them. The modern read
-// is guarded by bpf_core_field_exists, which resolves to 0 when the field is
-// absent rather than poisoning; the legacy read goes through `struct
-// cred___legacy`, a CO-RE flavor libbpf matches against the kernel's own struct
-// cred. On any given kernel one of the two branches carries a relocation that
-// cannot resolve, and libbpf answers that by poisoning the instruction rather
-// than refusing the object — so the object loads and the verifier prunes the
-// branch the guard did not take. Nothing is truncated: both halves of the legacy
-// pair are read and recombined, so a capability above 31 — CAP_PERFMON, CAP_BPF
-// and CAP_CHECKPOINT_RESTORE are all in that range — survives on an older host.
-// vmlinux.h is generated from the build host's BTF, so the build host is 6.3 or
-// newer; the runtime floor stays where the ring buffer put it.
-// One limitation is recorded rather than left to be discovered: the legacy data
-// path has never executed. No pre-6.3 kernel is available in the current
-// verification environment, so what has been shown is that the object compiles
-// with both relocation sets present, that the offsets are resolved by CO-RE, and
-// that the guard-and-poison mechanism works — the privileged run was on a kernel
-// where it is the legacy branch that gets poisoned, so a clean load and a
-// passing suite exercised exactly that. The recombination arithmetic itself is
-// unverified until this object is run on a kernel between 5.8 and 6.2.
-//
-// TODO(architecture): after M5 is complete, transition the telemetry
-// architecture from the current single-BPF-object model toward independently
-// loadable telemetry modules/objects — "Option 3" in the kernel_cap_t
-// compatibility review — providing mechanism and kernel-version isolation and
-// preparing the platform architecture for future Linux kernel diversity and
-// Windows support.
-//
-// If M5 encounters a concrete problem caused by the single-object architecture
-// before M5 completes — particularly a kernel compatibility, verifier or load
-// failure, or feature-isolation problem that cannot be safely solved within the
-// current object — transition to Option 3 immediately rather than accumulating
-// additional workarounds.
-//
-// This is a mandatory architectural milestone and not a suggestion. It is not
-// "consider Option 3", it is not conditional on the current workaround failing,
-// and it is not to be deferred past M5. In particular it must not be removed
-// because Option 2 — the dual-representation capability read now in
-// bpf/allseer.bpf.c — works: that read is the first accumulated workaround, not
-// a reason the milestone was avoided, and the next kernel divergence has nowhere
-// to go inside one object.
-//
-// The reason it is recorded here rather than left to a review is that the
-// pressure runs the other way. bpf/allseer.bpf.c opens by stating "One object,
-// not one per probe", and every probe added since has made that sentence more
-// expensive to reverse: one ring buffer, one filter map, three scratch maps and
-// twenty-eight programs now share a single load. A CO-RE relocation that cannot
-// resolve is poisoned rather than fatal, which is what makes the current object
-// loadable on kernels it was not built on — but a *verifier* rejection is fatal
-// to the whole object, so one program that a future kernel refuses takes the
-// other twenty-seven down with it. That is the failure mode Option 3 exists to
-// bound, and it is not detectable by testing on the build host.
-// TODO(telemetry): decide the path resolution strategy. Full dentry walking in
-// the kernel is expensive and bounded by the verifier's loop limits; resolving
-// in user space races with rename. Neither is clean.
-// Done: the synthetic event generator is internal/telemetry/synth, and it
-// shares the replay format rather than defining a second one. WriteStream emits
-// the JSON Lines internal/telemetry/replay reads, and Source hands back a
-// *replay.Source over them, so nothing downstream can tell a generated stream
-// from a recorded one — which is the only seam it needed, and the reason it
-// implements no event.Source of its own.
-// What makes it trustworthy is the direction it builds in. A Spec is written in
-// the ABI's vocabulary — an allseer_event_type, a syscall return, the one union
-// member the header designates for that type — and is rendered as the 856 bytes
-// struct allseer_event occupies, which are then handed to
-// telemetry.EventDecoder. So an open's capability comes from its flags, an
-// errno from a negative return, an address from its family, and a domain from
-// the M1 catalog, exactly as they do for a record off the ring buffer; and a
-// record this build refuses — ALLSEER_EVT_UNKNOWN, a privilege record whose
-// operation is unset or outside the enum, a type outside the enum — is refused
-// here too, in the decoder's own words.
-// Assembling event.Event values directly would have been a second decoder
-// beside the first, which is the drift the generated ABI exists to prevent,
-// arriving through the tool meant to produce evidence about it.
-// What the generator adds after decode is exactly what decode.go deliberately
-// leaves zero, and every piece of it is stated by the caller rather than
-// invented: SessionID, Sequence, and an ID in the same "<session>/<sequence>"
-// form replay synthesizes for a record that omits one; Dropped, which advances
-// the sequence and the clock along with the counter it sets, so a generated
-// stream cannot claim loss its own numbering contradicts; and the M6 enrichment
-// fields, each sitting on the payload it belongs to so a spec cannot enrich a
-// payload the event does not carry. Observation is not among them. It comes
-// from resolve.Observe over the enriched event, because an observation written
-// beside the payload it describes can contradict it, and the validator reads
-// the observation.
-// Two refusals are worth naming here rather than leaving to be found. WallClock
-// stays zero unless Config.BootWallClock states the boot offset, since the
-// offset strategy is still open in pkg/event and a synthesized wall time reads
-// as observed. And Syscall stays empty for the reason the TODO(telemetry) in
-// decode.go gives: the record carries no syscall identifier, so naming one
-// would be a guess — and a generator, which knows what it meant, is exactly
-// where that guess would look reasonable.
-// Its tests need no kernel, no root, no libbpf and no compiled object, which is
-// the property the whole thing exists for.
 // TODO(telemetry): benchmark probe overhead against a realistic build. Target
 // under 5% wall clock, measured rather than assumed.
+
 // TODO(telemetry): evaluate LSM BPF hooks for synchronous blocking. Tracepoints
 // observe after the fact and can only detect; real prevention needs an LSM hook
 // or seccomp-unotify, and that choice decides what ActionBlock can honestly

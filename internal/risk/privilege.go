@@ -24,7 +24,7 @@ import (
 // priv.setuid, priv.capset]`. priv.namespace and priv.seccomp are not in it,
 // and nothing else in the file names them. An ungranted priv.namespace
 // therefore falls through eleven rules to medium-risk-departure and is
-// warned, not blocked — the capability the catalog describes as "how a process
+// warned, not blocked -- the capability the catalog describes as "how a process
 // escapes the attribution the collector depends on". Before this factor it
 // scored 60: verdict 30 plus critical severity 30, and nothing else, because a
 // privilege observation has no target and so cannot be novel. With it, the same
@@ -32,7 +32,7 @@ import (
 //
 // The rule also matches only three of the six verdicts. A privilege change the
 // envelope granted is within_envelope, is not matched by the block rule, and is
-// allowed — correctly, since the envelope's author said so, but silently,
+// allowed -- correctly, since the envelope's author said so, but silently,
 // because nothing in the record said what was granted away. This factor is
 // emitted on those events too, with its points withheld, for the same reason
 // sensitive_path reports a granted read of a credential path.
@@ -52,7 +52,7 @@ import (
 //  3. It is the first and only consumer of event.PrivPayload. Before this file,
 //     nothing outside tests read the field: privilege events crossed the whole
 //     pipeline with their payload unopened. A payload nothing reads is a
-//     payload nothing can notice has drifted — and it has. See below.
+//     payload nothing can notice has drifted -- and it has. See below.
 //  4. It makes the domain legible in monitor mode, where no action is applied
 //     at all and the record is the entire product.
 //
@@ -70,7 +70,7 @@ import (
 //   - Every field of PrivPayload is either free text with no vocabulary defined
 //     anywhere in the repository (Operation, NamespaceType), one-sided
 //     (CapabilitiesAdded), or ambiguous on its most important value (OldUID,
-//     NewUID — see the UID note below). And no probe writes any of them: there
+//     NewUID -- see the UID note below). And no probe writes any of them: there
 //     is no privilege decoder, and no replay fixture in test/testdata carries a
 //     privilege event at all.
 //
@@ -95,9 +95,9 @@ import (
 // Neither side carries a removal, and the two do not carry the same thing. The
 // Go side names capabilities gained; the kernel side snapshots two whole sets
 // after the fact, from which "added" cannot be recovered without the prior
-// snapshot nothing keeps. pkg/event already carries the TODO for this —
+// snapshot nothing keeps. pkg/event already carries the TODO for this --
 // "generate the Go decoder from the shared C struct layout so kernel and user
-// space cannot drift" — and this is that drift, found by writing the first
+// space cannot drift" -- and this is that drift, found by writing the first
 // consumer.
 //
 // So the factor states what it has and labels it. EvidenceCapabilityDelta
@@ -108,16 +108,16 @@ import (
 //
 // # The UID fields cannot answer the question they look like they answer
 //
-// OldUID and NewUID are int32 tagged omitempty. Zero is uid 0 — root, the
-// single most consequential value either field can hold — and it is also what
+// OldUID and NewUID are int32 tagged omitempty. Zero is uid 0 -- root, the
+// single most consequential value either field can hold -- and it is also what
 // an absent field decodes to, and what an encoder omits. A transition to root
 // and a record that never carried a UID are therefore the same two integers.
 //
 // This factor will not resolve that by guessing. It classifies the pair into
 // four states (see uidTransition), reports the literal values beside the
 // classification so a reader is never dependent on it, and charges nothing
-// either way. Fixing it belongs to pkg/event — dropping omitempty on both
-// fields makes zero mean zero — and is a wire-format change that should not
+// either way. Fixing it belongs to pkg/event -- dropping omitempty on both
+// fields makes zero mean zero -- and is a wire-format change that should not
 // ride along inside a risk milestone.
 //
 // # A malformed payload is charged, not refused
@@ -125,7 +125,7 @@ import (
 // Every other unreadable input in this package is refused: an unknown verdict
 // returns an error, and the pipeline turns it into an explicit indeterminate
 // decision. Here that would be a security hole. pipeline.IndeterminateHandler
-// assigns ActionForFailure — request_approval — and bypasses the policy engine
+// assigns ActionForFailure -- request_approval -- and bypasses the policy engine
 // entirely, so a privilege event whose payload failed to decode would be
 // downgraded from a terminal block to a prompt. Making a malformed payload the
 // cheapest route past the privilege rule is exactly backwards.
@@ -230,7 +230,7 @@ const (
 
 	// UIDTransitionUnchanged: both values are non-zero and equal. A setuid to
 	// the identity the process already had is a real no-op and worth recording
-	// as one — but see the header: an unchanged UID is not evidence that the
+	// as one -- but see the header: an unchanged UID is not evidence that the
 	// event changed nothing, because a capset moves no UID at all.
 	UIDTransitionUnchanged = "unchanged"
 
@@ -254,7 +254,7 @@ const (
 // only the oracle-backed ones. STATUS.md carried the open question of whether
 // SensitivityOracle.ExecutableSensitivity was its prerequisite; it is not, and
 // the reason is that they rate different things. ExecutableSensitivity rates a
-// binary path — a resource — and a privilege observation names no resource at
+// binary path -- a resource -- and a privilege observation names no resource at
 // all: telemetry.resolve leaves Target empty for the whole domain, because
 // "exercising the capability is the whole observation". Rating
 // Process.Executable instead would be rating the actor rather than the act,
@@ -324,8 +324,8 @@ func (PrivilegeChangeScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 
 	// Points come from the kind's catalog grade through the same table
 	// sensitive_path and sensitive_host read. It is the right table because it
-	// answers the same question they do — how consequential is the thing that
-	// happened — and reusing it means a change to how the project weighs
+	// answers the same question they do -- how consequential is the thing that
+	// happened -- and reusing it means a change to how the project weighs
 	// consequence moves all three together rather than two of them.
 	//
 	// It is also the first place the risk model sees the catalog's baseline
@@ -338,7 +338,7 @@ func (PrivilegeChangeScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 	// factor asks a different question of it.
 	points := sensitivityPointsFor(desc.BaselineSeverity)
 
-	// Points are withheld — not the finding — for an event the envelope
+	// Points are withheld -- not the finding -- for an event the envelope
 	// covered, exactly as on the sensitivity and correlation sides, so the
 	// invariant that an expected event scores exactly zero holds. The case is
 	// reachable and is the one worth recording most: an envelope that grants
@@ -376,7 +376,7 @@ func privEvidenceState(p *event.PrivPayload) string {
 //
 // Every value here is carried, not interpreted. None of them contributes a
 // point, none of them is compared against a list, and none of them is parsed
-// into a conclusion — the header says why. A reader of the audit record gets
+// into a conclusion -- the header says why. A reader of the audit record gets
 // exactly what the event said, in the event's own words, plus the labels this
 // package attaches to say how far the words can be trusted.
 func describePayload(p *event.PrivPayload, ev map[string]string) {
@@ -409,8 +409,8 @@ func describePayload(p *event.PrivPayload, ev map[string]string) {
 
 // uidTransition classifies the pair without resolving its ambiguity.
 //
-// The zero value is load-bearing in two incompatible ways at once — uid 0 is
-// root, and 0 is what an absent omitempty field decodes to — so three of the
+// The zero value is load-bearing in two incompatible ways at once -- uid 0 is
+// root, and 0 is what an absent omitempty field decodes to -- so three of the
 // four states below are statements that the record cannot settle what happened.
 // Guessing between them would put a claim about privilege escalation into an
 // audit log on the strength of a missing JSON key.
@@ -435,13 +435,13 @@ func uidTransition(oldUID, newUID int32) string {
 // a user namespace differs from entering a mount namespace. None can be settled
 // against a vocabulary that does not exist yet.
 // TODO(risk): the drift between pkg/event.PrivPayload and
-// bpf/include/allseer_event.h — names against bitmasks, a string operation
-// against a __u32 enum, a NamespaceType with no kernel field behind it — is the
+// bpf/include/allseer_event.h -- names against bitmasks, a string operation
+// against a __u32 enum, a NamespaceType with no kernel field behind it -- is the
 // concrete instance of pkg/event's standing TODO about generating the decoder
 // from the shared C layout. Writing the first consumer of the payload is what
 // surfaced it; resolving it belongs to pkg/event and bpf, not here.
 // TODO(event): OldUID and NewUID are tagged omitempty on a field whose zero
 // value is root. Dropping the tag is a one-line change to pkg/event and a
-// change to the recorded wire format, which is why it is not made here — but
+// change to the recorded wire format, which is why it is not made here -- but
 // until it is, UIDTransitionAmbiguous is the honest answer to the most
 // important privilege transition there is.

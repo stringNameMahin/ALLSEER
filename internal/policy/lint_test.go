@@ -620,7 +620,7 @@ func TestRiskConditioned(t *testing.T) {
 
 // TestVocabularyHelpersCoverTheEnums guards the membership functions the linter
 // depends on. A verdict or violation type missing from them would be reported
-// as unknown, which turns a working rule into a blocking lint error — the worst
+// as unknown, which turns a working rule into a blocking lint error -- the worst
 // possible false positive.
 func TestVocabularyHelpersCoverTheEnums(t *testing.T) {
 	for _, v := range decision.AllVerdicts() {

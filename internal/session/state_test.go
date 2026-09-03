@@ -157,7 +157,7 @@ func TestNewStateIsEmpty(t *testing.T) {
 
 // A nil *MemoryState must behave exactly like the nil SessionState the
 // validator already accepts: no history, not zero budget. The distinction is
-// load-bearing — if nil meant "everything spent", a caller that forgot to build
+// load-bearing -- if nil meant "everything spent", a caller that forgot to build
 // state would see every grant refused.
 func TestNilStateMeansNoHistoryNotZeroBudget(t *testing.T) {
 	var st *MemoryState
@@ -694,7 +694,7 @@ func TestDurationConstraintThroughValidator(t *testing.T) {
 	})
 
 	// The third event is judged against the elapsed time the first two
-	// established, which is 30s — under the limit. The fourth sees 120s.
+	// established, which is 30s -- under the limit. The fourth sees 120s.
 	if verdicts[2] != decision.VerdictWithinEnvelope {
 		t.Errorf("third = %s, want within_envelope", verdicts[2])
 	}
@@ -898,8 +898,8 @@ func TestRecordDecision(t *testing.T) {
 	}
 
 	want := []string{
-		"explicitly_denied ×2 (rule deny-credentials)",
-		"outside_envelope ×1 (rule warn-unexpected)",
+		"explicitly_denied x2 (rule deny-credentials)",
+		"outside_envelope x1 (rule warn-unexpected)",
 	}
 	if !reflect.DeepEqual(sum.TopViolations, want) {
 		t.Errorf("TopViolations = %v, want %v", sum.TopViolations, want)
@@ -952,7 +952,7 @@ func TestPeakRiskIgnoresNaNAndNonPositive(t *testing.T) {
 }
 
 // The summary is read by a human in a few seconds, so the violation list is
-// capped — and the cap must keep the most frequent, not the first seen.
+// capped -- and the cap must keep the most frequent, not the first seen.
 func TestTopViolationsIsCappedAndRanked(t *testing.T) {
 	st := NewState("s-1", nil)
 
@@ -968,11 +968,11 @@ func TestTopViolationsIsCappedAndRanked(t *testing.T) {
 
 	got := st.Snapshot().TopViolations
 	want := []string{
-		"outside_envelope ×7 (rule rule-7)",
-		"outside_envelope ×6 (rule rule-6)",
-		"outside_envelope ×5 (rule rule-5)",
-		"outside_envelope ×4 (rule rule-4)",
-		"outside_envelope ×3 (rule rule-3)",
+		"outside_envelope x7 (rule rule-7)",
+		"outside_envelope x6 (rule rule-6)",
+		"outside_envelope x5 (rule rule-5)",
+		"outside_envelope x4 (rule rule-4)",
+		"outside_envelope x3 (rule rule-3)",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("TopViolations = %v, want %v", got, want)
@@ -980,7 +980,7 @@ func TestTopViolationsIsCappedAndRanked(t *testing.T) {
 }
 
 // An unset verdict is a wiring bug, not a governance finding. Counting it would
-// attach a violation to evidence the system never produced — the same rule the
+// attach a violation to evidence the system never produced -- the same rule the
 // policy engine follows about a condition with no evidence behind it.
 func TestUnsetVerdictIsNotAViolation(t *testing.T) {
 	st := NewState("s-1", nil)

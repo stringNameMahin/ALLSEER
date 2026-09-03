@@ -15,7 +15,7 @@
 // The package answers one further question, off the hot path and once per
 // envelope: whether an envelope's selectors can be evaluated at all. That is
 // envelope admission rather than behavior validation, and it lives here because
-// the answer has to agree with the matchers exactly — a pattern accepted at
+// the answer has to agree with the matchers exactly -- a pattern accepted at
 // approval time and rejected by the matcher matches nothing, silently. See
 // lint.go.
 package validator
@@ -227,61 +227,16 @@ type NetworkMatcher interface {
 	MatchPort(allowed []int, port int) bool
 }
 
-// Done: glob semantics are specified in docs/path-matching.md and implemented
-// by GlobPathMatcher in path.go. ** spans whole segments only, patterns match
-// dotfiles, matching is byte-exact, and unresolved input never matches.
-// Done: the adversarial path corpus lives in test/testdata/paths/, with the
-// cases whose bytes cannot be reviewed as text (unicode normalization,
-// symlinks) in path_test.go.
-// Done: network semantics are specified in docs/network-matching.md and
-// implemented by NetworkPatternMatcher in network.go, with its corpus in
-// test/testdata/network/. Names and addresses are never assumed equivalent;
-// CorrelationMissing distinguishes an uncorrelated destination from a genuine
-// mismatch so the risk engine sees the difference.
-//
-// Done: grant precedence is specified in docs/grant-precedence.md and
-// implemented by ResolvePrecedence in precedence.go. Denials always override
-// grants; within a class the most specific entry wins, measured from a grant's
-// broadest selector; ties break toward the earlier envelope index.
-//
-// Done: DefaultValidator in validate.go implements Validate and
-// ValidateSession as pure functions, producing every Verdict and every
-// ViolationType. Order is envelope expiry, then resolution, then denials, then
-// grants, with anything unevaluable stopping at indeterminate — including an
-// unevaluable denial, which cannot be dismissed just because a grant matched.
 // TODO(validator): decide how a two-path operation is validated. A rename or
 // link names a source and a destination, Observation has one Target, and
 // selector matching evaluates only that, so a rename *into* a protected path is
 // matched on its source. internal/telemetry/resolve preserves the destination
 // in AttrNewPath; nothing matches against it. See docs/selector-matching.md
-// §4.1.
-// Done: an invalid pattern in a denial is a blocking envelope error, and the
-// same pattern in a grant is a non-blocking warning. An invalid grant pattern
-// grants nothing, which is fail-closed and visible as false positives; an
-// invalid denial pattern denies nothing, which is the one place the posture
-// inverts and the one failure nothing downstream can observe. Implemented by
-// EnvelopeLinter in lint.go; see docs/grant-precedence.md §5.
-// Done: events reach the matcher through event.go. ObservationOf prefers a
-// recorded Event.Observation and falls back to internal/telemetry/resolve;
-// MatchEvent reports an unresolvable event as unevaluable rather than handing
-// the matcher a blank observation, which a Kind-only grant would satisfy.
-// Done: the composing Matcher is specified in docs/selector-matching.md and
-// implemented by SelectorMatcher in matcher.go. Dimensions combine with AND,
-// lists with OR, and an unconstrained dimension covers everything. Its
-// MatchResult carries an Unevaluable flag so a caller never has to tell a
-// mismatch from a blind spot by reading the reason string.
-// Done: selector admission linting is implemented by EnvelopeLinter in lint.go,
-// which implements ece.Validator by calling the same ValidatePattern,
-// ValidateHostPattern, and IsValidPort the matchers call. It lives here rather
-// than in internal/envelope so it cannot drift from matching, and so a daemon
-// loading an envelope from a store need not import the generator. The case and
-// Unicode ambiguities of docs/path-matching.md §5 are reported, never blocking:
-// non-ASCII on both sides, case on denials only, since a grant in the wrong
-// case fails closed and reporting it would put an issue on every real envelope.
-// TODO(validator): lint overlapping entries — a grant strictly broader than
+// section 4.1.
+// TODO(validator): lint overlapping entries -- a grant strictly broader than
 // another is usually a drafting mistake, and CompareSpecificity already
 // computes the relation. It belongs in EnvelopeLinter rather than on the hot
-// path. See docs/grant-precedence.md §5.
+// path. See docs/grant-precedence.md section 5.
 // TODO(validator): benchmark against a realistic build. A linear scan over
 // grants per event may not hold up on the hot path; BenchmarkMatchPath and
 // BenchmarkMatchHost cover only the single-pattern cost.

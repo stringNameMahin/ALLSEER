@@ -19,7 +19,7 @@ type Model struct {
 	// HeaderSHA256 is the digest of the normalized header the model came from.
 	//
 	// Embedded in the generated file so "stale" means "not produced from the
-	// committed header" — a claim checkable without trusting the parser. It is
+	// committed header" -- a claim checkable without trusting the parser. It is
 	// computed over the header with CRLF normalized to LF, because this
 	// repository's .gitattributes leaves source line endings to core.autocrlf
 	// and a digest that differed between a Windows and a Linux checkout would
@@ -100,7 +100,7 @@ var scalars = map[string]scalar{
 
 // Layout resolves sizes, alignments, and offsets for every declared struct.
 //
-// The model is LP64 with natural alignment — a struct's alignment is its widest
+// The model is LP64 with natural alignment -- a struct's alignment is its widest
 // member's, its size is rounded up to that alignment, and each field starts at
 // the next offset satisfying its own alignment. That is what both supported
 // targets do: BPF_CFLAGS in the Makefile maps uname -m onto x86 and arm64, and

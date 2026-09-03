@@ -17,8 +17,8 @@ import (
 //
 // The vocabulary tests assert that this list means exactly what an identically
 // written network grant means. They are written against the same confusions
-// test/testdata/network/corpus.tsv is written against — suffix lookalikes,
-// wildcard depth, the apex, IPv4-mapped addresses — because a sensitivity list
+// test/testdata/network/corpus.tsv is written against -- suffix lookalikes,
+// wildcard depth, the apex, IPv4-mapped addresses -- because a sensitivity list
 // that disagreed with the matcher about what `*.github.com` covers would be a
 // second network model, which is the thing this feature exists not to be.
 //
@@ -212,8 +212,8 @@ func TestExactHostNames(t *testing.T) {
 	}
 }
 
-// A wildcard covers exactly one additional label — the TLS certificate
-// convention — and never the apex. Both halves are asserted, because covering
+// A wildcard covers exactly one additional label -- the TLS certificate
+// convention -- and never the apex. Both halves are asserted, because covering
 // the apex would silently widen every entry an operator writes.
 func TestWildcardHosts(t *testing.T) {
 	o := hostOracleFrom(t, hostEntry("high", "*.github.com"))
@@ -323,7 +323,7 @@ func TestHighestHostGradeWins(t *testing.T) {
 	}
 }
 
-// A destination the matcher cannot interpret is unknown, not unremarkable — the
+// A destination the matcher cannot interpret is unknown, not unremarkable -- the
 // same refusal PathSensitivity makes about an unresolved path.
 func TestAnUninterpretableDestinationIsUnrated(t *testing.T) {
 	o := hostOracleFrom(t, hostEntry("critical", "*.example.com"))
@@ -549,7 +549,7 @@ func TestHostFactorEvidence(t *testing.T) {
 		}
 		// The correlation gap is reported so an operator can see why a name
 		// entry never got a chance. It qualifies the answer; it does not change
-		// it, and it charges nothing — an uncorrelated destination is
+		// it, and it charges nothing -- an uncorrelated destination is
 		// novel_network_destination's signal, not this factor's.
 		if got := f.Evidence[EvidenceHostnameCorrelated]; got != "false" {
 			t.Errorf("hostname_correlated = %q, want %q", got, "false")
@@ -843,7 +843,7 @@ func BenchmarkScoreHostUnrated(b *testing.B) {
 	benchmarkHost(b, "93.184.216.34:443")
 }
 
-// A destination the list rates, which stops at the first matching rule — and
+// A destination the list rates, which stops at the first matching rule -- and
 // because the rules are ordered highest-grade first, a critical destination is
 // the earliest exit there is.
 func BenchmarkScoreHostRated(b *testing.B) {

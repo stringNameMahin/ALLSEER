@@ -181,8 +181,8 @@ func TestLoadRefusesABIVersionDrift(t *testing.T) {
 
 // An object whose version cannot be read is refused rather than treated as
 // version zero. The fixture is the real object with the symbol renamed, which
-// is what an object built from a source that dropped the global — or a
-// different program altogether — looks like to the check, and it reaches the
+// is what an object built from a source that dropped the global -- or a
+// different program altogether -- looks like to the check, and it reaches the
 // version check because everything the earlier checks look at is intact.
 func TestLoadRefusesAnObjectWithNoABIVersion(t *testing.T) {
 	l := NewLoader(Config{}, nil)
@@ -202,7 +202,7 @@ func TestLoadRefusesAnObjectWithNoABIVersion(t *testing.T) {
 // any object exists to attach one to.
 //
 // Attach returning ErrNotLoaded is the strongest form of that available from
-// outside — it means the refused Load left no module behind, so there was never
+// outside -- it means the refused Load left no module behind, so there was never
 // anything an attach could have run against. The module field is checked too,
 // because a loader in this package can see it and "no module" is the fact the
 // ordering rests on.
@@ -257,7 +257,7 @@ func TestLayoutAndABIVersionChecksAreIndependent(t *testing.T) {
 	l := NewLoader(Config{}, wrongSizeDecoder{NewDecoder()})
 	defer l.Close()
 	if err := l.Load(context.Background(), obj); !errors.Is(err, ErrLayoutDrift) {
-		t.Fatalf("Load = %v, want ErrLayoutDrift — the version check must not mask it", err)
+		t.Fatalf("Load = %v, want ErrLayoutDrift -- the version check must not mask it", err)
 	}
 }
 
@@ -275,7 +275,7 @@ func TestLayoutAndABIVersionChecksAreIndependent(t *testing.T) {
 // from "every probe in the object". openat is among the busiest syscalls on a
 // Linux host and this process's cgroup is the one these tests track, so
 // attaching it would put every open the Go runtime performs onto the same ring
-// the exec assertions read from — including the subtest that requires the drop
+// the exec assertions read from -- including the subtest that requires the drop
 // counter to still be zero. The open probes have their own file, which attaches
 // what each of its tests is about; the one test that needs all four on one
 // stream says so.
@@ -344,7 +344,7 @@ func execMarker(t *testing.T, name string) (path string, pid int) {
 // every exec event whose filename matches.
 //
 // Both layers are exercised on purpose. abi.DecodeRecord is what proves the
-// bytes have the shape the ABI declares — the version field in particular,
+// bytes have the shape the ABI declares -- the version field in particular,
 // which pkg/event.Event has nowhere to carry. NewDecoder().Decode is what
 // proves the loader's raw stream is what the rest of the system consumes.
 func collect(t *testing.T, records <-chan []byte, want string, d time.Duration) []decoded {
@@ -390,9 +390,9 @@ type decoded struct {
 // attributed to one process, in arrival order.
 //
 // collect above matches on the exec payload's filename, which is the only field
-// that tells one machine's execs apart. An exit record has no payload at all —
+// that tells one machine's execs apart. An exit record has no payload at all --
 // internal/telemetry/decode.go: "No union member is designated for an exit, so
-// none is read" — so the PID is the only handle there is, and a PID is enough
+// none is read" -- so the PID is the only handle there is, and a PID is enough
 // here because the process in question was forked by this test and reaped
 // before the drain begins.
 func collectForPID(t *testing.T, records <-chan []byte, pid int, d time.Duration) []decoded {
@@ -741,7 +741,7 @@ func execBurst(t *testing.T, n int) {
 // and, deliberately, no reader: RingBuffer is never called, so nothing drains
 // what the probe submits. One page holds four 856-byte records and then the
 // ring is full for good, which is the only way to produce a reservation failure
-// on demand — a full ring on a healthy host is a race nobody can lose reliably.
+// on demand -- a full ring on a healthy host is a race nobody can lose reliably.
 //
 // The three legs are the distinction allseer_maps.h draws:
 //
@@ -913,7 +913,7 @@ func TestRuntimeExitEventReachesUserspace(t *testing.T) {
 // This is the property the exit probe exists to make observable and the one
 // nothing could assert before it. event.Process.StartTime is documented as
 // making "(PID, StartTime) unique for a boot", and telemetry.ProcessTracker is
-// keyed on exactly that pair — Track on one event, Untrack on the other. If the
+// keyed on exactly that pair -- Track on one event, Untrack on the other. If the
 // two probes disagreed about either half, a tracker would register a process
 // under one key and try to retire it under another, and the PID would never be
 // released. Ordering matters for the same reason: an Untrack that arrived first
@@ -950,7 +950,7 @@ func TestRuntimeExecAndExitAgreeOnProcessIdentity(t *testing.T) {
 		t.Errorf("pid: exec says %d, exit says %d", execEv.event.Process.PID, exitEv.event.Process.PID)
 	}
 	if execEv.event.Process.StartTime != exitEv.event.Process.StartTime {
-		t.Errorf("start_time: exec says %d, exit says %d — exec does not replace the task_struct, "+
+		t.Errorf("start_time: exec says %d, exit says %d -- exec does not replace the task_struct, "+
 			"so these must be the same value and a tracker keyed on the pair cannot work if they are not",
 			execEv.event.Process.StartTime, exitEv.event.Process.StartTime)
 	}
@@ -1009,7 +1009,7 @@ func TestRuntimeUntrackedCgroupProducesNoExitEvent(t *testing.T) {
 // Only proc_exit is attached, so every counted drop is a record that probe
 // wanted to emit. Attaching both would prove that the object counts drops,
 // which TestRuntimeRingBufferDropsAreCounted already proves, and would leave
-// open whether the new probe contributes at all — a probe that omitted
+// open whether the new probe contributes at all -- a probe that omitted
 // count_ringbuf_drop() would be invisible behind the exec probe's counting.
 func TestRuntimeExitProbeCountsItsOwnDrops(t *testing.T) {
 	requireRoot(t)

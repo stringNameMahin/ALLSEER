@@ -18,8 +18,8 @@ import (
 // from the payload would let a replayed session be validated against different
 // facts than the live one was.
 //
-// When it is absent — a hand-written fixture, a source that predates the
-// resolver, a decode that skipped enrichment — it is derived from the payload
+// When it is absent -- a hand-written fixture, a source that predates the
+// resolver, a decode that skipped enrichment -- it is derived from the payload
 // rather than treated as an empty observation, because an empty observation
 // would match a Kind-only grant and quietly read as expected behavior.
 func ObservationOf(e *event.Event) (capability.Observation, error) {

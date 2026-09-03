@@ -193,8 +193,8 @@ const (
 	// AttrHostnameCorrelated is "false" when DNS correlation failed, so the
 	// destination is known only by address. Absent when correlation succeeded.
 	//
-	// Selector matching does not read it — it derives the same fact from the
-	// target's shape — but risk scoring and audit both want it stated rather
+	// Selector matching does not read it -- it derives the same fact from the
+	// target's shape -- but risk scoring and audit both want it stated rather
 	// than inferred.
 	AttrHostnameCorrelated = "hostname_correlated"
 

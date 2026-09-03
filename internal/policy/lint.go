@@ -26,7 +26,7 @@ import (
 //   - No false positives. Where a check would have to reason about glob
 //     containment or about what an operator meant, it is left out and its
 //     absence is documented, because a linter that cries wolf is one operators
-//     learn to skip — and then the real finding scrolls past with the rest.
+//     learn to skip -- and then the real finding scrolls past with the rest.
 //
 // Severity splits along a single line: critical means the rule can never fire
 // and the rule set should not be accepted; everything else is advisory. Linting
@@ -38,7 +38,7 @@ import (
 //   - A disabled rule. Rule.Enabled exists precisely so a rule can be kept for
 //     documentation while inactive; reporting it would report the feature.
 //   - A rule set whose default_action is stronger than every rule in it. The
-//     obvious reading — "the rules are decoration" — is wrong. A rule set that
+//     obvious reading -- "the rules are decoration" -- is wrong. A rule set that
 //     defaults to block and warns on specific cases is an allowlist posture,
 //     and its rules are exemptions rather than protections. There is no way to
 //     tell that from a permissive mistake without knowing the operator's
@@ -47,7 +47,7 @@ import (
 //   - A catch-all condition as such. What matters about it is concrete and
 //     already reported: the rules it shadows, and the default action it
 //     displaces.
-//   - Structural defects — unknown actions or modes, missing or duplicate IDs.
+//   - Structural defects -- unknown actions or modes, missing or duplicate IDs.
 //     Those are admission's job, enforced by compile at construction and by the
 //     loader before that. Repeating them here would be a second implementation
 //     of the same rule.
@@ -65,8 +65,8 @@ func NewLinter() RuleLinter { return RuleLinter{} }
 // Lint reports every provable defect in a rule set, in document order:
 // per-rule findings in evaluation order, then rule-set-wide findings.
 //
-// It assumes the rule set is structurally admissible — that NewEngine or the
-// loader has accepted it — and reports only semantic defects. A nil rule set
+// It assumes the rule set is structurally admissible -- that NewEngine or the
+// loader has accepted it -- and reports only semantic defects. A nil rule set
 // yields no issues rather than a panic; there is nothing to say about a policy
 // that does not exist.
 func (RuleLinter) Lint(rs *RuleSet) []LintIssue { return LintRuleSet(rs) }
@@ -174,7 +174,7 @@ func lintClosedSets(id string, c Condition) []LintIssue {
 //
 // Note what is *not* reported: a minimum below zero, or a maximum above the top
 // of the scale. Those look redundant and are not, because any risk field at all
-// makes the rule require a scored assessment — riskMatches refuses a nil one.
+// makes the rule require a scored assessment -- riskMatches refuses a nil one.
 // "min_risk_score: 0" is the idiomatic way to write "only when risk was
 // actually scored", and flagging it would flag a working idiom.
 func lintRiskRange(id string, c Condition) []LintIssue {
@@ -240,7 +240,7 @@ func lintCapabilityDomain(id string, c Condition) []LintIssue {
 // pattern means.
 //
 // The severity split follows from OR-within-a-list. One bad pattern among good
-// ones is dead weight — the rule still fires on the others — while a list whose
+// ones is dead weight -- the rule still fires on the others -- while a list whose
 // patterns are all unusable is a condition that can never hold.
 func lintPatterns(id, field string, patterns []string, validate func(string) error) []LintIssue {
 	if len(patterns) == 0 {
@@ -316,7 +316,7 @@ func lintReachability(ordered []Rule, i int) []LintIssue {
 	return nil
 }
 
-// subsumes reports whether every request matching b also matches a — that is,
+// subsumes reports whether every request matching b also matches a -- that is,
 // whether a always wins first.
 //
 // Each dimension follows directly from matches(): an unconstrained dimension in
@@ -405,8 +405,8 @@ func subsumeMax(a, b *float64) bool {
 // posture: that it can never be reached.
 //
 // An enabled rule with an empty condition and no mode restriction matches every
-// event, so nothing below it runs and the default action — the most
-// consequential line in the file — is dead. Nothing else about default_action
+// event, so nothing below it runs and the default action -- the most
+// consequential line in the file -- is dead. Nothing else about default_action
 // is claimed; see the package comment for why "the default is stronger than
 // every rule" is not a defect.
 func lintDefaultAction(rs *RuleSet, ordered []Rule) []LintIssue {
@@ -437,7 +437,7 @@ func matchesEverything(c Condition) bool {
 // RiskConditioned reports whether a rule's outcome depends on a risk
 // assessment.
 //
-// Not a lint finding — a risk-conditioned rule is correct policy — but callers
+// Not a lint finding -- a risk-conditioned rule is correct policy -- but callers
 // running the engine without a risk stage need to say why such rules never
 // fire, rather than leaving an operator to wonder. See the dry-run command.
 func RiskConditioned(r Rule) bool {

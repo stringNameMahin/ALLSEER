@@ -102,7 +102,7 @@ func TestUncorrelatedDestinationChangesExactlyTwoEventsInTheCorpus(t *testing.T)
 		"go-build.jsonl":      {},
 		"git-operation.jsonl": {},
 
-		// np-032 connects to 151.101.1.162 with no correlated hostname — the
+		// np-032 connects to 151.101.1.162 with no correlated hostname -- the
 		// event the fixture's own README describes as "standing in for
 		// DNS-over-HTTPS and hardcoded addresses". It is exactly what this
 		// factor is for, and it was previously scored as though the missing name
@@ -140,16 +140,16 @@ func TestUncorrelatedDestinationChangesExactlyTwoEventsInTheCorpus(t *testing.T)
 				// evidence that changed a verdict would mean risk had reached
 				// validation.
 				if a.Verdict != b.Verdict {
-					t.Errorf("%s: verdict %q → %q", a.EventID, b.Verdict, a.Verdict)
+					t.Errorf("%s: verdict %q -> %q", a.EventID, b.Verdict, a.Verdict)
 				}
 				if a.Rule != b.Rule {
-					t.Errorf("%s: rule %q → %q", a.EventID, b.Rule, a.Rule)
+					t.Errorf("%s: rule %q -> %q", a.EventID, b.Rule, a.Rule)
 				}
 				if a.Action != b.Action {
-					t.Errorf("%s: action %q → %q", a.EventID, b.Action, a.Action)
+					t.Errorf("%s: action %q -> %q", a.EventID, b.Action, a.Action)
 				}
 				if a.Level != b.Level {
-					t.Errorf("%s: level %q → %q", a.EventID, b.Level, a.Level)
+					t.Errorf("%s: level %q -> %q", a.EventID, b.Level, a.Level)
 				}
 				// And the score may only rise, by exactly the one value this
 				// scorer can contribute.
@@ -245,9 +245,9 @@ func TestTheCorpusUncorrelatedEventCarriesItsEvidence(t *testing.T) {
 func TestEveryCorpusNetworkEventIsAccountedFor(t *testing.T) {
 	// Every network event in the corpus, and what the factor must say about it.
 	want := map[string]bool{
-		"np-003": false, // net.dns, correlated name — and DNS is excluded anyway
+		"np-003": false, // net.dns, correlated name -- and DNS is excluded anyway
 		"np-004": false, // net.connect, correlated
-		"np-005": false, // net.receive — not a destination-naming capability
+		"np-005": false, // net.receive -- not a destination-naming capability
 		"np-032": true,  // net.connect, uncorrelated
 		"ex-006": false, // net.dns
 		"ex-007": false, // net.connect, correlated

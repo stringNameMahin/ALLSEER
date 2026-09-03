@@ -233,7 +233,7 @@ func TestNetworkMatcherIsConcurrencySafe(t *testing.T) {
 }
 
 // FuzzMatchHost asserts the invariants that must hold for every input: no
-// panic, no match on an invalid pattern, and — the one that matters — no match
+// panic, no match on an invalid pattern, and -- the one that matters -- no match
 // across the name/address boundary.
 func FuzzMatchHost(f *testing.F) {
 	seeds := [][2]string{

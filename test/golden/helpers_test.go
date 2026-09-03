@@ -41,7 +41,7 @@ func policyEngine(t *testing.T) *policy.RuleEngine {
 //
 // With no oracle the engine rates no resource, and sensitive_path,
 // sensitive_host, and the credential half of the sequence detector all go
-// quiet — which is a legitimate configuration and the wrong one to pin here.
+// quiet -- which is a legitimate configuration and the wrong one to pin here.
 // The golden exists to show what the system concludes when it is configured the
 // way it ships.
 func riskEngine(t *testing.T) *risk.BaselineEngine {
@@ -162,8 +162,8 @@ func factorNames(d decision.Decision) []string {
 // evidenceOf finds one evidence value across every factor on a decision.
 //
 // Flattened across factors because the assertion is about what the record can
-// tell a human — "which path was rated", "which antecedent the sequence
-// detector named" — and which scorer happened to attach the key is the detail
+// tell a human -- "which path was rated", "which antecedent the sequence
+// detector named" -- and which scorer happened to attach the key is the detail
 // the caller should not have to track.
 func evidenceOf(d decision.Decision, key string) string {
 	for _, f := range d.Risk.Factors {

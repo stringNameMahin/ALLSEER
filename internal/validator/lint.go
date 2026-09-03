@@ -12,7 +12,7 @@ import (
 
 // Envelope admission is the mirror image of the rest of this package. Validate
 // asks whether an observation is covered by the envelope; linting asks whether
-// the envelope can be evaluated at all — before a human approves it, and before
+// the envelope can be evaluated at all -- before a human approves it, and before
 // a single event arrives.
 //
 // It lives beside the matcher rather than in internal/envelope for one reason:
@@ -28,7 +28,7 @@ import (
 // matters. An unparseable pattern in a *grant* grants nothing, which is
 // fail-closed: the session produces false positives, a human sees them, and
 // nothing is silently permitted. The same pattern in a *denial* denies nothing,
-// and that failure is invisible everywhere — no error, no event, no audit line,
+// and that failure is invisible everywhere -- no error, no event, no audit line,
 // just a prohibition that was never in force. So:
 //
 //   - Critical, and blocking: a defect that leaves an entry unable to match
@@ -41,7 +41,7 @@ import (
 //
 // Only critical refuses admission. Everything else is reported for a human to
 // weigh, because a linter that blocks on judgment calls is a linter operators
-// route around. See docs/grant-precedence.md §5 and docs/path-matching.md §5.
+// route around. See docs/grant-precedence.md section 5 and docs/path-matching.md section 5.
 
 // EnvelopeLinter implements ece.Validator over this package's selector
 // semantics.
@@ -71,8 +71,8 @@ func (EnvelopeLinter) Validate(_ context.Context, env *ece.Envelope) ([]ece.Issu
 // LintEnvelope is Validate as a free function, so admission can be exercised
 // without constructing a linter.
 //
-// Issues are returned in document order — constraints, then grants, then
-// denials — because that is the order a reviewer reads the envelope in.
+// Issues are returned in document order -- constraints, then grants, then
+// denials -- because that is the order a reviewer reads the envelope in.
 func LintEnvelope(env *ece.Envelope) []ece.Issue {
 	var issues []ece.Issue
 
@@ -256,8 +256,8 @@ func applicableDimensions(d capability.Domain) []string {
 		return []string{dimExecutables, dimArgs}
 	default:
 		// Privilege, IPC, and kernel capabilities have no selector dimension of
-		// their own, except that the resource is sometimes named by a path — a
-		// unix socket, a loaded module — and the matcher honors PathPatterns
+		// their own, except that the resource is sometimes named by a path -- a
+		// unix socket, a loaded module -- and the matcher honors PathPatterns
 		// when a grant sets them.
 		return []string{dimPaths}
 	}
@@ -321,9 +321,9 @@ func lintPathPatterns(patterns []string, field string, role entryRole) []ece.Iss
 }
 
 // lintPathAmbiguity reports patterns whose bytes may not be the bytes the
-// kernel will present. Matching is byte-exact by design — it has to agree with
-// the kernel about file identity — so these are resolved by a human at approval
-// time or not at all. See docs/path-matching.md §5.
+// kernel will present. Matching is byte-exact by design -- it has to agree with
+// the kernel about file identity -- so these are resolved by a human at approval
+// time or not at all. See docs/path-matching.md section 5.
 func lintPathAmbiguity(pattern, field string, role entryRole) []ece.Issue {
 	var issues []ece.Issue
 
@@ -451,7 +451,7 @@ func lintMaxCount(max int, field string, role entryRole) []ece.Issue {
 // Not a selector, but the same admission problem: the root reaches
 // PathMatcher.WithinRoot, which refuses anything unresolved. An unusable root
 // therefore reports every uncovered filesystem operation as a workspace escape,
-// which is a false-positive source rather than a protection gap — hence medium
+// which is a false-positive source rather than a protection gap -- hence medium
 // and non-blocking.
 func lintWorkspaceRoot(root string) []ece.Issue {
 	if root == "" {

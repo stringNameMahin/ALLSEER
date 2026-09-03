@@ -83,7 +83,7 @@ func NewPathMatcherWithResolver(r Resolver) *GlobPathMatcher {
 // or a relative anything returns false: a selector nobody can interpret grants
 // nothing. Callers that need to distinguish "did not match" from "could not be
 // evaluated" must check IsResolved themselves and raise
-// ViolationUnresolvable — the two are not the same finding and must not be
+// ViolationUnresolvable -- the two are not the same finding and must not be
 // reported as if they were.
 func (m *GlobPathMatcher) Match(pattern, path string) bool {
 	return MatchPath(pattern, path)
@@ -150,8 +150,8 @@ func containedBy(root, path string) bool {
 	return strings.HasPrefix(path, root+"/")
 }
 
-// MatchPath is Match as a free function, so the semantics can be exercised —
-// and fuzzed — without constructing a matcher.
+// MatchPath is Match as a free function, so the semantics can be exercised --
+// and fuzzed -- without constructing a matcher.
 func MatchPath(pattern, path string) bool {
 	if ValidatePattern(pattern) != nil {
 		return false
@@ -173,7 +173,7 @@ func MatchPath(pattern, path string) bool {
 //
 // Written for internal/risk's sensitivity list, which scans every configured
 // pattern for every event on the hot path. It applies equally to a grant scan,
-// which has the same shape and the same problem — see the benchmarking TODO in
+// which has the same shape and the same problem -- see the benchmarking TODO in
 // validator.go.
 //
 // Immutable after construction and safe for concurrent use.
@@ -257,8 +257,8 @@ func (s *PatternSet) Match(path string) bool { return s.MatchIndex(path) >= 0 }
 // free of "." and ".." segments, free of empty segments, and free of NUL.
 //
 // It is deliberately a check and not a fixer. Lexically cleaning ".." out of a
-// path is wrong whenever a symlink is involved — /ws/link/../x resolves to a
-// sibling of the link's target, not of the link — and a validator that cleaned
+// path is wrong whenever a symlink is involved -- /ws/link/../x resolves to a
+// sibling of the link's target, not of the link -- and a validator that cleaned
 // paths itself would produce confident answers about paths that never existed.
 // Enrichment resolves; the validator verifies and refuses.
 //

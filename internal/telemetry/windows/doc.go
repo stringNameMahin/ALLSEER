@@ -2,8 +2,8 @@
 
 // Package windows is the root of ALLSEER's Windows telemetry implementation.
 //
-// Nothing here acquires telemetry yet. The package exists to fix one decision —
-// where Windows-specific telemetry code lives — so that the mechanism research
+// Nothing here acquires telemetry yet. The package exists to fix one decision --
+// where Windows-specific telemetry code lives -- so that the mechanism research
 // and design stages that follow have somewhere to land that is not the
 // platform-neutral core.
 //
@@ -21,7 +21,7 @@
 // Windows telemetry is expected to be mechanism-plural, rather than backed by
 // one facility the way bpf/allseer.bpf.c backs Linux today. A subpackage per
 // mechanism keeps each one's dependencies to itself, so a mechanism that is
-// unavailable on a host — or simply not written yet — is a package that
+// unavailable on a host -- or simply not written yet -- is a package that
 // contributes nothing, rather than a build that fails or a collector that comes
 // up half-initialized.
 //

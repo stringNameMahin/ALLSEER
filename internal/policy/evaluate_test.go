@@ -339,7 +339,7 @@ func TestConditionMatching(t *testing.T) {
 			match: Condition{Hosts: []string{"2001:db8::/32"}},
 			req: EvaluateRequest{
 				// No correlated name and no port, so the target is the address
-				// alone — full of colons, and not a host:port.
+				// alone -- full of colons, and not a host:port.
 				Event:      netEvent("", "2001:db8::1", 0),
 				Validation: result(decision.VerdictOutsideEnvelope),
 			},
@@ -522,7 +522,7 @@ func TestModeSelectsRulesAndNeverRewritesActions(t *testing.T) {
 
 // TestMonitorModeStillReportsBlock is the measurement property. Monitor mode
 // must answer "what would this policy have done", so the action stays block and
-// only its application is advisory — that is Decision.Enforced's job, not this
+// only its application is advisory -- that is Decision.Enforced's job, not this
 // engine's. If this test is ever "fixed" to expect allow, the false-positive
 // measurement the project is built to produce becomes impossible.
 func TestMonitorModeStillReportsBlock(t *testing.T) {
@@ -727,7 +727,7 @@ func TestEvaluationIsDeterministic(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		out := evaluate(t, engine(t, set(ece.ActionAllow, shuffled...)), req)
 		if out.RuleID != first.RuleID || out.Action != first.Action {
-			t.Fatalf("run %d selected %q/%q, want %q/%q — evaluation depends on input order",
+			t.Fatalf("run %d selected %q/%q, want %q/%q -- evaluation depends on input order",
 				i, out.RuleID, out.Action, first.RuleID, first.Action)
 		}
 	}

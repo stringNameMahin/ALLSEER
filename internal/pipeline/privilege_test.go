@@ -107,7 +107,7 @@ func runPriv(t *testing.T, e *event.Event, scored bool) *ProcessingContext {
 
 // The reason the milestone was not deferred. configs/rules.default.yaml's
 // privilege-escalation rule matches `capabilities: [priv.escalate, priv.setuid,
-// priv.capset]` and does not name priv.namespace — the capability the catalog
+// priv.capset]` and does not name priv.namespace -- the capability the catalog
 // describes as "how a process escapes the attribution the collector depends
 // on". An ungranted namespace change therefore falls past that rule, past ten
 // others, and lands on medium-risk-departure, which warns.
@@ -220,8 +220,8 @@ func TestPrivilegeEvidenceReachesTheDecision(t *testing.T) {
 // --- 3. a granted privilege change ------------------------------------------------------
 
 // An envelope that grants priv.setuid is not matched by the block rule, which
-// reads only three of the six verdicts. The event is allowed — correctly, since
-// the envelope's author said so — and the point of the factor here is that the
+// reads only three of the six verdicts. The event is allowed -- correctly, since
+// the envelope's author said so -- and the point of the factor here is that the
 // record now names what was granted away instead of passing in silence.
 //
 // The score stays exactly zero, so the model's invariant that an expected event
@@ -240,7 +240,7 @@ func TestAGrantedPrivilegeChangeIsAllowedAndRecorded(t *testing.T) {
 		t.Fatalf("verdict = %q, want within_envelope", pc.Validation.Verdict)
 	}
 	if pc.Outcome.RuleID != "within-envelope" || pc.Outcome.Action != ece.ActionAllow {
-		t.Fatalf("matched %q / %q; want within-envelope / allow — the shipped block rule reads "+
+		t.Fatalf("matched %q / %q; want within-envelope / allow -- the shipped block rule reads "+
 			"only three verdicts and within_envelope is not among them",
 			pc.Outcome.RuleID, pc.Outcome.Action)
 	}

@@ -28,7 +28,7 @@ import (
 //     matches slightly differently; it is a rule missing a constraint its
 //     author wrote, which means it matches *more* than intended.
 //   - "enabled" must be written out. Go's zero value for a bool is false, so a
-//     rule that omits the field is silently inert — the one field whose default
+//     rule that omits the field is silently inert -- the one field whose default
 //     silently removes a rule from the policy.
 //   - A second YAML document is an error, rather than a quietly ignored half of
 //     the file.
@@ -40,7 +40,7 @@ import (
 // dependency and lets a future JSON or programmatic source feed the same
 // engine.
 
-// ErrNoRules reports a file that parsed but contained no rule set at all — an
+// ErrNoRules reports a file that parsed but contained no rule set at all -- an
 // empty file, or one holding only comments. It is an error rather than an empty
 // policy because a daemon starting with an empty rule set would fall through to
 // the default action on every event, which looks like a working system.
@@ -60,7 +60,7 @@ func NewLoader() FileLoader { return FileLoader{} }
 //
 // A returned rule set is guaranteed to be one NewEngine accepts: validation
 // here is the engine's own admission check, not a second implementation of it.
-// Any error means no rule set, never a partial one — a caller that fell back to
+// Any error means no rule set, never a partial one -- a caller that fell back to
 // "whatever loaded" would be running a policy nobody wrote.
 func (FileLoader) Load(_ context.Context, path string) (*RuleSet, error) {
 	f, err := os.Open(path)
@@ -80,7 +80,7 @@ func (FileLoader) Load(_ context.Context, path string) (*RuleSet, error) {
 // loader that cannot watch, and a caller must read it as "no hot reload" rather
 // than as "nothing has changed yet".
 //
-// TODO(policy): implement watching. It needs a decision first — fsnotify is a
+// TODO(policy): implement watching. It needs a decision first -- fsnotify is a
 // second dependency, and polling a mtime is dependency-free but has a window in
 // which a half-written file is readable. Whichever wins, a reload must go
 // through Load so a bad file is rejected before it reaches the engine.
@@ -96,7 +96,7 @@ func parseRuleSet(data []byte, source string) (*RuleSet, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	// The single most valuable line in this file. Without it, "violaton_types"
 	// parses cleanly and produces a rule with one fewer condition than its
-	// author wrote — a rule that matches more, silently.
+	// author wrote -- a rule that matches more, silently.
 	dec.KnownFields(true)
 
 	if err := dec.Decode(&rs); err != nil {
@@ -134,7 +134,7 @@ func parseRuleSet(data []byte, source string) (*RuleSet, error) {
 // field.
 //
 // Rule.Enabled is a plain bool, so the decoded value cannot distinguish
-// "enabled: false" from a rule that never mentioned it — and the two mean
+// "enabled: false" from a rule that never mentioned it -- and the two mean
 // opposite things to a reviewer. A rule written to block kernel tampering that
 // forgot one line is not a conservative default; it is a hole with a
 // description above it.

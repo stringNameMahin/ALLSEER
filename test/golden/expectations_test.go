@@ -15,7 +15,7 @@ import (
 // attached; regenerating a file is one command.
 //
 // What is *not* here is any restatement of how a number was reached. No weight,
-// threshold, matcher rule, or rule-set priority appears — those belong to
+// threshold, matcher rule, or rule-set priority appears -- those belong to
 // internal/risk and internal/policy and are tested there. What appears is the
 // system's conclusion per event, which is the one thing no single-component test
 // can see.
@@ -47,7 +47,7 @@ var expected = map[string][]finding{
 
 		// gt-006 writes .git/index. Expected for a commit, granted by the
 		// workspace pattern, and deliberately *not* caught by the .github
-		// denial beside it — the two paths differ by four characters and a
+		// denial beside it -- the two paths differ by four characters and a
 		// matcher that confused them would be a security defect in either
 		// direction.
 		{EventID: "gt-006", SessionID: "s-git", Verdict: decision.VerdictWithinEnvelope,
@@ -92,9 +92,9 @@ var expected = map[string][]finding{
 	// near-miss placed beside it.
 	//
 	// This is the case that makes the golden worth having. Four of these ten
-	// decisions depend on *session history* rather than on the event alone —
+	// decisions depend on *session history* rather than on the event alone --
 	// the sequence detector's antecedent, the novelty of a target, the running
-	// violation count — so a change to when the pipeline commits state, or to
+	// violation count -- so a change to when the pipeline commits state, or to
 	// the order events are processed in, moves numbers here and nowhere else.
 	"credential-egress": {
 		{EventID: "ex-001", SessionID: "s-exfil", Verdict: decision.VerdictWithinEnvelope,
@@ -116,8 +116,8 @@ var expected = map[string][]finding{
 				"sensitivity": "critical",
 			}},
 
-		// ex-004 reads /etc/passwd and succeeds. Rated medium — identity, read
-		// constantly through getpwnam — so it lands on a warning rather than a
+		// ex-004 reads /etc/passwd and succeeds. Rated medium -- identity, read
+		// constantly through getpwnam -- so it lands on a warning rather than a
 		// prompt, and it must never qualify as the sequence detector's first
 		// half. A detector that fired here would fire on most sessions that
 		// touch the network.
@@ -131,7 +131,7 @@ var expected = map[string][]finding{
 			}},
 
 		// ex-005 reads ~/.ssh/id_ed25519 and *fails*. sensitive_path still
-		// charges the full critical grade — the resource was reached for — while
+		// charges the full critical grade -- the resource was reached for -- while
 		// the sequence detector rejects it as an antecedent, because an ENOENT
 		// disclosed nothing and there is nothing that could subsequently leave.
 		// The two factors ask different questions, and this is where the
@@ -153,7 +153,7 @@ var expected = map[string][]finding{
 			Factors: []string{"verdict", "sensitive_host", "evidence_basis"}},
 
 		// ex-007 and ex-008 are egress the envelope granted. The sequence is
-		// found and reported on both — the evidence names ex-003 — and
+		// found and reported on both -- the evidence names ex-003 -- and
 		// contributes exactly zero points, with not_charged saying why. An
 		// event a grant covered scores zero however alarming its shape.
 		{EventID: "ex-007", SessionID: "s-exfil", Verdict: decision.VerdictWithinEnvelope,
@@ -174,7 +174,7 @@ var expected = map[string][]finding{
 		// ex-009 connects to an address no DNS answer covers, under an envelope
 		// granting net.connect by hostname. The validator cannot tell whether
 		// that address *is* the granted host, so the verdict is indeterminate
-		// rather than a mismatch — unresolved is not safe, and it is not a
+		// rather than a mismatch -- unresolved is not safe, and it is not a
 		// finding about the agent either.
 		//
 		// This is the event the sequence detector moves. Without it the score

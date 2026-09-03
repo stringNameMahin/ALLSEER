@@ -37,7 +37,7 @@
  * The dependency is one-way and stays that way: allseer_event.h includes
  * nothing from here, so internal/telemetry/abigen still parses that file alone
  * and still finds exactly one struct nothing else embeds. Embedding the
- * identity struct rather than restating its fields is the point — the scratch
+ * identity struct rather than restating its fields is the point -- the scratch
  * entry holds the *record's* identity, captured once, and a second declaration
  * of the same fields would be a second thing to keep in step. */
 #include "allseer_event.h"
@@ -52,7 +52,7 @@
  * telemetry.Config.RingBufferSize before load, which is the only point at which
  * a ring buffer can be resized.
  *
- * Sizing this is a real tradeoff and not a free one — the memory is locked, and
+ * Sizing this is a real tradeoff and not a free one -- the memory is locked, and
  * a larger buffer converts dropped records into latency rather than removing
  * the loss. Records lost here are the hole pkg/event.Event.Dropped reports, and
  * telemetry.Config.FailClosedOnDrop is what an operator does about it. */
@@ -118,8 +118,8 @@ typedef __u32 allseer_drop_key_t;
  * for, since the object was loaded.
  *
  * BPF_MAP_TYPE_PERCPU_ARRAY rather than a single shared cell. Drops do not
- * arrive one at a time — the ring fills once and then every CPU that reaches a
- * reservation fails at the same moment — so a shared counter would put every
+ * arrive one at a time -- the ring fills once and then every CPU that reaches a
+ * reservation fails at the same moment -- so a shared counter would put every
  * CPU on the system onto one cache line precisely when the machine is already
  * behind. Per-CPU slots have no such moment, and summing them in user space is
  * a loop over a handful of words.
@@ -136,8 +136,8 @@ typedef __u32 allseer_drop_key_t;
  *                telemetry.SourceStats keeps it apart as DecodeErrors.
  *
  * Monotonic for the lifetime of the loaded object, and never reset from user
- * space. The cumulative form is what SourceStats.DroppedEvents is defined as —
- * "Rising DroppedEvents is a correctness problem, not a performance one" — and
+ * space. The cumulative form is what SourceStats.DroppedEvents is defined as --
+ * "Rising DroppedEvents is a correctness problem, not a performance one" -- and
  * the per-record delta Event.Dropped wants is current minus last-observed,
  * which any reader can compute and which a reader that reset the counter would
  * destroy for every other reader. */
@@ -148,7 +148,7 @@ typedef __u64 allseer_drop_count_t;
  * The two probes written before this one hook the scheduler, where one
  * tracepoint carries everything a record needs. A syscall does not work that
  * way: sys_enter_openat carries the arguments and no return, sys_exit_openat
- * carries the return and no arguments, and struct allseer_event demands both —
+ * carries the return and no arguments, and struct allseer_event demands both --
  * the header defines `ret` as "syscall return; negative is -errno", and
  * internal/telemetry/decode.go reads `ret >= 0` as Succeeded. A record emitted
  * at entry would have to write *something* into that field, and every available
@@ -164,8 +164,8 @@ typedef __u64 allseer_drop_count_t;
  *
  * # The key: the thread, not the process
  *
- * allseer_syscall_key_t is bpf_get_current_pid_tgid() unmodified — the thread
- * group ID in the high 32 bits and the thread ID in the low 32 — because that
+ * allseer_syscall_key_t is bpf_get_current_pid_tgid() unmodified -- the thread
+ * group ID in the high 32 bits and the thread ID in the low 32 -- because that
  * is the identity of the thing that makes a syscall. A process does not enter a
  * syscall; a thread does, and every thread of a process can be inside openat at
  * the same moment. A key of just the tgid would make those calls collide, and
@@ -183,7 +183,7 @@ typedef __u64 allseer_drop_count_t;
  * # PID reuse, and why the key alone is not enough
  *
  * A thread ID is reused after the thread dies, and a scratch entry can outlive
- * the thread that wrote it — a task killed inside openat never reaches
+ * the thread that wrote it -- a task killed inside openat never reaches
  * sys_exit_openat. So the key can be matched by a thread that never wrote it.
  *
  * That is not hypothetical and it is not harmless. The dangerous shape is: a
@@ -192,7 +192,7 @@ typedef __u64 allseer_drop_count_t;
  * writes nothing, and its exit finds the dead thread's entry. Without a guard
  * that would emit an event that never happened, carrying a path from one process
  * and a return from another, attributed to a cgroup the second process was never
- * in — an untracked cgroup producing a governed event, which is the one thing
+ * in -- an untracked cgroup producing a governed event, which is the one thing
  * the filter exists to make impossible.
  *
  * So every scratch value carries `task_start_time`, the calling thread's
@@ -200,22 +200,22 @@ typedef __u64 allseer_drop_count_t;
  * on. A reused TID belongs to a task created later and so carries a different
  * start time; a mismatch means the entry is not this thread's, and the exit side
  * deletes it and emits nothing. This is the same disambiguator event.Process
- * .StartTime is documented for — "the pair (PID, StartTime) is unique for a
- * boot; PID alone is not" — applied one level down, to the thread.
+ * .StartTime is documented for -- "the pair (PID, StartTime) is unique for a
+ * boot; PID alone is not" -- applied one level down, to the thread.
  *
  * # Bounding, and what happens when the exit never comes
  *
  * BPF_MAP_TYPE_LRU_HASH, and the choice is the opposite of the one made for
- * tracked_cgroups directly above — deliberately, because the two maps fail in
+ * tracked_cgroups directly above -- deliberately, because the two maps fail in
  * opposite directions.
  *
  * tracked_cgroups holds policy that user space owns: an evicted entry there
  * silently stops a governed session from being observed, so it must be a plain
  * hash whose insert fails loudly rather than quietly making room. This map holds
  * kernel-owned ephemeral state whose entries are supposed to be short-lived, and
- * its bad state is the reverse. A plain hash that filled with orphans — entries
+ * its bad state is the reverse. A plain hash that filled with orphans -- entries
  * from threads killed mid-syscall, which no cleanup path can reach because there
- * is no tracepoint for "a syscall that never returned" — would reject every
+ * is no tracepoint for "a syscall that never returned" -- would reject every
  * subsequent insert forever. Every openat on the host would then go unreported,
  * permanently, from a condition nothing observes. An LRU cannot reach that
  * state: the least recently used entry gives way, insertion always succeeds, and
@@ -224,7 +224,7 @@ typedef __u64 allseer_drop_count_t;
  * The cost of eviction is one lost open event, and it is stated rather than
  * hidden: an evicted entry means the exit finds nothing and emits nothing, which
  * is indistinguishable downstream from an openat that never happened. That is a
- * real gap, and it is bounded by capacity rather than by luck — see the TODO at
+ * real gap, and it is bounded by capacity rather than by luck -- see the TODO at
  * the foot of this file for what would make it visible.
  *
  * # One map per syscall, not one shared map
@@ -250,7 +250,7 @@ typedef __u64 allseer_syscall_key_t;
  *
  * An entry exists only between one thread's sys_enter_openat and its
  * sys_exit_openat, so the live population is the number of tracked threads
- * blocked in openat at one instant — normally a handful, since openat on a warm
+ * blocked in openat at one instant -- normally a handful, since openat on a warm
  * page cache returns in microseconds. The number is not sized for that. It is
  * sized for the orphans: entries from threads killed inside the syscall, which
  * accumulate at a rate nothing bounds and are only ever reclaimed by eviction.
@@ -268,7 +268,7 @@ typedef __u64 allseer_syscall_key_t;
 /* Value of `openat_scratch`: everything the final record needs except `ret`.
  *
  * The split is the design, not an implementation detail. The entry side captures
- * the whole event — time, identity, cgroup, arguments — and the exit side
+ * the whole event -- time, identity, cgroup, arguments -- and the exit side
  * contributes exactly one field, the syscall return, and emits. Nothing about
  * the event is decided twice.
  *
@@ -276,7 +276,7 @@ typedef __u64 allseer_syscall_key_t;
  * instant, the instant the process asked for the file, and `cgroup_id` inside
  * `proc` is the same value the entry side looked up in tracked_cgroups. The
  * governance decision and the attribution in the record it produced are then the
- * same fact rather than two lookups that could disagree — which they can, since
+ * same fact rather than two lookups that could disagree -- which they can, since
  * a task may be moved between cgroups while it is inside the syscall. Deciding
  * again at exit would produce a record whose cgroup_id and whose reason for
  * existing came from different cgroups.
@@ -333,7 +333,7 @@ struct allseer_open_scratch {
  *             entry. That is what makes an orphan self-healing for any thread
  *             that is still alive: the stale entry is gone the next time that
  *             thread opens anything.
- *   deleted   sys_exit_openat, on every path that found an entry — the identity
+ *   deleted   sys_exit_openat, on every path that found an entry -- the identity
  *             check failing, the ring buffer reservation failing, and the record
  *             being submitted alike. The exit side owns deletion and is the only
  *             side that deletes.
@@ -367,7 +367,7 @@ struct allseer_open_scratch {
  *   the identity check fails    no event, and the entry is deleted. See PID
  *                               reuse above.
  *   the reservation fails       no event, the entry is deleted, and
- *                               ringbuf_drops is incremented — the record was
+ *                               ringbuf_drops is incremented -- the record was
  *                               fully formed and lost, which is exactly what
  *                               that counter is for.
  */
@@ -382,8 +382,8 @@ struct allseer_open_scratch {
  * connect to an unreachable host blocks until the SYN retries give up, which is
  * on the order of two minutes. A tracked process that opens many connections to
  * something that is not answering therefore holds far more entries at once than
- * any openat workload does. 4096 still covers that by a wide margin — it is
- * 4096 threads simultaneously blocked in connect — and at 96 bytes the whole map
+ * any openat workload does. 4096 still covers that by a wide margin -- it is
+ * 4096 threads simultaneously blocked in connect -- and at 96 bytes the whole map
  * is about 384 KiB, a quarter of what openat's costs.
  *
  * Running out is not a failure mode, for the reason the protocol above gives:
@@ -393,7 +393,7 @@ struct allseer_open_scratch {
 
 /* Value of `connect_scratch`: everything the final record needs except `ret`.
  *
- * The same split as openat's, the same prologue, and the same rule — the entry
+ * The same split as openat's, the same prologue, and the same rule -- the entry
  * side captures the whole event and the exit side contributes the syscall
  * return and emits. The first three fields are byte-for-byte the ones
  * struct allseer_open_scratch begins with, and the static assertion below is
@@ -416,7 +416,7 @@ struct allseer_open_scratch {
  *
  *   saddr, sport   the local address is not an argument to connect, and for a
  *                  TCP socket that has not been bound it does not exist yet at
- *                  sys_enter — the kernel chooses it while the syscall runs.
+ *                  sys_enter -- the kernel chooses it while the syscall runs.
  *                  Recovering it would mean walking the descriptor to its
  *                  struct socket through task->files, which is a kernel-internal
  *                  structure and exactly the trade proc_exec already refused for
@@ -436,15 +436,15 @@ struct allseer_open_scratch {
  *                  ALLSEER_EVT_NET_SEND alone.
  *
  * The one that has no honest representation is saddr. A zeroed 16-byte address
- * under AF_INET decodes to "0.0.0.0" and under AF_INET6 to "::" — the wildcard,
- * not an absence — because struct allseer_net_payload has no way to say "this
+ * under AF_INET decodes to "0.0.0.0" and under AF_INET6 to "::" -- the wildcard,
+ * not an absence -- because struct allseer_net_payload has no way to say "this
  * field was never filled" and addressString has no rendering for it. The
  * remaining fields all have one: protocol and sock_type render empty, and
  * family renders AF_UNSPEC. See the TODO at the foot of this file.
  *
  * Field by field:
  *
- *   timestamp        bpf_ktime_get_ns() at sys_enter, copied into the record —
+ *   timestamp        bpf_ktime_get_ns() at sys_enter, copied into the record --
  *                    the same decision openat made, for the same reason, and it
  *                    matters more here. A connect can block for minutes, so the
  *                    gap between this instant and the moment the record reaches
@@ -479,13 +479,13 @@ struct allseer_open_scratch {
  * legal address to connect to and a plausible-looking lie. Under this rule a
  * record naming AF_INET or AF_INET6 always carries the address the process
  * passed, and a record that could not determine one says AF_UNSPEC and renders
- * an empty destination — which decode.go documents as the unevaluable case.
+ * an empty destination -- which decode.go documents as the unevaluable case.
  *
  * Families that carry no address of this shape are reported as themselves, and
  * that is not an exception to the rule but the same rule: they promise nothing
  * about daddr, and the decoder already renders them without one. AF_UNIX is the
- * case that matters — "a socket path is not an address and does not fit in the
- * field" — and an unrecognised family renders as AddressFamily(N), which is the
+ * case that matters -- "a socket path is not an address and does not fit in the
+ * field" -- and an unrecognised family renders as AddressFamily(N), which is the
  * decoder's stated policy of showing a reader what it did not expect.
  */
 struct allseer_connect_scratch {
@@ -511,8 +511,8 @@ struct allseer_connect_scratch {
  * syscall at one instant, and none of them blocks: setuid and its relatives
  * take a lock and return, capset validates and returns, unshare allocates.
  * There is no equivalent of connect's two-minute SYN timeout to size for. So
- * this number, like the other two, is sized for the orphans — entries from
- * threads killed inside the syscall — and 1024 at 184 bytes is about 188 KiB.
+ * this number, like the other two, is sized for the orphans -- entries from
+ * threads killed inside the syscall -- and 1024 at 184 bytes is about 188 KiB.
  *
  * Running out is not a failure mode here either, for the reason the protocol
  * above gives: the LRU converts "no further privilege changes can be
@@ -521,8 +521,8 @@ struct allseer_connect_scratch {
 
 /* Value of `priv_scratch`: the before snapshot and what names the operation.
  *
- * The same prologue and the same split as the other two — the entry side
- * captures, the exit side contributes `ret` and emits — with one field the
+ * The same prologue and the same split as the other two -- the entry side
+ * captures, the exit side contributes `ret` and emits -- with one field the
  * others have no need of and one deliberate omission.
  *
  * # What it holds, and what it does not
@@ -548,7 +548,7 @@ struct allseer_connect_scratch {
  *   proc             struct allseer_proc exactly as the record carries it. Note
  *                    that proc.uid and proc.gid are the *real* ids from
  *                    bpf_get_current_uid_gid, which is what every other probe
- *                    reports, while `before` carries all four views of each —
+ *                    reports, while `before` carries all four views of each --
  *                    so proc.uid and before.uid_real are the same number by
  *                    construction and a record cannot disagree with itself.
  *   before           the pre-change snapshot, read from task->cred before the
@@ -567,20 +567,20 @@ struct allseer_connect_scratch {
  * not carry here: the two reasons stated are that the values differ and that
  * eviction would let a noisy syscall decide which of a quiet one's events
  * survive. These eleven share one value shape exactly, and none of them is
- * noisy — they are the rarest syscalls this object hooks, so there is no
+ * noisy -- they are the rarest syscalls this object hooks, so there is no
  * pressure for eviction to redistribute.
  *
  * What a shared map does need is the thing that section names: "A shared map
  * would have needed a syscall tag and a check on it". `operation` is that tag,
  * and the exit programs check it. Each exit program knows which syscall it is
  * attached to, so it compares the entry's operation against its own and treats a
- * mismatch exactly as it treats a stale identity stamp — delete, emit nothing.
+ * mismatch exactly as it treats a stale identity stamp -- delete, emit nothing.
  *
  * The window that check closes is narrow and real. A thread inside
  * unshare when the exit programs are attached leaves an entry no unshare_exit
  * will ever collect, because none was attached when the syscall returned. The
  * next credential syscall that thread makes has its own enter, which replaces
- * the entry, so the orphan is normally harmless — but between the two, an exit
+ * the entry, so the orphan is normally harmless -- but between the two, an exit
  * program for a *different* syscall firing on that thread would find an entry
  * whose operation is not its own. Without the tag it would emit an unshare
  * event carrying some other syscall's return.
@@ -637,7 +637,7 @@ _Static_assert(sizeof(((struct allseer_priv_scratch *)0)->before) ==
  * one addition:
  *
  *   the sockaddr read fails      the entry is stored anyway, with family
- *                                AF_UNSPEC and no address — the substitution for
+ *                                AF_UNSPEC and no address -- the substitution for
  *                                openat's "the path read fails". A connect
  *                                happened and the process that made it is known;
  *                                dropping the record because one field could not
@@ -657,20 +657,20 @@ _Static_assert(sizeof(((struct allseer_priv_scratch *)0)->before) ==
  * ringbuf_drops applies unchanged: the loss is the absence of a record, so no
  * amount of reading `events` reveals it. It must not be folded into
  * ringbuf_drops, which is defined as counting reservation failures and nothing
- * else — a second per-CPU counter map of the same shape, with its own key
+ * else -- a second per-CPU counter map of the same shape, with its own key
  * constants, is the shape of the fix. It is left out of the openat issue because
  * the counter needs a consumer to be worth anything, and the consumer is
  * Collector. It now covers all three scratch maps on the same terms: connect,
  * and priv_scratch after it. The privilege case is the one where a lost
- * correlation costs the most and is hardest to notice — a credential change
+ * correlation costs the most and is hardest to notice -- a credential change
  * whose exit found no entry produces no record, and a governed process that
  * appears never to have changed its credentials is indistinguishable from one
  * that did so unobserved. The deferral is unchanged, because the argument for it
  * is unchanged: a counter nothing reads is not a control.
  *
  * TODO(event): struct allseer_net_payload cannot say that an address field was
- * never filled. Every other field in it can — protocol and sock_type render as
- * the empty string, family renders as AF_UNSPEC — but saddr and daddr are 16
+ * never filled. Every other field in it can -- protocol and sock_type render as
+ * the empty string, family renders as AF_UNSPEC -- but saddr and daddr are 16
  * raw bytes, and 16 zero bytes under AF_INET are the wildcard 0.0.0.0, which is
  * a real address a process can connect to. connect records this as a live
  * problem rather than a theoretical one: it fills daddr and leaves saddr zero,

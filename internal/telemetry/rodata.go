@@ -9,14 +9,14 @@ package telemetry
 //
 // # Why the ELF symbol table and not BTF
 //
-// BTF does describe the variable — a BTF_KIND_VAR named by the string section,
-// listed in the BTF_KIND_DATASEC for .rodata with an offset and a size — and
+// BTF does describe the variable -- a BTF_KIND_VAR named by the string section,
+// listed in the BTF_KIND_DATASEC for .rodata with an offset and a size -- and
 // the offset is exactly what a reader would want. In a compiled, unlinked
 // object it is zero. DATASEC offsets are filled in from the .rel.BTF
 // relocations, which resolve against the ELF symbol table, and libbpf performs
 // that fixup itself at load time. A reader that trusted the raw DATASEC offset
 // would find every variable in .rodata at offset 0 and would read the first
-// four bytes of the section whatever it asked for — which for a single-variable
+// four bytes of the section whatever it asked for -- which for a single-variable
 // section is the right answer by accident, and stops being right the moment a
 // second read-only global is added.
 //

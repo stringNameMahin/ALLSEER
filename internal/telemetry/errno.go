@@ -6,7 +6,7 @@ package telemetry
 //
 // The header states the convention on `__s32 ret`: "syscall return; negative is
 // -errno". event.Result carries both the raw number and a symbolic name, and
-// the decoder is the only place in the system that sees the raw one — every
+// the decoder is the only place in the system that sees the raw one -- every
 // stage after it consumes event.Event. So if the name is not attached here it
 // is never attached at all, and the audit record is left holding "-2" where the
 // difference between reading a credential file and failing to read one is the
@@ -17,17 +17,17 @@ package telemetry
 // # Why it is written out rather than taken from the standard library
 //
 // syscall.Errno.Error() would answer this on Linux and answers something else
-// entirely on Windows, where most of this repository is currently developed —
+// entirely on Windows, where most of this repository is currently developed --
 // and a decoder that produces different audit records depending on the host it
 // runs on is not a decoder anyone can trust a golden file against.
 // golang.org/x/sys carries the table, and taking a second dependency for a
 // hundred and thirty string constants would not survive the dependency
-// discipline in devRead §9.2.
+// discipline in devRead section 9.2.
 //
 // # What it covers
 //
-// The asm-generic list, which is what x86-64 and arm64 both use — the two
-// targets internal/telemetry/abi is generated for. Values 1–133, with 41 and 58
+// The asm-generic list, which is what x86-64 and arm64 both use -- the two
+// targets internal/telemetry/abi is generated for. Values 1-133, with 41 and 58
 // unassigned on Linux. Alpha, MIPS, PA-RISC and SPARC renumber much of the
 // range above 34; none is a supported target, and a build for one would need
 // this table regenerated rather than adjusted.
@@ -179,7 +179,7 @@ var errnoNames = [...]string{
 // string for one this build has no name for.
 //
 // Table lookup rather than a switch so the cost is a bounds check and an index,
-// and so the table above reads as data — which is what it is, and what makes it
+// and so the table above reads as data -- which is what it is, and what makes it
 // checkable line by line against errno-base.h.
 func errnoName(errno int64) string {
 	if errno < 0 || errno >= int64(len(errnoNames)) {

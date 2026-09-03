@@ -11,7 +11,7 @@ import (
 //
 // Envelopes are written in hostnames, because that is how a human describes a
 // task ("may reach proxy.golang.org"). The kernel observes addresses. The
-// bridge between them is DNS correlation, which is best-effort by nature — DNS
+// bridge between them is DNS correlation, which is best-effort by nature -- DNS
 // over HTTPS, hardcoded addresses, a cache that expired, and a connection to a
 // host reached by an unrelated name all defeat it.
 //
@@ -144,7 +144,7 @@ func MatchHost(pattern, hostOrIP string) bool {
 //
 // An empty list means any port, which is what an envelope means when it grants
 // a host without qualifying it. That is deliberately unconditional: a probe
-// reporting no meaningful port — ICMP, a raw socket — must not turn "any port"
+// reporting no meaningful port -- ICMP, a raw socket -- must not turn "any port"
 // into a mismatch. Callers that care whether a port is well-formed have
 // IsValidPort.
 func MatchPort(allowed []int, port int) bool {
@@ -173,7 +173,7 @@ func IsValidPort(port int) bool {
 // This is the network analogue of IsResolved. "The envelope did not grant this
 // destination" and "the envelope names hosts, and we never learned this
 // address's name" are different findings, and reporting the second as the first
-// would let every uncorrelated connection read as a deliberate violation — or,
+// would let every uncorrelated connection read as a deliberate violation -- or,
 // worse, invite someone to make hostnames match addresses hopefully so the
 // noise goes away.
 //

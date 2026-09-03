@@ -64,7 +64,7 @@ func TestObserveFileNeverFallsBackToRawPath(t *testing.T) {
 // The source is the Target and the destination rides in AttrNewPath, which is
 // the convention the committed replay fixtures already use. The rule being
 // pinned here is that no information is dropped, not that both paths are
-// matched — see TestRenameDestinationIsNotInTheTarget.
+// matched -- see TestRenameDestinationIsNotInTheTarget.
 func TestObserveRename(t *testing.T) {
 	for _, kind := range []capability.Kind{capability.KindFileRename, capability.KindFileLink} {
 		e := &event.Event{

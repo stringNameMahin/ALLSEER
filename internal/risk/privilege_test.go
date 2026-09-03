@@ -210,8 +210,8 @@ func TestPrivilegeChangesAreDistinguishableFromEachOther(t *testing.T) {
 }
 
 // The invariant the whole model rests on: an event the envelope covered scores
-// exactly zero. The finding is still reported — a granted privilege change is
-// the one an auditor most needs to see — and not_charged says why the points
+// exactly zero. The finding is still reported -- a granted privilege change is
+// the one an auditor most needs to see -- and not_charged says why the points
 // were withheld.
 func TestAGrantedPrivilegeChangeScoresZeroAndIsStillReported(t *testing.T) {
 	a := score(t, ScoreRequest{
@@ -248,7 +248,7 @@ func TestAGrantedPrivilegeChangeScoresZeroAndIsStillReported(t *testing.T) {
 // --- 3. the payload, reported and never charged --------------------------------------
 
 // Every field PrivPayload carries reaches the record verbatim. None of them is
-// interpreted, and none of them moves the weight — the weight came from the
+// interpreted, and none of them moves the weight -- the weight came from the
 // catalog before the payload was opened.
 func TestThePayloadReachesTheRecordVerbatim(t *testing.T) {
 	p := &event.PrivPayload{
@@ -280,8 +280,8 @@ func TestThePayloadReachesTheRecordVerbatim(t *testing.T) {
 }
 
 // A payload that reports capabilities always says what kind of capability
-// evidence it is. The list is one-sided — pkg/event carries CapabilitiesAdded
-// and nothing for removals — and a reader who took it for a delta would read a
+// evidence it is. The list is one-sided -- pkg/event carries CapabilitiesAdded
+// and nothing for removals -- and a reader who took it for a delta would read a
 // gain as the whole change.
 func TestReportedCapabilitiesAreLabelledOneSided(t *testing.T) {
 	with := priv(score(t, privDeparture(capability.KindPrivCapSet,
@@ -367,7 +367,7 @@ func TestTheUIDPairIsClassifiedWithoutGuessing(t *testing.T) {
 
 // A privilege event with no payload is charged in full and says so. The weight
 // never came from the payload, so losing the payload loses evidence and not
-// points — and the three-state key keeps "no payload attached" apart from "a
+// points -- and the three-state key keeps "no payload attached" apart from "a
 // payload that said nothing".
 func TestAnAbsentPayloadIsChargedAndNamed(t *testing.T) {
 	f := priv(score(t, privDeparture(capability.KindPrivEscalate, nil)))
@@ -409,7 +409,7 @@ func TestAMalformedPayloadIsChargedAndNamed(t *testing.T) {
 // a comment: neither an absent nor a malformed payload can make the scorer
 // error. A scorer error becomes a pipeline stage failure, which
 // pipeline.IndeterminateHandler turns into request_approval while bypassing the
-// policy engine — so an unreadable payload would downgrade a terminal block to
+// policy engine -- so an unreadable payload would downgrade a terminal block to
 // a prompt, making a corrupt record the cheapest route past the privilege rule.
 func TestUnreadableEvidenceNeverErrors(t *testing.T) {
 	for _, p := range []*event.PrivPayload{
@@ -463,7 +463,7 @@ func TestAnUngrantedNamespaceChangeReachesTheApprovalBand(t *testing.T) {
 // Confidence is permanently capped at 0.6 for the whole privilege domain, and
 // that is a property of the domain rather than of this factor. The model's
 // three evidence inputs include a resolved observation target, and a privilege
-// observation has none by construction — telemetry.resolve leaves Target empty
+// observation has none by construction -- telemetry.resolve leaves Target empty
 // because exercising the capability is the whole observation.
 //
 // Pinned so nobody later "fixes" it by writing a synthetic target. A target

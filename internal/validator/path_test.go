@@ -330,7 +330,7 @@ func TestMatcherIsConcurrencySafe(t *testing.T) {
 
 // FuzzMatchPath asserts the two properties that must hold for every input: it
 // never panics, and it never claims a match outside the pattern's literal
-// prefix — the part before the first wildcard, which no wildcard can widen.
+// prefix -- the part before the first wildcard, which no wildcard can widen.
 func FuzzMatchPath(f *testing.F) {
 	seeds := [][2]string{
 		{"/ws/**", "/ws/a/b.go"},

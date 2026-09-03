@@ -13,19 +13,19 @@ import (
 //
 // # What it is, and the four things it is not
 //
-// docs/network-matching.md §1 states the rule the whole network side is built
-// on — a name and an address are never assumed to be the same thing — and names
+// docs/network-matching.md section 1 states the rule the whole network side is built
+// on -- a name and an address are never assumed to be the same thing -- and names
 // the consequence: when an envelope grants a hostname and the observation
 // carries only an address, matching answers no, and "that false is not an
-// accusation … so upstream can escalate an uncorrelated connection to the risk
+// accusation ... so upstream can escalate an uncorrelated connection to the risk
 // engine, which weighs it in context". This scorer is that escalation. It is
 // the only place the project weighs the correlation gap rather than merely
 // reporting it.
 //
 // The gap matters because of what causes it. DNS-over-HTTPS, a hardcoded
 // address, an expired cache entry, and a host reached by an unrelated name all
-// defeat correlation — and so does an agent that resolves names out of band on
-// purpose. §1 again: any other answer "makes skipping DNS the easiest way to
+// defeat correlation -- and so does an agent that resolves names out of band on
+// purpose. section 1 again: any other answer "makes skipping DNS the easiest way to
 // evade a network grant, and nothing in the log would look wrong". An address
 // with no name behind it is the shape that evasion takes, and it is also the
 // shape a great deal of honest tooling takes, which is why it is worth five
@@ -54,7 +54,7 @@ import (
 // The planned scorer list in docs/roadmap.md names novel_network_destination,
 // and docs/milestones.md specifies it as "using risk.History.TargetSeen". That
 // specification predates NovelTargetScorer, which implements exactly that
-// mechanism, is domain-agnostic, and already fires on network events —
+// mechanism, is domain-agnostic, and already fires on network events --
 // registry.npmjs.org alone produces three separate novelty findings in the npm
 // recording, one per capability that touched it. Implementing the planned
 // scorer would have been a second factor computing an existing predicate over
@@ -76,12 +76,12 @@ const FactorUncorrelatedDestination = "uncorrelated_destination"
 // and this one is therefore chosen rather than derived. The only number the
 // tree carries under a related name is `novel_network_destination: 1.0` in
 // configs/allseerd.example.yaml, which is a scorer *weight* multiplier for a
-// scorer that was never built, in a config type nothing loads yet — not a point
+// scorer that was never built, in a config type nothing loads yet -- not a point
 // value, and not for this scorer.
 //
 // So it is set to the smallest non-zero contribution the model already uses,
 // which is NovelTargetPoints, and it is set there because that constant's own
-// reasoning transfers exactly: "First contact with a target is weak evidence …
+// reasoning transfers exactly: "First contact with a target is weak evidence ...
 // it earns its place by sharpening events that are already departures rather
 // than by carrying a verdict on its own." An uncorrelated destination is weak
 // evidence in precisely the same way. DNS-over-HTTPS is ordinary, hardcoded
@@ -110,7 +110,7 @@ const (
 
 	// EvidenceDestIP mirrors capability.AttrDestIP: the literal address the
 	// kernel connected to, which is the one thing about the destination that is
-	// never best-effort. Carried so an operator can act on the finding — an
+	// never best-effort. Carried so an operator can act on the finding -- an
 	// address is what you look up, block, or search the audit log for.
 	EvidenceDestIP = "dest_ip"
 )
@@ -128,7 +128,7 @@ const (
 	CorrelationLabelMissing = "missing"
 
 	// CorrelationLabelIndeterminate: the observation does not establish
-	// correlation either way. Reported, and charged nothing — missing evidence
+	// correlation either way. Reported, and charged nothing -- missing evidence
 	// is never silently converted into a finding.
 	CorrelationLabelIndeterminate = "indeterminate"
 )
@@ -176,7 +176,7 @@ const (
 //
 // The absent-flag-with-a-name row is the one worth pausing on. pkg/capability
 // documents the attribute as "Absent when correlation succeeded", so absence is
-// a positive claim in the wire contract — but this package's first rule is that
+// a positive claim in the wire contract -- but this package's first rule is that
 // absence of evidence is never evidence of safety, and the two would collide if
 // absence alone were read as success. They do not collide here, because absence
 // is only ever read as success *alongside a named target*, which is independent
@@ -212,9 +212,9 @@ func classifyCorrelation(obs capability.Observation, hostKind string) correlatio
 // remote destination the agent selected.
 //
 // Deliberately its own predicate rather than a call to IsEgress, even though
-// the two currently name the same pair. They are different questions — "does
+// the two currently name the same pair. They are different questions -- "does
 // this move data off the host" and "does this observation name a destination
-// the agent chose" — and the day one of them changes, the other should have to
+// the agent chose" -- and the day one of them changes, the other should have to
 // change on purpose. TestTheQualifyingSetMatchesEgressToday pins the present
 // coincidence so a divergence is deliberate rather than accidental.
 //
@@ -222,8 +222,8 @@ func classifyCorrelation(obs capability.Observation, hostKind string) correlatio
 //
 //   - net.dns is excluded even though its payload carries an address, because
 //     that address is the *resolver* rather than a destination the agent chose.
-//     resolve.observeNetwork already special-cases the same distinction —
-//     "A DNS query acts on a name, not on an endpoint" — and scoring the
+//     resolve.observeNetwork already special-cases the same distinction --
+//     "A DNS query acts on a name, not on an endpoint" -- and scoring the
 //     resolver here would make every lookup on a host with no reverse-mapped
 //     stub resolver an uncorrelated destination.
 //   - net.bind and net.listen act on a *local* address. There is no remote
@@ -285,11 +285,11 @@ func (s UncorrelatedDestinationScorer) Evaluate(_ context.Context, req ScoreRequ
 //
 // Silence means one of two things and never a third: the capability does not
 // name a destination the agent chose, or the destination is named and
-// correlation therefore succeeded. It never means "we did not look" — this
+// correlation therefore succeeded. It never means "we did not look" -- this
 // scorer is in every engine and has nothing to be configured with, so there is
 // no build in which it could be absent while network events flow.
 //
-// Points are withheld — not the finding — for an event the envelope covered,
+// Points are withheld -- not the finding -- for an event the envelope covered,
 // exactly as on the sensitivity side, so the invariant that an expected event
 // scores exactly zero holds. That case is reachable and worth recording: an
 // envelope that grants a destination by address is *supposed* to be reached by
@@ -359,7 +359,7 @@ func (UncorrelatedDestinationScorer) evaluate(sc *scoreCtx) (decision.Factor, bo
 // TODO(risk): the four excluded network capabilities should be revisited when
 // probes exist for them. Whether a net.accept peer or a net.bind local address
 // belongs in this signal is a question about what those events will carry, and
-// that has not been decided — see pkg/event's TODO on generating the decoder
+// that has not been decided -- see pkg/event's TODO on generating the decoder
 // from the shared C struct layout.
 // TODO(risk): an uncorrelated destination and a *correlated* one are worth
 // different amounts, and this scorer only charges the first. Whether a

@@ -39,9 +39,6 @@ import (
 // TODO(allseerctl): render envelopes and decisions for humans. This is the main
 // usability surface: an approval prompt nobody can understand in a few seconds
 // gets approved reflexively, which is worse than not asking.
-// Done: `policy dry-run` replays a recording against a rule set and an envelope
-// in policy.go, calling the loader, the linter, the validator, and the policy
-// engine rather than reimplementing any of them. It enforces nothing.
 // TODO(allseerctl): add `policy lint <file>`, which is the dry-run command's
 // first two steps with the replay left off.
 

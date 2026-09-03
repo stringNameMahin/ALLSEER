@@ -27,7 +27,7 @@ import (
 // They prove **nothing** about what a kernel writes. No probe exists, none can
 // be compiled on this host, and every record below is a byte pattern this file
 // constructed. The question asked of the decoder is only whether it interprets
-// the bytes it claims to interpret — the same limit internal/telemetry/abi
+// the bytes it claims to interpret -- the same limit internal/telemetry/abi
 // states about itself, and for the same reason.
 
 // --- record construction -------------------------------------------------------------
@@ -83,7 +83,7 @@ func newRecord(typ abi.EventType) []byte {
 // refused for the same reason ALLSEER_EVT_UNKNOWN is. The whole-record property
 // tests below iterate every event type and are about what a *decoded* event
 // carries, so they need a record that decodes rather than one that exercises
-// that refusal — which is TestDecodeMapsEveryPrivilegeOperation's job.
+// that refusal -- which is TestDecodeMapsEveryPrivilegeOperation's job.
 func newDecodableRecord(typ abi.EventType) []byte {
 	b := newRecord(typ)
 	if typ == abi.EvtPrivChange {
@@ -274,7 +274,7 @@ func TestEveryDecodableKindIsInTheCatalog(t *testing.T) {
 	}
 
 	// ALLSEER_EVT_PRIV_CHANGE is the second type whose kind its payload decides,
-	// so its coverage list has to be exactly the set kindForPrivOp can return —
+	// so its coverage list has to be exactly the set kindForPrivOp can return --
 	// no more, or a grant reads as observed when nothing observes it, and no
 	// less, or an observed capability reads as a blind spot. Derived from
 	// abi.AllPrivOps() rather than restated, so an operation appended to the
@@ -308,7 +308,7 @@ func TestEveryDecodableKindIsInTheCatalog(t *testing.T) {
 
 	// Both connect answers are advertised, and nothing else is. AF_UNIX is
 	// ipc.unixsocket and every other family is net.connect, so the coverage
-	// list has to name exactly those two — one more would report a capability
+	// list has to name exactly those two -- one more would report a capability
 	// as observable that no record decodes to, one fewer would hide one that
 	// does.
 	connAdvertised := make(map[capability.Kind]bool)
@@ -456,7 +456,7 @@ func TestOpenFlagsSelectTheCapability(t *testing.T) {
 
 			e := decode(t, raw)
 			if e.Capability != tc.want {
-				t.Errorf("flags %#x → %q, want %q", tc.flags, e.Capability, tc.want)
+				t.Errorf("flags %#x -> %q, want %q", tc.flags, e.Capability, tc.want)
 			}
 			if e.Domain != capability.DomainFilesystem {
 				t.Errorf("Domain = %q", e.Domain)
@@ -1095,7 +1095,7 @@ func TestABIVersionIsCheckedBeforeAnythingElseIsBelieved(t *testing.T) {
 // struct allseer_priv_payload carried a `__u32 operation` with no enumerators
 // and the decoder refused the whole type rather than guess which of five
 // catalog kinds a record exercised. These tests pin the contract that replaced
-// that refusal — the operation selects the kind, fields_present decides which
+// that refusal -- the operation selects the kind, fields_present decides which
 // values may be read, and neither is allowed to be inferred.
 
 // privOffsets are the payload-relative offsets of one snapshot, resolved
@@ -1106,8 +1106,8 @@ func privAfter(off int) int  { return abi.OffsetEventPayload + abi.OffsetPrivPay
 // newPrivRecord builds a privilege record whose operation is set and whose
 // snapshots are both declared observed.
 //
-// Both CRED bits are set by default because that is the ordinary case — a probe
-// that read task->cred on the way in and on the way out — and because a test
+// Both CRED bits are set by default because that is the ordinary case -- a probe
+// that read task->cred on the way in and on the way out -- and because a test
 // that had to opt in to it every time would make the fields_present tests below
 // harder to read rather than easier.
 func newPrivRecord(op abi.PrivOp) []byte {
@@ -1127,7 +1127,7 @@ func privFields(raw []byte, fields ...abi.PrivField) {
 }
 
 // Every operation the ABI declares maps to a capability, and the mapping is
-// driven from abi.AllPrivOps() rather than from a list written here — so an
+// driven from abi.AllPrivOps() rather than from a list written here -- so an
 // operation appended to the header and regenerated fails this test until
 // somebody decides which capability it exercises. That is the same discipline
 // TestEveryEventTypeIsMapped applies one level up, and it exists for the same
@@ -1228,7 +1228,7 @@ func TestDecodeNeverProducesPrivEscalate(t *testing.T) {
 
 // An operation outside this build's enum is refused rather than defaulted.
 //
-// It means the loaded object is newer than this binary, which is layout drift —
+// It means the loaded object is newer than this binary, which is layout drift --
 // and the operation selects the capability, which selects the action, so there
 // is no safe default to fall back to.
 func TestDecodeRefusesUnknownPrivilegeOperation(t *testing.T) {
@@ -1255,8 +1255,8 @@ func TestDecodeRefusesUnknownPrivilegeOperation(t *testing.T) {
 // holds, so a decoder that read the snapshots unconditionally would launder a
 // cleared struct into a claim that a process reached uid 0.
 func TestDecodePrivilegeHonoursFieldsPresent(t *testing.T) {
-	// A record whose *bytes* say uid 1000 became uid 0 — the most consequential
-	// transition this event can carry — and whose fields_present says neither
+	// A record whose *bytes* say uid 1000 became uid 0 -- the most consequential
+	// transition this event can carry -- and whose fields_present says neither
 	// snapshot was observed.
 	build := func(fields ...abi.PrivField) []byte {
 		raw := newPrivRecord(abi.OpSetuid)
@@ -1373,7 +1373,7 @@ func TestDecodePrivilegeComputesCapabilityDelta(t *testing.T) {
 	// The guard the whole design turns on. unshare(CLONE_NEWUSER) hands the
 	// caller a full capability set inside the namespace it just created, so
 	// subtracting one snapshot from the other across such a call reports a gain
-	// of nearly every capability in Linux — and configs/rules.default.yaml
+	// of nearly every capability in Linux -- and configs/rules.default.yaml
 	// blocks priv.escalate terminally, which would hard-block every
 	// containerized build step on the host. Sets from two user namespaces are
 	// not the same quantity.
@@ -1522,16 +1522,16 @@ func TestDecodePrivilegeReportsAttemptedChange(t *testing.T) {
 // refused before any of its fields is believed.
 //
 // This is the case the version bump exists for. Version 1 and version 2 both
-// describe an 856-byte record — the payload union is sized by
+// describe an 856-byte record -- the payload union is sized by
 // struct allseer_exec_payload and the privilege payload grew from 32 bytes to
-// 208 inside it — so the loader's BTF size comparison cannot tell them apart,
+// 208 inside it -- so the loader's BTF size comparison cannot tell them apart,
 // and neither can a length check. Only the version field can. The header calls
 // this exactly: a version catches "a layout that stayed the same size and
 // changed meaning".
 //
 // The bytes below are laid out where ABI v1 put them: caps_effective at payload
 // offset 0, old_uid at 16, new_uid at 20, operation at 24. Under v2 those same
-// offsets fall inside `before` — a capability set, then uid_effective and
+// offsets fall inside `before` -- a capability set, then uid_effective and
 // uid_saved. So a decoder that skipped the version check would not error; it
 // would report a plausible privilege event with the wrong uids, which is the
 // failure the header's preamble names as "plausible garbage that flows straight
@@ -1584,7 +1584,7 @@ func TestDecodeRefusesSupersededPrivilegeLayout(t *testing.T) {
 // The decision kindForConnectFamily documents, asserted at the boundary that
 // makes it: the address family is the one field the probe reliably fills for a
 // unix socket, and pkg/capability defines net.connect as reaching "a remote
-// endpoint" — which an AF_UNIX socket has none of.
+// endpoint" -- which an AF_UNIX socket has none of.
 //
 // The domain moves with the kind, and that is the part worth pinning: a connect
 // over AF_UNIX is an IPC event carrying a network payload, which the event

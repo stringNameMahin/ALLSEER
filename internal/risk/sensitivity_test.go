@@ -184,7 +184,7 @@ func TestShippedSensitivityRatings(t *testing.T) {
 
 		{"/etc/resolv.conf", capability.SeverityLow, "reading is unremarkable; writing redirects"},
 
-		// Explicitly rated unremarkable — the distinction the module refuses to
+		// Explicitly rated unremarkable -- the distinction the module refuses to
 		// collapse. These are NOT unknown.
 		{"/usr/include/stdio.h", capability.SeverityInfo, "ordinary build traffic"},
 		{"/usr/share/doc/README", capability.SeverityInfo, ""},
@@ -274,7 +274,7 @@ func TestUnknownIsNotTheSameAsNotSensitive(t *testing.T) {
 		t.Error("unrated and rated-unremarkable are indistinguishable in the record")
 	}
 
-	// They contribute the same points — zero — which is exactly why the record
+	// They contribute the same points -- zero -- which is exactly why the record
 	// has to carry the distinction the score cannot.
 	if upts != 0 || rpts != 0 {
 		t.Errorf("points: unknown %v, info %v; both must be 0", upts, rpts)
@@ -400,7 +400,7 @@ func TestDomainsWithNoOracleMethodAreUnrated(t *testing.T) {
 }
 
 // An unresolvable event has no target to rate, and that is unknown rather than
-// unremarkable — the same refusal the validator makes about coverage.
+// unremarkable -- the same refusal the validator makes about coverage.
 func TestAnUnresolvableEventIsUnrated(t *testing.T) {
 	e := engineWith(t, defaultOracle(t))
 	a := scoreWith(t, e, ScoreRequest{
@@ -493,7 +493,7 @@ func TestTheReasonReachesTheRecord(t *testing.T) {
 	}
 }
 
-// A grade this build cannot read is an unknown quantity, not a harmless one —
+// A grade this build cannot read is an unknown quantity, not a harmless one --
 // the same rule severityPointsFor applies to an unrecognized violation
 // severity. Reachable only through a third-party oracle, since the loader
 // refuses such a grade in a file.
@@ -589,8 +589,8 @@ func TestSensitivityStacksWithoutDisturbingTheOthers(t *testing.T) {
 
 // A covered event still scores exactly zero, and the grade is still reported.
 //
-// The invariant is load-bearing — LevelNone has to keep meaning "nothing
-// departed" — but a grant over credential material is worth seeing in an audit,
+// The invariant is load-bearing -- LevelNone has to keep meaning "nothing
+// departed" -- but a grant over credential material is worth seeing in an audit,
 // so the finding survives with the points withheld and the reason why stated.
 func TestACoveredEventKeepsItsZeroButNotItsSilence(t *testing.T) {
 	e := engineWith(t, defaultOracle(t))
@@ -623,12 +623,12 @@ func TestACoveredEventKeepsItsZeroButNotItsSilence(t *testing.T) {
 }
 
 // Clamping still holds with the oracle-backed factors in play. The ceiling is
-// 220: the unrated engine's 140 — which already includes
+// 220: the unrated engine's 140 -- which already includes
 // uncorrelated_destination's 5 and privilege_change's 25, since neither scorer
-// needs an oracle — plus 25 for sensitive_path, 30 for
+// needs an oracle -- plus 25 for sensitive_path, 30 for
 // credential_access_egress, and 25 for sensitive_host, all three of which
 // arrive with an oracle. It is asserted as an exact number so that adding a
-// scorer is a deliberate act — the scale is clamped rather than rescaled
+// scorer is a deliberate act -- the scale is clamped rather than rescaled
 // precisely so a new factor cannot silently move every existing score, and this
 // is where that stays true.
 //
@@ -667,7 +667,7 @@ func TestSensitivityDoesNotEscapeTheScale(t *testing.T) {
 }
 
 // Repeated scoring against one oracle produces one answer, including the order
-// of the entry scan — which is a sort over a map-free slice precisely so it
+// of the entry scan -- which is a sort over a map-free slice precisely so it
 // cannot depend on iteration order.
 func TestSensitivityScoringIsDeterministic(t *testing.T) {
 	e := engineWith(t, defaultOracle(t))

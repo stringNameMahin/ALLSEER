@@ -22,7 +22,7 @@ import (
 //
 // Every pattern here goes through validator.ValidateHostPattern at admission
 // and validator.MatchHost at lookup. Not a reimplementation, not a
-// glob-flavoured approximation of one — the same functions an envelope's
+// glob-flavoured approximation of one -- the same functions an envelope's
 // network grants are compared with. An entry in this list therefore means
 // exactly what an identically written grant means, which is the property
 // sensitivity.go established for paths and the property that stops the two
@@ -37,7 +37,7 @@ import (
 //	api.github.com       that name exactly, case-insensitively, trailing dot
 //	                     ignored. Whole names only: it does not cover
 //	                     evil-github.com, notgithub.com, or api.github.com.evil
-//	*.github.com         exactly one additional label — api.github.com, but
+//	*.github.com         exactly one additional label -- api.github.com, but
 //	                     not a.b.github.com and not the apex github.com
 //	169.254.169.254      that address, compared as a parsed address, so every
 //	                     spelling of it is it; IPv4-mapped IPv6 is unmapped
@@ -53,13 +53,13 @@ import (
 // **The apex is not a subdomain and a subdomain is not the apex.** An entry
 // intending both writes both, exactly as an envelope granting both writes both.
 // Covering the apex from a wildcard would silently widen every entry, and a
-// sensitivity list may only ever raise — so a silent widening is a false
+// sensitivity list may only ever raise -- so a silent widening is a false
 // positive on every sibling name rather than a hole, but it is still a claim
 // nobody wrote.
 //
 // # The name/address boundary is respected, not bridged
 //
-// docs/network-matching.md §1: a name and an address are never assumed to be
+// docs/network-matching.md section 1: a name and an address are never assumed to be
 // the same thing. MatchHost enforces it, so a name entry can only ever rate an
 // observed name and an address entry can only ever rate an observed address.
 // Nothing here reverse-resolves, and nothing here treats an address as standing
@@ -71,14 +71,14 @@ import (
 // only name and wildcard entries can rate it; when correlation failed the
 // observation carries the address, and only address and block entries can. An
 // entry meant to cover a destination reachable both ways therefore lists both
-// spellings — which is why the shipped list carries
+// spellings -- which is why the shipped list carries
 // `metadata.google.internal` *and* `169.254.169.254`.
 //
 // The alternative, rating the correlated name and the literal address together,
 // was considered and rejected. It would have closed the gap where a private
 // block cannot rate a destination that resolved to a name, at the cost of a
 // second rule about which of an observation's fields count as "the
-// destination" — and net.dns is the case that breaks it, since its payload
+// destination" -- and net.dns is the case that breaks it, since its payload
 // address is the *resolver* rather than the destination the query is about.
 // Two identities scored under one factor would also make "why did this score
 // go up" have two possible answers with no way to tell them apart. Listing
@@ -89,7 +89,7 @@ import (
 //
 // It does not charge anything for a destination being *uncorrelated*. That an
 // address was never resolved to a name is real signal, and it is
-// novel_network_destination's signal — the TODO in risk.go has named it since
+// novel_network_destination's signal -- the TODO in risk.go has named it since
 // before this file existed, and capability.AttrHostnameCorrelated already
 // records the fact. Charging it here would put two unrelated findings under one
 // factor name. What this factor does is *report* correlation state alongside
@@ -112,7 +112,7 @@ const FactorSensitiveHost = "sensitive_host"
 const (
 	// EvidenceHost is the bare host that was actually rated, extracted from the
 	// observation's target. Recorded separately from EvidenceTarget because the
-	// target carries a port and the rating never does — MatchHost takes a bare
+	// target carries a port and the rating never does -- MatchHost takes a bare
 	// host, and a reader checking this factor by hand needs the value that was
 	// passed to it rather than the one it was derived from.
 	EvidenceHost = "host"
@@ -138,7 +138,7 @@ const (
 	HostKindLabelAddress = "address"
 
 	// HostKindLabelUnknown covers a destination the classifier could not read
-	// at all — an empty target, or a value that is neither a name nor an
+	// at all -- an empty target, or a value that is neither a name nor an
 	// address. It is not "no host": it is a destination we cannot interpret,
 	// and the same refusal PathSensitivity makes about an unresolved path.
 	HostKindLabelUnknown = "unknown"
@@ -177,7 +177,7 @@ type HostSensitivityEntry struct {
 // The one rule that is specific to hosts: an entry may not name a destination
 // this build's matcher cannot compare. ValidateHostPattern is called rather
 // than approximated, so a pattern refused in an envelope grant is refused here
-// too — including the ones that look plausible and are not, such as
+// too -- including the ones that look plausible and are not, such as
 // "github.com:443" (a port belongs to the observation, not the host) and
 // "api-*.github.com" (a wildcard is only ever a whole leftmost label).
 func validateHostEntries(entries []HostSensitivityEntry, source string) error {
@@ -227,14 +227,14 @@ type hostRule struct {
 	reason  string
 
 	// kind is the pattern's classification, computed once. It is used only to
-	// skip rules that cannot possibly match the observation's kind — see
-	// canCompare — and never to decide a match, which stays MatchHost's job.
+	// skip rules that cannot possibly match the observation's kind -- see
+	// canCompare -- and never to decide a match, which stays MatchHost's job.
 	kind validator.HostKind
 }
 
 // compileHostRules flattens the entries into the scan order.
 //
-// Highest grade first, ties broken by declaration order, stable — so a list
+// Highest grade first, ties broken by declaration order, stable -- so a list
 // loaded twice produces one oracle. The reason a matched entry names travels
 // into the audit record, and a record whose explanation depends on an unstable
 // sort is not reproducible.
@@ -265,15 +265,15 @@ func compileHostRules(entries []HostSensitivityEntry) []hostRule {
 // canCompare reports whether a pattern of this kind could match an observation
 // of that kind.
 //
-// It is the name/address boundary of docs/network-matching.md §1, and it is
+// It is the name/address boundary of docs/network-matching.md section 1, and it is
 // used purely to skip work: MatchHost enforces the same boundary and would
 // return false for every pair this rejects, so declining to ask is provably
 // equivalent to asking and being told no.
 //
 // The skip is worth having because it is not free to ask. MatchHost classifies
 // the observation on every call, and classifying a name means attempting to
-// parse it as an address first — which fails, and allocates. Scanning a
-// twenty-entry list for a named destination measured at 6 µs and 107
+// parse it as an address first -- which fails, and allocates. Scanning a
+// twenty-entry list for a named destination measured at 6 us and 107
 // allocations before this; every one of those parses was answering a question
 // the boundary had already settled.
 func canCompare(pattern, observed validator.HostKind) bool {
@@ -295,8 +295,8 @@ func canCompare(pattern, observed validator.HostKind) bool {
 // envelope, and it carries no list of its own.
 //
 // It uses the same point table as sensitive_path, and that is a decision rather
-// than an omission. The grades mean one thing — how consequential this resource
-// is — and pricing the same word differently depending on whether it describes
+// than an omission. The grades mean one thing -- how consequential this resource
+// is -- and pricing the same word differently depending on whether it describes
 // a file or a host would be two models of one question, which is the drift
 // score.go already refuses when it declines to re-derive violation severity. The
 // argument for pricing hosts higher is that egress is the higher-consequence
@@ -347,14 +347,14 @@ func (s SensitiveHostScorer) Evaluate(_ context.Context, req ScoreRequest) (*dec
 // destination, so reporting "host: unknown" on one would be an answer to a
 // question nobody asked. Within the network domain it never goes silent, for
 // the reason SensitivePathScorer never goes silent within the filesystem
-// domain — silence would be indistinguishable from an engine built with no host
+// domain -- silence would be indistinguishable from an engine built with no host
 // ratings, and those are different claims. Three states, kept apart:
 //
 //	no sensitive_host factor at all   nothing rates hosts in this build
 //	factor reading "unknown"          asked, and this destination is on no list
 //	factor carrying a grade           asked, rated, and the author's reason with it
 //
-// Points are withheld — not the finding — for an event the envelope covered,
+// Points are withheld -- not the finding -- for an event the envelope covered,
 // exactly as on the path side. A grant naming a consequential destination is
 // the envelope author's decision, and the place to challenge it is envelope
 // linting rather than a risk score; charging it here would break the invariant
@@ -372,7 +372,7 @@ func (s SensitiveHostScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 
 	// The observation's target is "host:port" for an endpoint and a bare name
 	// for a DNS query. MatchHost takes a bare host and the caller splits, which
-	// docs/network-matching.md §2 states and this is the caller.
+	// docs/network-matching.md section 2 states and this is the caller.
 	host := bareHost(sc.target)
 	kind := hostKindLabel(host)
 
@@ -449,7 +449,7 @@ func bareHost(target string) string {
 //
 // A block or a wildcard in the observed position means something upstream
 // passed a pattern where a fact belongs, so both fall to unknown alongside the
-// genuinely uninterpretable — the same judgement MatchHost makes about an
+// genuinely uninterpretable -- the same judgement MatchHost makes about an
 // observation.
 func hostKindLabel(host string) string {
 	switch validator.ClassifyHost(host) {
@@ -466,7 +466,7 @@ func hostKindLabel(host string) string {
 //
 // The probe is what keeps the first of the three states honest. An oracle built
 // from a list with no hosts section answers "unknown" to every destination, and
-// so does an oracle that was never taught this particular host — but those are
+// so does an oracle that was never taught this particular host -- but those are
 // different claims, and emitting a factor for the first would say "we asked and
 // do not know" about a build where nobody was ever taught any host at all.
 //
@@ -502,10 +502,10 @@ func ratesHosts(o SensitivityOracle) bool {
 // The residual is left standing deliberately. Removing it means classifying the
 // patterns *and* the observation once and comparing the compiled forms, which
 // is validator.PatternSet's shape and belongs in internal/validator beside the
-// semantics it would be caching — a second matcher in this package would be
+// semantics it would be caching -- a second matcher in this package would be
 // free to drift from MatchHost, which is the one thing this file is arranged
 // not to do. Affordable meanwhile: network events are a minority of a session,
-// and the whole pipeline is ~5 µs.
+// and the whole pipeline is ~5 us.
 // TODO(risk): the credential-access-to-egress detector still asks nothing of
 // the destination. It now could: an egress to a critical-rated host after a
 // credential read is a materially different finding from one to a host rated

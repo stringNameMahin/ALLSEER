@@ -60,7 +60,7 @@ func run(headerPath, outPath, pkg string, check bool) error {
 			return fmt.Errorf("%s is stale relative to %s\n\n"+
 				"The generated ABI and the header have diverged. Regenerate with:\n"+
 				"    go generate ./internal/telemetry/abi/\n\n"+
-				"then review the diff — a change here is a change in how kernel bytes are read",
+				"then review the diff -- a change here is a change in how kernel bytes are read",
 				outPath, headerPath)
 		}
 		fmt.Printf("abigen: %s is up to date with %s\n", outPath, headerPath)

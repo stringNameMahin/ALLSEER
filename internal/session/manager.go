@@ -22,7 +22,7 @@ import (
 // The legal transitions are declared once, in transitions below, and every
 // method consults it. A switch statement per method would spread the same
 // specification across six places, and the interesting property of a lifecycle
-// is not what any one method does but what the whole graph forbids — that a
+// is not what any one method does but what the whole graph forbids -- that a
 // terminated session cannot restart, that an unapproved envelope cannot govern
 // a running agent, that a session cannot be started twice under two PIDs. Those
 // are properties of the graph, and a table is the only form in which they can be
@@ -36,7 +36,7 @@ import (
 //
 // This is the security-relevant half. A no-op Start on an ended session, or a
 // silently ignored Seal, produces a session whose recorded state disagrees with
-// what actually happened — and every conclusion drawn from the audit record
+// what actually happened -- and every conclusion drawn from the audit record
 // afterwards is a conclusion about the wrong session. Refusing loudly is the
 // only behavior that keeps the record and the world in agreement.
 //
@@ -48,7 +48,7 @@ import (
 // internal/pipeline explicitly refused to become; the caller builds a pipeline
 // for a session and asks the manager for that session's State_ to wire into it.
 //
-// Cross-session event dispatch — routing an event to the right pipeline — now
+// Cross-session event dispatch -- routing an event to the right pipeline -- now
 // exists, and is still not here. It is Dispatcher in dispatch.go, a separate
 // type that reads this manager through the one-method Registry interface. All
 // this file contributes is Binding, which answers "what governs this session,
@@ -69,7 +69,7 @@ const (
 	ActionEnd     Action = "end"
 )
 
-// AllActions returns every lifecycle transition. Vocabulary, not behavior —
+// AllActions returns every lifecycle transition. Vocabulary, not behavior --
 // the same role AllVerdicts plays in pkg/decision, and what lets the transition
 // table be checked for completeness.
 func AllActions() []Action {
@@ -122,24 +122,24 @@ func IsTerminal(s State) bool {
 // evidence for it is.
 //
 //	  Create
-//	    │
-//	    ▼
-//	pending ──Seal (approval outstanding)──▶ awaiting_approval
-//	    │                                            │
-//	    └──Seal (approval satisfied)──▶ ready ◀──Approve
-//	                                      │
-//	                                      │ Start(rootPID)
-//	                                      ▼
-//	                     suspended ◀──Suspend── active
-//	                             └────Resume────▶
-//	                                      │
-//	                                      ▼  End
+//	    |
+//	    v
+//	pending --Seal (approval outstanding)--> awaiting_approval
+//	    |                                            |
+//	    +--Seal (approval satisfied)--> ready <--Approve
+//	                                      |
+//	                                      | Start(rootPID)
+//	                                      v
+//	                     suspended <--Suspend-- active
+//	                             +----Resume---->
+//	                                      |
+//	                                      v  End
 //	                   completed | terminated | failed
 //
 // End is legal from every non-terminal state, which is the one rule in here
-// that is not about the happy path. A session can fail before it starts — an
+// that is not about the happy path. A session can fail before it starts -- an
 // inadmissible envelope, a shim that never launched, a daemon shutting down
-// mid-approval — and a lifecycle that could only end sessions that had begun
+// mid-approval -- and a lifecycle that could only end sessions that had begun
 // would leave those stuck in a non-terminal state forever, holding their state
 // and never appearing in a completed-session query.
 var transitions = map[Action]map[State]bool{
@@ -169,9 +169,9 @@ var transitions = map[Action]map[State]bool{
 
 // Allowed reports whether action a may be taken from state from.
 //
-// Exported because the answer is useful outside this package — an IPC layer
+// Exported because the answer is useful outside this package -- an IPC layer
 // deciding whether to offer a command, a CLI rendering what a session can do
-// next — and because a caller working it out from the state enum would be
+// next -- and because a caller working it out from the state enum would be
 // re-deriving the table.
 func Allowed(a Action, from State) bool { return transitions[a][from] }
 
@@ -266,7 +266,7 @@ type ManagerConfig struct {
 	// pipeline.Config.Sink was before internal/audit existed.
 	Supervisor Supervisor
 
-	// StateConfig supplies the per-session tracking state's settings —
+	// StateConfig supplies the per-session tracking state's settings --
 	// history depth, novelty ceiling, clock. SessionID, Envelope, and StartedAt
 	// are filled in per session and anything set here for them is ignored.
 	StateConfig Config
@@ -284,7 +284,7 @@ type ManagerConfig struct {
 // handler creates sessions, a shim starts them, a supervisor ends them, and a
 // status query lists them, all on different goroutines. The lock is coarse and
 // held only for lifecycle operations, which happen once or twice per session
-// rather than once per syscall — this is not on the hot path, and the hot path
+// rather than once per syscall -- this is not on the hot path, and the hot path
 // (State_) is deliberately not behind it.
 //
 // The zero value is not usable; use NewManager.
@@ -302,7 +302,7 @@ type managed struct {
 
 	// state is handed to the pipeline that processes this session and is
 	// written by that pipeline's goroutine alone. The manager holds the
-	// reference and never writes through it — see the ownership note in
+	// reference and never writes through it -- see the ownership note in
 	// state.go, and Summary's limitation in end().
 	state *MemoryState
 }
@@ -340,8 +340,8 @@ func NewManager(cfg ManagerConfig) *MemoryManager {
 // envelope would be granting capabilities nobody authorized, which is the one
 // failure this whole system is arranged to prevent.
 //
-// The manager takes ownership of the envelope. Seal mutates it — that is what
-// sealing is — so the caller must not hold it for another session or modify it
+// The manager takes ownership of the envelope. Seal mutates it -- that is what
+// sealing is -- so the caller must not hold it for another session or modify it
 // afterwards. One envelope, one session, which is also what makes the session
 // identity below unambiguous.
 func (m *MemoryManager) Create(_ context.Context, req CreateRequest) (*Session, error) {
@@ -414,7 +414,7 @@ func (m *MemoryManager) Create(_ context.Context, req CreateRequest) (*Session, 
 //
 // The destination depends on whether approval is outstanding. It is not when
 // approval was never required, and it is not when the envelope already carries
-// an ApprovalRecord — an envelope approved out of band is approved, and
+// an ApprovalRecord -- an envelope approved out of band is approved, and
 // demanding a second sign-off for the same document would train operators to
 // click through the prompt.
 //
@@ -456,7 +456,7 @@ func (m *MemoryManager) Seal(_ context.Context, sessionID string) error {
 // CLI, from a web prompt, or from an automatic policy without this state
 // machine knowing the difference.
 //
-// Not part of the Manager interface, which declares no approval step at all —
+// Not part of the Manager interface, which declares no approval step at all --
 // an omission that would make awaiting_approval a state only End can leave. It
 // is on the concrete type rather than added to the interface because the
 // interface is a shipped contract and one implementation's need is not a reason
@@ -495,7 +495,7 @@ func (m *MemoryManager) Approve(_ context.Context, sessionID string, rec ece.App
 // Reachable only from ready, which is the point: a session that skipped Seal
 // has an unlinted envelope, and one that skipped Approve has an unapproved one.
 // The envelope's sealed flag is checked again here even though the state
-// machine makes an unsealed envelope unreachable — the check is one line and
+// machine makes an unsealed envelope unreachable -- the check is one line and
 // what it guards against is governing an agent with a document that was still
 // being edited.
 //
@@ -530,8 +530,8 @@ func (m *MemoryManager) Start(_ context.Context, sessionID string, rootPID int32
 
 // Suspend pauses the supervised process tree pending an approval decision.
 //
-// Refused outright with no supervisor wired. The alternative — recording the
-// session as suspended while the agent keeps running — would put a claim in the
+// Refused outright with no supervisor wired. The alternative -- recording the
+// session as suspended while the agent keeps running -- would put a claim in the
 // lifecycle record that nothing enforced, and a reader would have no way to
 // tell it from a suspension that worked.
 //
@@ -600,7 +600,7 @@ func (m *MemoryManager) Resume(ctx context.Context, sessionID string) error {
 //
 // The summary is snapshotted here and only here. Snapshot reads structures that
 // belong to the session's writer goroutine, and End is the moment that
-// goroutine has stopped — the pipeline has drained, nothing is processing. That
+// goroutine has stopped -- the pipeline has drained, nothing is processing. That
 // is why Get on a *running* session reports a zero Summary rather than a live
 // one; see the limitation note there.
 func (m *MemoryManager) End(_ context.Context, sessionID string, outcome Outcome) error {
@@ -668,7 +668,7 @@ func (m *MemoryManager) Get(_ context.Context, sessionID string) (*Session, erro
 // Filter.Since and Filter.Until bound CreatedAt, not StartedAt. A session that
 // never started has no StartedAt at all, and filtering on it would silently
 // hide exactly the sessions someone querying a time window is most likely to be
-// looking for — the ones that failed before they began. Since is inclusive,
+// looking for -- the ones that failed before they began. Since is inclusive,
 // Until exclusive, and a zero value for either means unbounded.
 func (m *MemoryManager) List(_ context.Context, f Filter) ([]*Session, error) {
 	m.mu.RLock()
@@ -701,7 +701,7 @@ func (m *MemoryManager) List(_ context.Context, f Filter) ([]*Session, error) {
 // The one thing this manager hands out by reference rather than by copy, and
 // deliberately: it is what a pipeline writes through, and a copy would be a
 // pipeline recording into nothing. Everything about who may call it is in
-// state.go's ownership note — in short, one writer per session, and that writer
+// state.go's ownership note -- in short, one writer per session, and that writer
 // is the pipeline processing it.
 func (m *MemoryManager) State(sessionID string) (State_, bool) {
 	m.mu.RLock()
@@ -727,7 +727,7 @@ func (m *MemoryManager) State(sessionID string) (State_, bool) {
 // one map read, and no copying. Nothing here allocates.
 //
 // The envelope is shared rather than copied, on the same grounds Session.clone
-// shares it — it is sealed and read only by the time a session accepts events.
+// shares it -- it is sealed and read only by the time a session accepts events.
 // State_ is shared because sharing it is the point; see State.
 func (m *MemoryManager) Binding(sessionID string) (Binding, bool) {
 	m.mu.RLock()
@@ -794,8 +794,8 @@ func (f Filter) matches(s *Session) bool {
 
 // clone returns a copy safe to hand to another goroutine.
 //
-// Deep for everything the manager keeps mutating — the summary's map and slices,
-// the end-time pointer — and shallow for the envelope, which is sealed and read
+// Deep for everything the manager keeps mutating -- the summary's map and slices,
+// the end-time pointer -- and shallow for the envelope, which is sealed and read
 // only. A shallow copy of the summary would hand out the same map the next End
 // writes into.
 func (s *Session) clone() Session {
@@ -817,21 +817,6 @@ func (s *Session) clone() Session {
 	return out
 }
 
-// Done: the lifecycle state machine is MemoryManager above, over a
-// caller-supplied envelope, with the legal transitions declared once in
-// `transitions` and every pair of (state, action) classified by a test. Create
-// from a Prompt, Suspend, and Resume are all declared and all refuse rather
-// than pretend: the first needs M8 and M9, the second and third need a
-// Supervisor that is M7 and M11. Approve is on the concrete type only, because
-// awaiting_approval would otherwise be a state nothing but End can leave.
-// Done: cross-session event dispatch is Dispatcher in dispatch.go. It routes
-// each event on one multi-session stream to the processor governing that
-// event's session, reading this manager through the one-method Registry
-// interface — so the manager stayed a registry and did not become the "session
-// registry with a stage list attached" internal/pipeline refused to be. Binding
-// is the whole of this file's contribution. AcceptsEvents, beside the
-// transition table in spirit, is where the lifecycle states that may receive
-// events are declared once: active and suspended, and nothing else.
 // TODO(session): implement the supervisor with pre-exec registration. On Linux
 // that likely means fork, register the child PID, then exec, closing the window
 // between fork and exec.

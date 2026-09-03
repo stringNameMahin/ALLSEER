@@ -14,7 +14,7 @@ import (
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
 )
 
-// This file is the first security *knowledge* in the risk engine — the first
+// This file is the first security *knowledge* in the risk engine -- the first
 // place ALLSEER asserts that some resource matters more than another, rather
 // than deriving everything from what the envelope declared and the validator
 // concluded.
@@ -27,7 +27,7 @@ import (
 // Not in Go source. The project has already drawn this line once: the policy
 // rule set is YAML in configs/ because it is the file an operator edits, while
 // the capability table is Go because it is a closed enum tied to code. A
-// sensitivity list is the former — what counts as sensitive is deployment
+// sensitivity list is the former -- what counts as sensitive is deployment
 // specific, which is exactly why SensitivityOracle is an interface separate
 // from Scorer. A list compiled into a scorer would be a security claim nobody
 // could review, override, or diff.
@@ -45,7 +45,7 @@ import (
 // HostSensitivity does the same for a destination. That is not SeverityInfo.
 // "We have never heard of this file" and "we looked at this file and it is
 // unremarkable" are different findings, and collapsing them would make the
-// list's silence indistinguishable from its approval — which is how a list
+// list's silence indistinguishable from its approval -- which is how a list
 // becomes the single thing standing between a credential read and a warning,
 // with everything it has not been taught about silently safe.
 //
@@ -101,7 +101,7 @@ func KnownSensitivity(s capability.Severity) bool { return severityRank(s) >= 0 
 //
 // Two sections rather than two files. What counts as sensitive is one question
 // an operator answers about a deployment, and splitting it across files would
-// mean two loaders, two admission checks, and two CLI flags for one decision —
+// mean two loaders, two admission checks, and two CLI flags for one decision --
 // with the standing possibility of a daemon running with half of it. The
 // sections keep the vocabularies apart by naming them: `paths` takes filesystem
 // globs, `hosts` takes the validator's host patterns, and each is validated by
@@ -117,7 +117,7 @@ type SensitivityList struct {
 	// Hosts grades network destinations. Optional: a list that grades only
 	// paths is the shape this file had before host sensitivity existed, and it
 	// still loads and still means exactly what it meant. An absent section is
-	// not an empty one — an oracle built from it reports that it rates no
+	// not an empty one -- an oracle built from it reports that it rates no
 	// hosts, so no host-sensitivity factor is produced at all, rather than a
 	// factor claiming somebody asked.
 	Hosts []HostSensitivityEntry `yaml:"hosts,omitempty" json:"hosts,omitempty"`
@@ -172,7 +172,7 @@ func ParseSensitivityList(data []byte, source string) (*SensitivityList, error) 
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	// A misspelled key here is an entry missing the field its author wrote.
 	// "sensitivty: critical" would decode to the empty grade and be rejected
-	// below, but "reasn:" would decode to an entry with no reason — and the
+	// below, but "reasn:" would decode to an entry with no reason -- and the
 	// point of rejecting unknown fields is that neither reaches a human as a
 	// puzzle about why their list behaves differently than it reads.
 	dec.KnownFields(true)
@@ -205,12 +205,12 @@ func ParseSensitivityList(data []byte, source string) (*SensitivityList, error) 
 // an entry with an unusable pattern matches nothing, an entry with an unknown
 // grade contributes nothing, and an entry with no reason cannot be reviewed.
 // All three produce a list that loads, runs, and protects less than its author
-// believes — the specific failure this project refuses to let happen quietly.
+// believes -- the specific failure this project refuses to let happen quietly.
 func validateSensitivityList(list *SensitivityList, source string) error {
 	// The file must grade *something*. The rule is unchanged in intent from
-	// when `paths` was the only section — an empty list is the claim that
+	// when `paths` was the only section -- an empty list is the claim that
 	// nothing is sensitive, and a daemon that started with one would score
-	// every credential read as ordinary — and it is now stated over both
+	// every credential read as ordinary -- and it is now stated over both
 	// sections, so a list that grades only hosts is legal. A list that grades
 	// only paths was legal before and still is.
 	if len(list.Paths) == 0 && len(list.Hosts) == 0 {
@@ -258,8 +258,8 @@ func validateSensitivityList(list *SensitivityList, source string) error {
 // ResourceOracle implements SensitivityOracle over a configured list.
 //
 // It rates paths and hosts from the two sections of one file.
-// ExecutableSensitivity is implemented — the whole interface is, rather than
-// two-thirds of it — and reports SensitivityUnknown for everything, which is
+// ExecutableSensitivity is implemented -- the whole interface is, rather than
+// two-thirds of it -- and reports SensitivityUnknown for everything, which is
 // the truthful answer for a build with no executable list. The alternative,
 // returning SeverityInfo, would be a fabricated "this is fine" for every binary
 // the agent runs.
@@ -281,8 +281,8 @@ func validateSensitivityList(list *SensitivityList, source string) error {
 //   - The observed path is segmented once per lookup rather than once per
 //     pattern. Scanning forty patterns through validator.MatchPath re-validates
 //     every pattern and re-splits the same path forty times, which measured at
-//     8.7 µs and 183 allocations per event against a whole-pipeline budget of
-//     2.5 µs. Through a compiled set it is one allocation.
+//     8.7 us and 183 allocations per event against a whole-pipeline budget of
+//     2.5 us. Through a compiled set it is one allocation.
 //
 // Immutable after construction and safe for concurrent use.
 type ResourceOracle struct {
@@ -377,7 +377,7 @@ func (o *ResourceOracle) List() *SensitivityList { return o.list }
 
 // PathSensitivity rates a filesystem path.
 //
-// Returns SensitivityUnknown when nothing covers the path, and — importantly —
+// Returns SensitivityUnknown when nothing covers the path, and -- importantly --
 // also when the path is not in the resolved form the matcher requires.
 // validator.MatchPath refuses an unresolved path rather than guessing, so an
 // unresolved path is one this oracle genuinely cannot rate. Reporting it as
@@ -432,14 +432,14 @@ func (o *ResourceOracle) RatesHosts() bool {
 
 // HostSensitivity rates a network destination.
 //
-// Takes a **bare host**, never "host:port" — the same contract
+// Takes a **bare host**, never "host:port" -- the same contract
 // validator.MatchHost states, because this is a thin ordering wrapper around
 // it. The caller splits; SensitiveHostScorer is the caller.
 //
 // Returns SensitivityUnknown when no entry covers the destination, and also
 // when the destination is not something the matcher can compare: an empty
 // target, a malformed name, a value that is neither. That is the same refusal
-// PathSensitivity makes about an unresolved path, and for the same reason — an
+// PathSensitivity makes about an unresolved path, and for the same reason -- an
 // uninterpretable destination must never be the cheapest way to look
 // unremarkable.
 //
@@ -499,7 +499,7 @@ func (o *ResourceOracle) HostSensitivityReason(hostOrIP string) (capability.Seve
 // knows that yet.
 //
 // TODO(risk): executable sensitivity has no consumer, and privilege_change
-// turned out not to be one. This method rates a *resource* — a binary path —
+// turned out not to be one. This method rates a *resource* -- a binary path --
 // and a privilege observation names no resource at all: telemetry.resolve
 // leaves Target empty for the whole domain. A factor that rated
 // Process.Executable would be rating the *actor* rather than the act, which
@@ -510,12 +510,12 @@ func (o *ResourceOracle) ExecutableSensitivity(_ string) capability.Severity {
 }
 
 // TODO(risk): prefilter the scan. This was deferred on the grounds that scoring
-// one unrated path costs 982 ns against a 2.5 µs pipeline, which is
-// proportionate — and that reasoning no longer covers the whole picture.
+// one unrated path costs 982 ns against a 2.5 us pipeline, which is
+// proportionate -- and that reasoning no longer covers the whole picture.
 // CredentialEgressScorer calls PathSensitivity once per retained successful
 // read when it evaluates an egress event, so the same lookup runs up to 256
-// times for one syscall: 340 µs at the engine level, 120 µs end to end (see the
-// measurements in sequence.go). The cheap next step is unchanged — a
+// times for one syscall: 340 us at the engine level, 120 us end to end (see the
+// measurements in sequence.go). The cheap next step is unchanged -- a
 // required-literal-segment index, since every pattern in the shipped list has
 // at least one literal segment (".ssh", "shadow", "environ") and a path whose
 // segment set contains none of them cannot match that pattern at all, with the

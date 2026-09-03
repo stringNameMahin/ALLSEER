@@ -80,7 +80,7 @@ func (h *fakeHistory) withViolations(n int) *fakeHistory {
 	return h
 }
 
-// withRecent sets the session's event history, oldest first — the order
+// withRecent sets the session's event history, oldest first -- the order
 // RecentEvents promises and the order a sequence is only recognizable in.
 func (h *fakeHistory) withRecent(events ...event.Event) *fakeHistory {
 	h.recent = events
@@ -386,7 +386,7 @@ func TestNovelVersusSeenTarget(t *testing.T) {
 	}
 }
 
-// A saturated novelty set still reports novel — the safe direction — but says so,
+// A saturated novelty set still reports novel -- the safe direction -- but says so,
 // because past the ceiling "unseen" stops being evidence of anything.
 func TestSaturatedNoveltySetIsQualified(t *testing.T) {
 	h := history()
@@ -612,8 +612,8 @@ func TestLevelBoundaries(t *testing.T) {
 // --- 9. clamping ------------------------------------------------------------------------------
 
 func TestScoreClamps(t *testing.T) {
-	// The unrated model's theoretical maximum is 140 — every factor at its
-	// ceiling — and it has to land on 100 rather than run off the scale a policy
+	// The unrated model's theoretical maximum is 140 -- every factor at its
+	// ceiling -- and it has to land on 100 rather than run off the scale a policy
 	// threshold is expressed on. Asserted as an inequality rather than a number,
 	// because what this test needs is that clamping is reachable at all.
 	var ceiling float64
@@ -839,7 +839,7 @@ func TestConfidenceIsACountOfInputs(t *testing.T) {
 
 // The engine's half of the ordering guarantee: it asks the history about this
 // event's target, so a caller that recorded first would see the factor go
-// silent. The pipeline's half — that the recording really does happen after —
+// silent. The pipeline's half -- that the recording really does happen after --
 // is pinned by TestRiskStageSeesHistoryBeforeCommit in internal/pipeline.
 func TestHistoryIsQueriedForTheCurrentTarget(t *testing.T) {
 	h := history()
@@ -855,7 +855,7 @@ func TestHistoryIsQueriedForTheCurrentTarget(t *testing.T) {
 		t.Errorf("history queries = %v, want exactly %v", h.asked, want)
 	}
 
-	// And the same target, already recorded, silences the factor — which is what
+	// And the same target, already recorded, silences the factor -- which is what
 	// makes the ordering observable at all.
 	h2 := history().withSeen(capability.KindFileRead, "/etc/hosts")
 	a := score(t, ScoreRequest{
@@ -930,7 +930,7 @@ func (unnamedScorer) Evaluate(context.Context, ScoreRequest) (*decision.Factor, 
 // The scorer set is domain-partitioned, so no single request can trigger every
 // scorer any more: an event has a path, a destination, or a privilege change,
 // and never two of them. The check is therefore that each scorer fires on at
-// least one of the three shapes and agrees with its own metadata when it does —
+// least one of the three shapes and agrees with its own metadata when it does --
 // which is a stronger claim than the single-request form it replaces, because it
 // also asserts that every scorer in the set is reachable at all.
 func TestScorersAgreeWithTheirOwnMetadata(t *testing.T) {
@@ -1048,14 +1048,14 @@ func TestScoreSession(t *testing.T) {
 		t.Errorf("Score = %v, want 21", a.Score)
 	}
 	if a.Confidence != 0.6 {
-		t.Errorf("Confidence = %v, want 0.6 — session scoring has two inputs, not three", a.Confidence)
+		t.Errorf("Confidence = %v, want 0.6 -- session scoring has two inputs, not three", a.Confidence)
 	}
 	if a.Confidence >= ConfidenceCeiling {
 		t.Error("session scoring claimed the confidence event scoring is allowed")
 	}
 
 	// With no history the slice is the fallback, since something counted is
-	// better than nothing counted — but the basis says which it was.
+	// better than nothing counted -- but the basis says which it was.
 	b, err := e.ScoreSession(context.Background(), SessionScoreRequest{
 		Violations: []validator.Violation{viol(validator.ViolationSelectorMismatch, capability.SeverityLow)},
 	})

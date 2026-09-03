@@ -7,9 +7,9 @@
 # not a thing a setup script should do unasked.
 set -euo pipefail
 
-info()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+info()  { printf '  \033[32m[OK]\033[0m %s\n' "$1"; }
 warn()  { printf '  \033[33m!\033[0m %s\n' "$1"; }
-err()   { printf '  \033[31m✗\033[0m %s\n' "$1"; }
+err()   { printf '  \033[31m[X]\033[0m %s\n' "$1"; }
 
 missing=0
 

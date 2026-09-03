@@ -4,8 +4,8 @@ package telemetry
 
 // The loader: eBPF object lifecycle over libbpfgo.
 //
-// This is the implementation the package doc names — "The kernel side is
-// compiled from C (bpf/*.bpf.c) and loaded with libbpfgo" — behind the Loader
+// This is the implementation the package doc names -- "The kernel side is
+// compiled from C (bpf/*.bpf.c) and loaded with libbpfgo" -- behind the Loader
 // interface, which exists "so libbpfgo can be swapped without touching the
 // collector, and so tests can exercise collector logic without a kernel".
 //
@@ -16,7 +16,7 @@ package telemetry
 // wrote them, handed to whatever the caller chooses. Decoder is the only thing
 // in this package that assigns meaning to those bytes, and putting a decode
 // call in here would give the system two places where kernel bytes become Go
-// values — which is the exact duplication internal/telemetry/abi exists to
+// values -- which is the exact duplication internal/telemetry/abi exists to
 // prevent.
 //
 // It also does not filter. That is in the kernel, in bpf/allseer.bpf.c, and the
@@ -54,9 +54,9 @@ import (
 )
 
 // Map names, as bpf/include/allseer_maps.h publishes them. That header is the
-// contract — "Maps are addressed by name and written as raw bytes ...  Neither
+// contract -- "Maps are addressed by name and written as raw bytes ...  Neither
 // the name nor the byte layout is checked by a compiler that sees both sides"
-// — so the names are written down here once and referred to, rather than
+// -- so the names are written down here once and referred to, rather than
 // spelled out at each call site where a typo would become a runtime lookup
 // failure.
 const (
@@ -76,7 +76,7 @@ const (
 	// inside openat, between ProgOpenatEnter and ProgOpenatExit.
 	//
 	// No loader method touches it and none should. It is kernel-internal state
-	// with a kernel-internal lifecycle — allseer_maps.h defines when an entry
+	// with a kernel-internal lifecycle -- allseer_maps.h defines when an entry
 	// is created, replaced, deleted and evicted, and every one of those is a
 	// probe's doing. A user-space write into it would be a fabricated syscall
 	// entry that the exit side would complete into a real-looking event.
@@ -108,8 +108,8 @@ const (
 	// The third instance of the scratch protocol and the first shared by more
 	// than one syscall: eleven pairs write and read this one map, where openat
 	// and connect were given one each. allseer_maps.h argues why that is right
-	// here — the eleven have one value shape and none of them is hot, so
-	// neither reason for splitting them applies — and what it costs, which is a
+	// here -- the eleven have one value shape and none of them is hot, so
+	// neither reason for splitting them applies -- and what it costs, which is a
 	// syscall tag the exit side has to check.
 	//
 	// Kernel-internal in exactly the way the other two are, and named here for
@@ -120,7 +120,7 @@ const (
 
 // Program names, as bpf/allseer.bpf.c declares them, for Attach. libbpf
 // resolves the attach point from each program's SEC(), so the tracepoint is
-// named in one place — the C file — and not restated here.
+// named in one place -- the C file -- and not restated here.
 //
 // Attaching is per program and the caller chooses which: the loader has no list
 // of "all probes" and deliberately does not honour Config.EnabledProbes, for
@@ -141,7 +141,7 @@ const (
 	// Named as a probe anyway because it is one: it performs the cgroup filter
 	// decision for every open this object reports, and it is what captures the
 	// path, the flags and the mode. What it does with them is store them, in
-	// openat_scratch, for ProgOpenatExit to complete — the entry has the
+	// openat_scratch, for ProgOpenatExit to complete -- the entry has the
 	// arguments and no return, and struct allseer_event has a `ret` field the
 	// header defines as a syscall return.
 	ProgOpenatEnter = "openat_enter"
@@ -172,8 +172,8 @@ const (
 	// Useless apart from ProgConnectEnter in the same way ProgOpenatExit is
 	// from its own entry side: attaching either alone yields no events rather
 	// than half of them, which looks exactly like a host that made no outbound
-	// connections. For a capability the catalog rates SeverityHigh — "it is how
-	// data leaves, and it cannot be undone after the fact" — that is the blind
+	// connections. For a capability the catalog rates SeverityHigh -- "it is how
+	// data leaves, and it cannot be undone after the fact" -- that is the blind
 	// spot most worth not having by accident.
 	ProgConnectExit = "connect_exit"
 )
@@ -192,7 +192,7 @@ const (
 // what it finds a scratch entry for, so one without the other is a blind spot
 // that looks exactly like a process that never changed its credentials. All
 // five privilege capabilities in the M1 catalog are graded critical or high, so
-// that is a blind spot worth not having by accident — which is why
+// that is a blind spot worth not having by accident -- which is why
 // ProgPrivPairs exists rather than leaving each caller to assemble the list.
 const (
 	ProgPrivSetuidEnter = "priv_enter_setuid"
@@ -233,7 +233,7 @@ const (
 //
 // A list rather than a set of loose constants, because the failure it prevents
 // is arithmetic: twenty-two names attached by hand is twenty-two chances to
-// omit one, and an omitted exit program is silent — it produces no error, no
+// omit one, and an omitted exit program is silent -- it produces no error, no
 // event, and no way to tell the difference between "this syscall was never
 // called" and "this half was never attached".
 //
@@ -274,7 +274,7 @@ const (
 	// Some buffering is required rather than merely nice: libbpfgo's poll
 	// goroutine sends from inside the libbpf callback, so a full channel stalls
 	// the drain of the kernel ring, and a stalled drain is how records are lost
-	// — the loss pkg/event.Event.Dropped reports. That this is a compiled-in
+	// -- the loss pkg/event.Event.Dropped reports. That this is a compiled-in
 	// constant and not configurable is a real gap; see the TODO at the end of
 	// this file.
 	rawEventChannelSize = 1024
@@ -323,7 +323,7 @@ var (
 	//
 	// Reported rather than swallowed, and given its own sentinel so that a
 	// caller can swallow it deliberately. Removing an absent key is harmless
-	// and a collector detaching a session it already detached will do it — but
+	// and a collector detaching a session it already detached will do it -- but
 	// "the entry was not there" and "the entry could not be removed" are
 	// different findings about the filter map, and a DeleteMap that returned
 	// nil for both would let a genuine failure to stop watching a cgroup read
@@ -336,7 +336,7 @@ var (
 	// Checked for the same reason ErrMapValueSize is. The map is addressed by
 	// name and the name is a string, so nothing but this can tell that the
 	// caller reached a hash map, a ring buffer, or a counter of some other
-	// width — and a per-CPU read against a map that is not per-CPU returns the
+	// width -- and a per-CPU read against a map that is not per-CPU returns the
 	// wrong number of bytes rather than an error, which would be summed into a
 	// plausible drop count.
 	ErrNotACounter = errors.New("telemetry: map is not a single-entry per-CPU counter")
@@ -388,7 +388,7 @@ func NewLoader(cfg Config, decoder Decoder) *BPFLoader {
 //
 //  2. The object's record layout matches this binary's decoder, read out of the
 //     object's BTF. internal/telemetry/abi calls the loader "the only point at
-//     which a mismatch costs nothing — no probes are running and no events have
+//     which a mismatch costs nothing -- no probes are running and no events have
 //     been believed".
 //
 //  3. The object was compiled against the same ALLSEER_ABI_VERSION this binary
@@ -482,7 +482,7 @@ func resizeRingBuffer(module *bpf.Module, size int) error {
 //
 // The hook itself is not named here. libbpf derives it from the program's
 // SEC(), so bpf/allseer.bpf.c stays the single place a probe's attach point is
-// written down — which is what keeps ProbeInfo.AttachPoint describable from the
+// written down -- which is what keeps ProbeInfo.AttachPoint describable from the
 // object rather than from a table beside it.
 func (l *BPFLoader) Attach(ctx context.Context, programName string) error {
 	if err := ctx.Err(); err != nil {
@@ -518,7 +518,7 @@ func (l *BPFLoader) Attach(ctx context.Context, programName string) error {
 // probe wrote it, which Decoder.Decode refuses unless it is EventSize() bytes.
 // Nothing here inspects, reorders, or drops them.
 //
-// The channel is closed when the loader stops polling — DetachAll or Close — so
+// The channel is closed when the loader stops polling -- DetachAll or Close -- so
 // a consumer ranging over it terminates rather than blocking on a stream that
 // will never produce again.
 func (l *BPFLoader) RingBuffer(ctx context.Context, mapName string) (<-chan []byte, error) {
@@ -551,8 +551,8 @@ func (l *BPFLoader) RingBuffer(ctx context.Context, mapName string) (<-chan []by
 //
 // This is the user-to-kernel channel the Loader contract describes: it is how
 // tracked_cgroups is populated, and so how kernel-side filtering is told what
-// to let through. For that map the key is an allseer_cgroup_id_t — a
-// little-endian __u64 on both supported targets — and the value is a single
+// to let through. For that map the key is an allseer_cgroup_id_t -- a
+// little-endian __u64 on both supported targets -- and the value is a single
 // allseer_tracked_t byte whose content carries no meaning: allseer_maps.h says
 // "presence in the map is the entire signal", and bpf/allseer.bpf.c tests the
 // lookup for NULL without dereferencing it.
@@ -578,7 +578,7 @@ func (l *BPFLoader) UpdateMap(ctx context.Context, mapName string, key, value []
 	}
 	// The emptiness checks are not redundant with the width comparison. A ring
 	// buffer map declares a zero-width key and value, so `events` satisfies
-	// len(key) == m.KeySize() with an empty slice — and &key[0] on an empty
+	// len(key) == m.KeySize() with an empty slice -- and &key[0] on an empty
 	// slice panics. Updating a ring buffer is meaningless in any case; this
 	// refuses it with the error the caller can act on instead of a stack trace.
 	if len(key) == 0 || len(value) == 0 || len(key) != m.KeySize() || len(value) != m.ValueSize() {
@@ -604,7 +604,7 @@ func (l *BPFLoader) UpdateMap(ctx context.Context, mapName string, key, value []
 // change nothing the probe can see, while looking from Go exactly like it had.
 //
 // Deleting a key the map does not hold reports ErrMapKeyNotFound rather than
-// nil. It is not an error the caller must treat as fatal — see the sentinel —
+// nil. It is not an error the caller must treat as fatal -- see the sentinel --
 // but it is a different fact from a delete that removed something, and only the
 // caller knows which of the two it expected.
 //
@@ -651,8 +651,8 @@ func (l *BPFLoader) DeleteMap(ctx context.Context, mapName string, key []byte) e
 // CPUs.
 //
 // This is the only way the loss of a record becomes visible. A record the ring
-// buffer could not accept leaves nothing behind in the ring — the loss is the
-// absence of a record — so the probe counts it where it happens and this reads
+// buffer could not accept leaves nothing behind in the ring -- the loss is the
+// absence of a record -- so the probe counts it where it happens and this reads
 // the count. Nothing in RingBuffer can substitute: it reports what arrived, and
 // what arrived is precisely the population that was not lost.
 //
@@ -675,7 +675,7 @@ func (l *BPFLoader) DeleteMap(ctx context.Context, mapName string, key []byte) e
 // Deliberately absent, not omitted for later. The counter is monotonic for the
 // lifetime of the loaded object, which is what both of its readers need:
 // SourceStats.DroppedEvents is cumulative by definition, and the per-record
-// delta Event.Dropped wants is current minus last-observed — a subtraction the
+// delta Event.Dropped wants is current minus last-observed -- a subtraction the
 // caller can do, and one that a reader resetting the counter would silently
 // break for every other reader on the host.
 func (l *BPFLoader) ReadCounter(ctx context.Context, mapName string) (uint64, error) {
@@ -770,7 +770,7 @@ func (l *BPFLoader) detachLocked() error {
 // Close detaches everything and releases the object.
 //
 // Idempotent, and safe on a loader that was never loaded. libbpfgo's
-// Module.Close is neither — it calls bpf_object__close unconditionally — so the
+// Module.Close is neither -- it calls bpf_object__close unconditionally -- so the
 // guard is here, where a daemon closing on a signal path it may reach twice can
 // rely on it.
 func (l *BPFLoader) Close() error {
@@ -803,8 +803,8 @@ func (l *BPFLoader) readyLocked() error {
 }
 
 // TODO(telemetry): Config has no field for the raw record channel's capacity,
-// so rawEventChannelSize is compiled in. EventChannelSize is not it — that one
-// is documented as sitting between decode and the pipeline — and the two have
+// so rawEventChannelSize is compiled in. EventChannelSize is not it -- that one
+// is documented as sitting between decode and the pipeline -- and the two have
 // different consequences when they fill: the downstream one backs up into the
 // decoder, this one stalls the kernel ring drain and loses records. Adding the
 // field belongs with the collector, which is what will have to react to the

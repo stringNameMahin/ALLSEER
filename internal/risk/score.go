@@ -13,7 +13,7 @@ import (
 )
 
 // This file is the first real risk stage: a deterministic, explainable baseline
-// scorer. It is deliberately not the engine the handbook's §3.6 describes.
+// scorer. It is deliberately not the engine the handbook's section 3.6 describes.
 // There is no baseline learning and no behavioral model here. What there is, is
 // a scorer that turns evidence the pipeline already produces into a bounded
 // score, so that the risk-conditioned rules in configs/rules.default.yaml stop
@@ -53,7 +53,7 @@ import (
 // admitted independently, on whether the list actually grades that kind of
 // resource, and exactly one of them speaks per event: a filesystem event has no
 // destination and a network event has no path. Each lives beside its own data
-// and its own admission check — see sensitivity.go, host.go, and sequence.go.
+// and its own admission check -- see sensitivity.go, host.go, and sequence.go.
 //
 // uncorrelated_destination and privilege_change are in every engine, because
 // their evidence is a field the resolver already wrote and a grade the catalog
@@ -73,17 +73,17 @@ import (
 //  3. **An expected event scores exactly zero.** A within-envelope verdict is a
 //     positive finding by the validator, not an absence, so LevelNone means
 //     "nothing departed" rather than "nothing was looked at". The five factors
-//     that can still find something on a covered event — sensitive_path,
+//     that can still find something on a covered event -- sensitive_path,
 //     sensitive_host, uncorrelated_destination, credential_access_egress, and
-//     privilege_change — report the finding and withhold the points, saying so
+//     privilege_change -- report the finding and withhold the points, saying so
 //     with not_charged, rather than going silent about it.
 //
 // # Calibration
 //
 // The point values are not arbitrary, but neither are they measured: no labeled
 // corpus exists yet (see the TODO at the foot of risk.go). They are calibrated
-// against the one artifact that already states the intended bands — the shipped
-// rule set — so that its own descriptions come true. Its workspace-escape-read
+// against the one artifact that already states the intended bands -- the shipped
+// rule set -- so that its own descriptions come true. Its workspace-escape-read
 // rule calls such reads "common and usually benign" and guards itself with
 // max_risk_score: 60; an ordinary workspace-escape read scores 55 under this
 // model, so that rule now fires instead of falling through to the default
@@ -173,7 +173,7 @@ const (
 
 	// FactorEvidenceBasis carries no points. It states which of the model's
 	// evidence inputs were actually available, and it is the only thing
-	// confidence is computed from — so a reader can check a confidence value by
+	// confidence is computed from -- so a reader can check a confidence value by
 	// counting the trues in one map rather than by trusting a number.
 	FactorEvidenceBasis = "evidence_basis"
 )
@@ -212,7 +212,7 @@ const (
 	DimensionHost       = "host"
 	DimensionExecutable = "executable"
 
-	// DimensionUnrated is for a domain no oracle method covers — kernel, IPC,
+	// DimensionUnrated is for a domain no oracle method covers -- kernel, IPC,
 	// privilege. There is no method to call, so nothing was asked, and saying
 	// that is better than implying a lookup happened.
 	DimensionUnrated = "unrated"
@@ -240,7 +240,7 @@ const (
 //
 // Adding the sequence detector did not move the ceiling, and deliberately does
 // not touch confidence at all. Confidence counts *inputs available*, and the
-// detector's input — the session history — is already one of the three the
+// detector's input -- the session history -- is already one of the three the
 // basis factor names. A scorer that raised confidence because it happened to
 // find something would be reporting its own conclusion twice.
 const (
@@ -252,7 +252,7 @@ const (
 // than multiplied.
 //
 // ConfidencePerBasis times three is 0.8999999999999999 in binary floating point,
-// and confidence is compared against operator-written thresholds — a rule
+// and confidence is compared against operator-written thresholds -- a rule
 // reading min_confidence: 0.9 would silently never match. Tabulating the four
 // reachable values keeps every confidence a number an operator can type. A count
 // above the table is clamped to the ceiling, which is where a custom basis
@@ -313,7 +313,7 @@ var severityPoints = map[capability.Severity]float64{
 // nothing to a score and everything to the record: it is what lets an audit
 // distinguish "rated, and ordinary" from "never heard of it", which is the
 // distinction sensitivity.go exists to keep. Nothing here is negative, and
-// nothing can be configured to be — the list may only raise.
+// nothing can be configured to be -- the list may only raise.
 var sensitivityPoints = map[capability.Severity]float64{
 	capability.SeverityInfo:     0,
 	capability.SeverityLow:      0,
@@ -331,7 +331,7 @@ const (
 	WorkspaceEscapePoints = 10.0
 
 	// NovelTargetPoints is small on purpose. First contact with a target is weak
-	// evidence — every session's first write to every file is novel — and it
+	// evidence -- every session's first write to every file is novel -- and it
 	// earns its place by sharpening events that are already departures rather
 	// than by carrying a verdict on its own.
 	NovelTargetPoints = 5.0
@@ -397,8 +397,8 @@ func NewEngine() *BaselineEngine {
 // the credential-access-to-egress sequence detector.
 //
 // sensitive_path is inserted after violation_severity and before
-// workspace_escape, which groups the two consequence factors — how bad the
-// departure is, how consequential the resource is — ahead of the two contextual
+// workspace_escape, which groups the two consequence factors -- how bad the
+// departure is, how consequential the resource is -- ahead of the two contextual
 // ones. credential_access_egress follows it, because it is the factor that
 // reasons *about* a sensitivity grade and reads as a continuation of it. The
 // order is presentational, since the aggregation is a sum, but the factor list
@@ -428,7 +428,7 @@ func NewEngineWithOracle(o SensitivityOracle) (*BaselineEngine, error) {
 	// The two resource scorers are admitted independently, on whether the
 	// oracle actually holds knowledge of that kind. A list that grades only
 	// paths produces no sensitive_host factor, and a list that grades only
-	// hosts produces no sensitive_path factor — which is the first of the three
+	// hosts produces no sensitive_path factor -- which is the first of the three
 	// states the module keeps apart: no factor means nothing rates this kind of
 	// resource in this build, while a factor reading "unknown" means somebody
 	// asked about this particular one. Emitting a permanent "unknown" for a
@@ -517,8 +517,8 @@ func (e *BaselineEngine) Scorers() []Scorer {
 // that read it do not apply, and confidence falls accordingly.
 //
 // Called from the pipeline's score stage, which runs after validate and before
-// commit. That ordering is what makes the novelty factor meaningful — see the
-// ordering note on pipeline.EventPipeline — and this engine depends on it: an
+// commit. That ordering is what makes the novelty factor meaningful -- see the
+// ordering note on pipeline.EventPipeline -- and this engine depends on it: an
 // event recorded before scoring would already have made its own target familiar.
 func (e *BaselineEngine) Score(ctx context.Context, req ScoreRequest) (*decision.RiskAssessment, error) {
 	if req.Event == nil {
@@ -579,7 +579,7 @@ func scoreOne(ctx context.Context, s Scorer, sc *scoreCtx, out *decision.Factor)
 //
 // Deliberately narrow, and narrower than the event scorer: it reads the
 // accumulated violations and the session's violation count, and nothing else.
-// It still cannot see sequences — credential access followed by egress — even
+// It still cannot see sequences -- credential access followed by egress -- even
 // though CredentialEgressScorer now can, because SessionScoreRequest hands it a
 // violation list rather than the event stream. Inferring a sequence from
 // violations would be a second and weaker implementation of a detector that
@@ -694,8 +694,8 @@ func newScoreCtx(req ScoreRequest) *scoreCtx {
 // VerdictScorer weighs the classification itself.
 //
 // The only scorer that always contributes a factor, including a zero-point one
-// for a within-envelope event. That zero is a finding — the validator matched a
-// grant — and stating it is what keeps LevelNone distinct from "not assessed".
+// for a within-envelope event. That zero is a finding -- the validator matched a
+// grant -- and stating it is what keeps LevelNone distinct from "not assessed".
 type VerdictScorer struct{}
 
 var (
@@ -728,7 +728,7 @@ func (VerdictScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, error) {
 		// A verdict this build does not know cannot be scored, and guessing a
 		// value for it would be the fabricated evidence the package refuses. The
 		// error reaches the pipeline, which turns it into an explicit
-		// indeterminate decision — visible, and never an implicit allow.
+		// indeterminate decision -- visible, and never an implicit allow.
 		return decision.Factor{}, false, fmt.Errorf("risk: unknown verdict %q; this build cannot score it", v)
 	}
 	return decision.Factor{
@@ -835,7 +835,7 @@ func (WorkspaceEscapeScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 //
 // The first scorer whose input is configuration rather than observation, and it
 // is arranged so that the configuration can only ever add. It reads the
-// SensitivityOracle and nothing else — it does not consult the envelope, does
+// SensitivityOracle and nothing else -- it does not consult the envelope, does
 // not look at the path itself, and does not carry a list of its own.
 //
 // It consults the oracle method matching the observation's domain, so the whole
@@ -883,7 +883,7 @@ func (s SensitivePathScorer) Evaluate(_ context.Context, req ScoreRequest) (*dec
 // read and a warning, with everything it has not been taught about silently
 // safe.
 //
-// Points are withheld — not the finding — for an event the envelope covered.
+// Points are withheld -- not the finding -- for an event the envelope covered.
 // A grant over a credential path is the envelope author's decision, and the
 // place to challenge it is envelope linting rather than a risk score; charging
 // it here would break the invariant that an expected event scores exactly zero.
@@ -903,7 +903,7 @@ func (s SensitivePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 	// oracle through its own list, its own matcher, and its own factor. Two
 	// factors reporting on one destination would make an operator read both to
 	// learn one thing, and would leave a permanent "sensitive_path: unknown" on
-	// every connection — a sentence about paths, on an event that touched none.
+	// every connection -- a sentence about paths, on an event that touched none.
 	//
 	// The other unrateable dimensions stay here. executable, kernel, privilege
 	// and IPC have no list, and saying "unrated" for them is the honest report;
@@ -912,7 +912,7 @@ func (s SensitivePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 	//
 	// privilege_change does not move privilege out, and that is deliberate. It
 	// rates the act rather than a resource, and a privilege observation names
-	// no resource at all — telemetry.resolve leaves Target empty for the whole
+	// no resource at all -- telemetry.resolve leaves Target empty for the whole
 	// domain. "sensitive_path: unrated" on a privilege event remains the true
 	// statement: nothing here rates resources touched by privilege changes,
 	// because there are none to rate.
@@ -923,8 +923,8 @@ func (s SensitivePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 	grade := s.rate(dim, sc.target)
 
 	// Only the *empty* grade takes the unknown branch. A non-empty grade this
-	// build does not recognize — reachable through a third-party oracle with
-	// its own vocabulary, since the loader refuses one in a file — is reported
+	// build does not recognize -- reachable through a third-party oracle with
+	// its own vocabulary, since the loader refuses one in a file -- is reported
 	// verbatim and charged at the medium fallback below. Folding it in here
 	// would erase the difference between "the oracle said nothing" and "the
 	// oracle said something I cannot read", and would let an unfamiliar
@@ -1014,8 +1014,8 @@ func dimensionFor(k capability.Kind) string {
 
 // sensitivityPointsFor weights a grade the oracle assigned.
 //
-// SensitivityUnknown is zero and is never reached here — the caller checks
-// KnownSensitivity first — while an *unrecognized* non-empty grade from a
+// SensitivityUnknown is zero and is never reached here -- the caller checks
+// KnownSensitivity first -- while an *unrecognized* non-empty grade from a
 // third-party oracle falls back to medium. The two are opposite cases: absence
 // of a rating contributes nothing, and a rating this build cannot read is an
 // unknown quantity that must not be the cheapest way to look harmless.
@@ -1072,7 +1072,7 @@ func (NovelTargetScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, error) {
 	}
 	// History is read here, before the pipeline commits this event. Were the
 	// order reversed the target would already be familiar and this factor could
-	// never fire — see the ordering note on pipeline.EventPipeline.
+	// never fire -- see the ordering note on pipeline.EventPipeline.
 	if sc.req.History.TargetSeen(sc.kind, sc.target) {
 		return decision.Factor{}, false, nil
 	}
@@ -1198,7 +1198,7 @@ func (EvidenceBasisScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, error)
 // Clamping rather than rescaling: the theoretical maximum is 140 for the
 // unrated scorer set and 220 with an oracle behind it, and rescaling by either
 // would mean adding a scorer silently moved every existing score. A policy
-// threshold an operator set last week has to keep meaning what it meant — which
+// threshold an operator set last week has to keep meaning what it meant -- which
 // is exactly what adding the sequence detector, and then privilege_change,
 // would otherwise have broken.
 type BoundedSumAggregator struct{}
@@ -1267,9 +1267,9 @@ func historyPoints(n int) float64 {
 // --- preallocated evidence ------------------------------------------------------------------
 //
 // The evidence maps for the closed-vocabulary factors are built once at package
-// initialization and shared. They are never mutated — nothing here writes to a
+// initialization and shared. They are never mutated -- nothing here writes to a
 // Factor's Evidence after construction, and the assessment is handed to callers
-// that only read it — which makes them safe to share across goroutines and keeps
+// that only read it -- which makes them safe to share across goroutines and keeps
 // the common path free of map allocation. An event the envelope covered
 // allocates one factor slice and one assessment, and nothing else.
 

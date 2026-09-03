@@ -510,8 +510,8 @@ func TestIdenticalDecisionsSerializeIdentically(t *testing.T) {
 // level would be an assessment nobody made.
 //
 // This test is deliberately a shape assertion rather than a schema check. When
-// the wire-format decision is finally taken — an "unscored" level, a pointer
-// Risk, or an anyOf in the schema — this fails and says so here.
+// the wire-format decision is finally taken -- an "unscored" level, a pointer
+// Risk, or an anyOf in the schema -- this fails and says so here.
 func TestUnscoredDecisionIsWrittenFaithfully(t *testing.T) {
 	s, path := openSink(t, config.AuditConfig{RecordAllEvents: true})
 

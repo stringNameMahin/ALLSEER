@@ -8,8 +8,8 @@
 # The golden decision streams are different in kind. They are not source, they
 # are **committed output**: the exact bytes internal/audit.JSONLSink produces
 # for a replayed session, compared byte for byte by test/golden. The sink emits
-# LF and nothing else — one decision per line, terminated with "\n" by
-# encoding/json's Encoder — because the audit format is a wire contract with
+# LF and nothing else -- one decision per line, terminated with "\n" by
+# encoding/json's Encoder -- because the audit format is a wire contract with
 # external tooling, and "one JSON object per line" has to mean the same thing on
 # every host that reads the log.
 #

@@ -1,8 +1,8 @@
 // Package synth generates synthetic telemetry: event streams in the replay
 // format, built with no kernel, no root, no libbpf and no compiled eBPF object.
 //
-// It is the third producer internal/telemetry/replay names — "a stream can be
-// produced by the daemon's recorder, by the synthetic generator, or by hand" —
+// It is the third producer internal/telemetry/replay names -- "a stream can be
+// produced by the daemon's recorder, by the synthetic generator, or by hand" --
 // and it exists for the two cases the other two serve badly. A benchmark needs
 // ten thousand events of a stated shape, which nobody wants to hand-author and
 // which a recording pins to one machine's timing. A scenario needs a stream
@@ -13,13 +13,13 @@
 // # Not a second decoder
 //
 // The load-bearing decision here is that nothing in this package decides what
-// an event *means*. A Spec describes the record a probe would have submitted —
+// an event *means*. A Spec describes the record a probe would have submitted --
 // an allseer_event_type, a syscall return, the process identity, the one union
-// member the header designates for that type — and the generator renders it as
+// member the header designates for that type -- and the generator renders it as
 // the 856 bytes struct allseer_event occupies and hands those bytes to the same
 // telemetry.EventDecoder the live collector reads its ring buffer with:
 //
-//	Spec ─▶ 856-byte record ─▶ telemetry.EventDecoder ─▶ enrichment ─▶ resolve.Observe
+//	Spec -> 856-byte record -> telemetry.EventDecoder -> enrichment -> resolve.Observe
 //
 // So an open's capability comes from its flags, an errno comes from a negative
 // return, an address is rendered according to its family, a domain comes from
@@ -27,7 +27,7 @@
 // generator that assembled event.Event values directly would be a second
 // decoder written beside the first, and the failure that produces is the one
 // the header's preamble names: "plausible garbage that flows straight into
-// governance decisions" — arriving, in that version, through the tool meant to
+// governance decisions" -- arriving, in that version, through the tool meant to
 // produce test evidence. It would also drift silently, since nothing would fail
 // when the two disagreed.
 //
@@ -53,8 +53,8 @@
 //     records why: "a synthesized wall time reads as observed". A caller that
 //     names the offset has measured it by declaration; the generator will not
 //     pick one.
-//   - Enrichment — a resolved path, a correlated hostname, the executable, the
-//     ancestry depth, an interpreter, a binary hash, environment *names* — is
+//   - Enrichment -- a resolved path, a correlated hostname, the executable, the
+//     ancestry depth, an interpreter, a binary hash, environment *names* -- is
 //     M6's and does not exist yet. Each field sits on the payload it belongs
 //     to, so a spec cannot enrich a payload the event does not carry, and each
 //     is carried verbatim.
@@ -75,7 +75,7 @@
 // produce byte-identical streams, which is what lets a generated corpus be
 // diffed and a benchmark be compared against itself.
 //
-// A Generator is stateful — it holds the clock and the counter — and is not
+// A Generator is stateful -- it holds the clock and the counter -- and is not
 // safe for concurrent use. One generator per stream.
 package synth
 
@@ -121,7 +121,7 @@ type Config struct {
 	SessionID string
 
 	// Process is the identity used for a Spec that names none. It is the common
-	// case — a stream is usually one process, or a few — and repeating the
+	// case -- a stream is usually one process, or a few -- and repeating the
 	// identity on every spec would bury what each spec is actually about.
 	Process Proc
 
@@ -138,7 +138,7 @@ type Config struct {
 	Interval uint64
 
 	// BootWallClock is the wall time the machine booted. When set, each event's
-	// WallClock is this plus its kernel timestamp. When zero — the default —
+	// WallClock is this plus its kernel timestamp. When zero -- the default --
 	// WallClock is left zero, exactly as the decoder leaves it.
 	//
 	// It exists because several downstream stages read the field: the validator
@@ -153,8 +153,8 @@ type Config struct {
 // decoder is the collector's own decoder, shared by every generator.
 //
 // Shared rather than held per generator because EventDecoder "holds no state"
-// by its own contract — decoding one record must not depend on any record
-// before it — and a generator that carried a private one would suggest
+// by its own contract -- decoding one record must not depend on any record
+// before it -- and a generator that carried a private one would suggest
 // otherwise.
 var decoder = telemetry.NewDecoder()
 
@@ -281,7 +281,7 @@ func (g *Generator) Generate(specs ...Spec) ([]event.Event, error) {
 //
 // One JSON-encoded event per line, and nothing else. The blank lines and //
 // comments the replay reader accepts are a convenience for hand-written
-// fixtures — "Neither appears in machine-produced streams" — and this is a
+// fixtures -- "Neither appears in machine-produced streams" -- and this is a
 // machine-produced stream, so a caller that wants a fixture to explain itself
 // adds the commentary itself rather than getting it from here.
 func (g *Generator) WriteStream(w io.Writer, specs ...Spec) error {
@@ -302,9 +302,9 @@ func (g *Generator) WriteStream(w io.Writer, specs ...Spec) error {
 // Source returns an event.Source delivering the generated stream.
 //
 // It is a *replay.Source over the generated bytes rather than a source of this
-// package's own. Everything a source has to get right — single-use Start,
+// package's own. Everything a source has to get right -- single-use Start,
 // idempotent Close, drop accounting, sequence gap detection, the closed channel
-// that does not by itself mean success — is already decided there, and a second
+// that does not by itself mean success -- is already decided there, and a second
 // implementation would be a second set of answers for a consumer that must not
 // be able to tell its sources apart.
 //
@@ -325,7 +325,7 @@ func (g *Generator) Source(specs ...Spec) (*replay.Source, error) {
 //
 // Exposed for the half of the benchmark case that is about the decoder rather
 // than about the pipeline: measuring Decode needs records, not events. It is a
-// pure function of its arguments — no generator, no clock, no counter — so the
+// pure function of its arguments -- no generator, no clock, no counter -- so the
 // same spec and timestamp always produce the same bytes, and the result is
 // always exactly abi.RecordSize long.
 //

@@ -9,8 +9,8 @@ The committed output of ALLSEER's deterministic core. One file per case:
 
 Each line is one `decision.Decision` exactly as
 [`internal/audit`](../../../internal/audit/) writes it to a live audit log. The
-files are produced by the real path — replay source, validator, risk engine,
-policy engine, session state, JSONL sink — under the shipped
+files are produced by the real path -- replay source, validator, risk engine,
+policy engine, session state, JSONL sink -- under the shipped
 [`rules.default.yaml`](../../../configs/rules.default.yaml) and
 [`sensitivity.default.yaml`](../../../configs/sensitivity.default.yaml). Nothing
 about them is synthesized for the test.
@@ -26,10 +26,10 @@ somebody has to look at the diff and decide whether that was intended.
 
 Two of the twenty decisions are the reason the corpus exists:
 
-- **`gt-008`** — a write to `.github/workflows/`, denied by an envelope carve-out
+- **`gt-008`** -- a write to `.github/workflows/`, denied by an envelope carve-out
   inside a workspace-wide write grant. Denials win over grants, and this is the
   proof they still do.
-- **`ex-009`** — a connection to an address no DNS answer covers, six events
+- **`ex-009`** -- a connection to an address no DNS answer covers, six events
   after a successful read of `~/.aws/credentials`. The sequence detector
   contributes 30 points and the decision reaches `request_approval`. Without
   that factor the same event scores low enough to be a warning, which is the
@@ -57,14 +57,14 @@ separate, named action for that reason.
 ## Determinism
 
 Byte-reproducible across runs, machines, and dates. Every field is deterministic
-because the production semantics already made it so — decision IDs derive from
+because the production semantics already made it so -- decision IDs derive from
 event IDs, timestamps come from each event's own recorded wall clock, scores are
 pure functions of the observation and the session history, and `encoding/json`
 sorts map keys. Nothing is normalized away after the fact.
 
 The one exception is `latency`, which measures the host rather than the session.
 It is pinned to zero by injecting a stopped clock through `pipeline.Config.Now`
-— the seam the pipeline already documents as existing "so a replayed session
+-- the seam the pipeline already documents as existing "so a replayed session
 produces a reproducible record". Zero is the honest value for a replay: the
 number that field reports is the delay charged to a live agent's syscall, and a
 replay charges none.
@@ -80,9 +80,9 @@ test/testdata/golden/*.jsonl text eol=lf
 
 ### Why
 
-They are not source. They are committed *output* — the exact bytes
+They are not source. They are committed *output* -- the exact bytes
 [`internal/audit.JSONLSink`](../../../internal/audit/) writes to a live audit
-log — and `TestGolden` compares them byte for byte. The sink emits LF and
+log -- and `TestGolden` compares them byte for byte. The sink emits LF and
 nothing else, because the audit format is a wire contract with external tooling
 and "one JSON object per line" has to mean the same thing on every host that
 reads the log. A golden file with CRLF in it would no longer be a record of what

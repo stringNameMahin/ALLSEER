@@ -18,7 +18,7 @@ allowed so a hand-written fixture can explain itself.
 | `go-build.jsonl` | `s-gobuild` | 13 | Benign baseline. Clean capture, no loss. |
 | `npm-install.jsonl` | `s-npm` | 10 | Network and hostname correlation. Contains real ring buffer loss. |
 | `git-operation.jsonl` | `s-git` | 10 | Denial-over-grant precedence, and a failed syscall. |
-| `credential-egress.jsonl` | `s-exfil` | 10 | The credential-access → egress sequence, with every near-miss beside it. |
+| `credential-egress.jsonl` | `s-exfil` | 10 | The credential-access -> egress sequence, with every near-miss beside it. |
 
 ### `go-build.jsonl`
 
@@ -90,13 +90,13 @@ rule that stopped being applied changes an assertion rather than passing quietly
 
 - **`ex-003`** reads `~/.aws/credentials` and **succeeds**. Rated `critical`.
   The only qualifying antecedent in the stream.
-- **`ex-004`** reads `/etc/passwd` and succeeds. Rated `medium` — identity, and
-  read constantly through `getpwnam` — so it must **not** qualify. A detector
+- **`ex-004`** reads `/etc/passwd` and succeeds. Rated `medium` -- identity, and
+  read constantly through `getpwnam` -- so it must **not** qualify. A detector
   whose first half fired here would fire on most sessions that touch the network.
 - **`ex-005`** reads `~/.ssh/id_ed25519` and **fails** with `ENOENT`. Rated
   `critical`, and it must **not** qualify: an `ENOENT` disclosed nothing, so
   there is nothing that could subsequently leave. Note that `sensitive_path`
-  still charges the grade on this event — the resource was reached for — while
+  still charges the grade on this event -- the resource was reached for -- while
   the sequence detector rejects it. The two factors ask different questions and
   this is where the difference is visible.
 - **`ex-006`** is a DNS lookup. Egress is `net.connect` and `net.send`; a name

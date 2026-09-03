@@ -482,7 +482,7 @@ func TestLintBlocksNothingFailClosed(t *testing.T) {
 
 // TestLintAgreesWithPathMatcher is the drift guard the co-location argument
 // rests on. Every pattern the corpus marks invalid must be blocked in a denial,
-// and every pattern the corpus expects to work must be admitted — otherwise the
+// and every pattern the corpus expects to work must be admitted -- otherwise the
 // linter and the matcher disagree about which envelopes are usable, and the gap
 // between them is exactly where a denial that denies nothing lives.
 func TestLintAgreesWithPathMatcher(t *testing.T) {

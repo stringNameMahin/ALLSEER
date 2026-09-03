@@ -28,7 +28,7 @@ import (
 // Nothing in it was arranged to make the rating fire. A connection to the
 // instance metadata service is a departure because the envelope did not
 // anticipate it, and it is *indeterminate* rather than a mismatch because the
-// envelope names hosts and the connection carries only an address — which is
+// envelope names hosts and the connection carries only an address -- which is
 // the validator's own answer, and the case the shipped rule set already has a
 // rule pair for.
 func metadataEnvelope() *ece.Envelope {
@@ -188,7 +188,7 @@ func buildHostPipeline(t *testing.T, env *ece.Envelope, st State, rated bool) *E
 // indeterminate-low-risk, which warns. With them it scores 65 and matches
 // indeterminate-high-risk, which asks a human.
 //
-// Neither rule was written for this feature — they ship in
+// Neither rule was written for this feature -- they ship in
 // configs/rules.default.yaml with "unresolved is not the same as safe" as their
 // stated reason, and a connection to the endpoint that vends cloud credentials
 // is precisely when that should hold.
@@ -260,7 +260,7 @@ func TestHostEvidenceReachesTheDecision(t *testing.T) {
 
 // The same destination reached by name, through an envelope that grants a
 // different name. This is the mismatch case rather than the indeterminate one,
-// and it is here to pin that a name entry rates a named destination — the other
+// and it is here to pin that a name entry rates a named destination -- the other
 // half of the name/address boundary.
 func TestANamedDestinationIsRatedByName(t *testing.T) {
 	env := metadataEnvelope()
@@ -318,7 +318,7 @@ func TestAGrantedConnectionToARatedHostScoresZero(t *testing.T) {
 		t.Error("points were withheld without the record saying why")
 	}
 	if got := f.Evidence[risk.EvidenceSensitivity]; got != string(capability.SeverityInfo) {
-		t.Errorf("sensitivity = %q, want info — rated, and unremarkable", got)
+		t.Errorf("sensitivity = %q, want info -- rated, and unremarkable", got)
 	}
 }
 
@@ -330,8 +330,8 @@ func TestAGrantedConnectionToARatedHostScoresZero(t *testing.T) {
 // Every fixture is run through the rated composition and every outcome compared
 // against the same run without the sensitivity list, so a verdict, score, rule,
 // or action that moved would fail here. The shipped list rates the corpus's only
-// destinations — registry.npmjs.org as `info` and an unlisted address as
-// unknown — and both are worth zero points, so the arithmetic is unchanged and
+// destinations -- registry.npmjs.org as `info` and an unlisted address as
+// unknown -- and both are worth zero points, so the arithmetic is unchanged and
 // only the *record* gained a line.
 func TestHostRatingsLeaveTheCorpusWhereItWas(t *testing.T) {
 	for _, fixture := range []string{

@@ -20,7 +20,7 @@ import (
 //
 // A pipeline is bound to a single envelope, mode, and session state, and
 // processes that session's events serially on the goroutine that calls it. That
-// is not a simplification to be undone later — it is what turns
+// is not a simplification to be undone later -- it is what turns
 // session.MemoryState's single-writer *assumption* into an actual guarantee.
 // MemoryState takes no lock on the hot path because the architecture promises
 // one writer per session; this is the component that has to keep the promise,
@@ -33,7 +33,7 @@ import (
 //
 // # Order, and why
 //
-//	validate ──▶ [score] ──▶ decide ──▶ commit
+//	validate --> [score] --> decide --> commit
 //	  reads state          reads verdict   writes state
 //
 // The stages read; the pipeline writes; the write happens last. Three separate
@@ -48,7 +48,7 @@ import (
 //  2. **Novelty survives.** risk.History reports whether a target was seen
 //     before. If the event were recorded before scoring, every target would
 //     already be familiar by the time a scorer asked, and "first write to a new
-//     file" — the signal — would be unobservable. This is why commit sits after
+//     file" -- the signal -- would be unobservable. This is why commit sits after
 //     the whole stage list rather than immediately after validation, even
 //     though policy itself reads no state today.
 //
@@ -86,7 +86,7 @@ var (
 
 // Process handles a single event synchronously and returns the decision.
 //
-// The returned error is reserved for misuse — a nil event. A stage failure is
+// The returned error is reserved for misuse -- a nil event. A stage failure is
 // *handled*, not propagated: that is the entire purpose of ErrorHandler, and
 // returning an error here instead would hand the caller a dropped event and no
 // record, which is the outcome the error handling exists to prevent. A nil
@@ -106,7 +106,7 @@ func (p *EventPipeline) Process(ctx context.Context, e *event.Event) (*decision.
 // needs. Analysis tools need more: `allseerctl policy dry-run` reports the
 // violation list and whether the matched rule was terminal, neither of which a
 // Decision carries, and it reports them precisely because it does not emit a
-// Decision — publishing one with no risk stage would state a score of zero as
+// Decision -- publishing one with no risk stage would state a score of zero as
 // though it had been assessed.
 //
 // Returning the context rather than adding an observer callback keeps the data
@@ -167,7 +167,7 @@ func (p *EventPipeline) runStages(ctx context.Context, pc *ProcessingContext) (s
 // execute runs one stage with panic recovery.
 //
 // A panic in a stage becomes an ordinary stage error and travels the same route
-// as any other failure. The alternative — letting it unwind — would end
+// as any other failure. The alternative -- letting it unwind -- would end
 // governance for the session, and in a daemon governing several sessions it
 // would end governance for all of them, because one scorer mishandled one
 // malformed path.
@@ -207,7 +207,7 @@ func (p *EventPipeline) commit(pc *ProcessingContext) {
 
 	// The event is counted whatever happened upstream. It is a record of what
 	// the kernel observed, and a stage failure is a fault in our analysis
-	// rather than evidence the agent did less — the same reasoning that makes
+	// rather than evidence the agent did less -- the same reasoning that makes
 	// an unresolvable write still charge the write budget.
 	pc.State.RecordEvent(pc.Event)
 
@@ -357,7 +357,7 @@ const latencyWindow = 1024
 
 // statsCollector accumulates pipeline metrics.
 //
-// Single writer, atomic counters, no lock — the same arrangement
+// Single writer, atomic counters, no lock -- the same arrangement
 // session.MemoryState uses and for the same reason. The latency ring is a slice
 // of atomics rather than a mutex-guarded buffer so that Stats stays callable
 // from a health endpoint without putting a lock on the hot path.
@@ -534,7 +534,7 @@ func (b *builder) Build() (Pipeline, error) {
 	if b.cfg.Session.State == nil {
 		// Not defaulted to a throwaway state. A pipeline whose counters go
 		// nowhere evaluates every budget against zero forever, which reads as a
-		// session that never spends anything — indistinguishable in the output
+		// session that never spends anything -- indistinguishable in the output
 		// from a session that genuinely did not.
 		return nil, errors.New("pipeline: session state is required")
 	}
@@ -593,7 +593,7 @@ func (b *builder) Build() (Pipeline, error) {
 // The sequence cmd/allseerctl's dry-run wrote out by hand, which is the
 // reference this package was built to replace, and it is kept exactly as it was
 // so that reference stays checkable. A pipeline built here leaves
-// ProcessingContext.Risk nil, which policy reads as "no evidence" — every
+// ProcessingContext.Risk nil, which policy reads as "no evidence" -- every
 // risk-conditioned rule is inert under it, visibly rather than silently.
 //
 // Prefer NewWithRisk. This constructor is for the equivalence test that pins the

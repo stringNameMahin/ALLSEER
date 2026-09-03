@@ -24,8 +24,8 @@
  *
  * Bumped whenever anything in this file changes the bytes on the wire: a field
  * added, removed, reordered or retyped, or a bound changed. It is not a release
- * number and not a feature flag. It answers exactly one question — "was the
- * loaded object compiled against the layout this binary was generated from" —
+ * number and not a feature flag. It answers exactly one question -- "was the
+ * loaded object compiled against the layout this binary was generated from" --
  * and the answer has to become no the moment the two layouts differ.
  *
  * It earns its place because the cheap check cannot cover the dangerous case. A
@@ -71,7 +71,7 @@ enum allseer_event_type {
  *
  * ALLSEER_PRIV_OP_UNKNOWN = 0 is load-bearing rather than decorative. Every
  * probe in this design clears the payload union before filling it, so a probe
- * that failed to set `operation` writes a zero — and a zero that named a real
+ * that failed to set `operation` writes a zero -- and a zero that named a real
  * operation would decode as a confident setuid. The decoder refuses it, exactly
  * as it refuses ALLSEER_EVT_UNKNOWN.
  *
@@ -81,7 +81,7 @@ enum allseer_event_type {
  * publishes mechanisms; internal/telemetry/decode.go decides what they mean, for
  * the reason internal/telemetry/abi gives about staying free of judgments it
  * would have to regenerate. In particular, unshare(CLONE_NEWUSER) is not
- * escalation here — see the note on capability scope in struct
+ * escalation here -- see the note on capability scope in struct
  * allseer_priv_state.
  *
  * Four mechanisms are knowingly absent, and each is absent for a reason that
@@ -92,8 +92,8 @@ enum allseer_event_type {
  *                       both snapshots, so an fsuid moved as a side effect of a
  *                       setuid arrives in the record. Only the dedicated syscall
  *                       is unhooked.
- *   prctl               the hottest candidate on a Linux host — PR_SET_NAME
- *                       fires on every thread that names itself — so it needs an
+ *   prctl               the hottest candidate on a Linux host -- PR_SET_NAME
+ *                       fires on every thread that names itself -- so it needs an
  *                       argument filter to be affordable. Its privilege-relevant
  *                       effects (ambient capabilities, bounding-set drops,
  *                       securebits, seccomp mode) are all already visible as
@@ -137,7 +137,7 @@ enum allseer_priv_op {
  * unwritten field holds. gid 0 is the same. An all-zero capability set is a task
  * holding no capabilities and is also a read that failed. Without an explicit
  * statement of what was observed, the single most important transition this
- * record can carry — a process arriving at uid 0 — is indistinguishable from a
+ * record can carry -- a process arriving at uid 0 -- is indistinguishable from a
  * record that carried no identity at all.
  *
  * The device is not new here. allseer_maps.h reaches for the same one at the
@@ -153,7 +153,7 @@ enum allseer_priv_op {
  * fields, all five capability sets and securebits together: they come from one
  * read of task->cred, which either succeeded or did not, and splitting them
  * would advertise a distinction the probe cannot make. It also groups them
- * correctly on causation — the kernel recalculates capabilities across a uid
+ * correctly on causation -- the kernel recalculates capabilities across a uid
  * transition, so a setuid away from root drops capabilities as a side effect,
  * and identity and capability are one event as well as one read. The user
  * namespace, the supplementary group count and the seccomp mode each get their
@@ -256,8 +256,8 @@ struct allseer_exec_payload {
  * `struct { u64 val; }`, and the two are byte-identical on a little-endian
  * target: cap[0] holds capabilities 0-31 in bytes 0-3 and cap[1] holds 32-63 in
  * bytes 4-7, which is exactly where bits 0-31 and 32-63 of the u64 sit. Both
- * targets this ABI is generated for are little-endian — internal/telemetry/
- * abigen states the model as LP64 little-endian — so no field here is contingent
+ * targets this ABI is generated for are little-endian -- internal/telemetry/
+ * abigen states the model as LP64 little-endian -- so no field here is contingent
  * on a kernel version. What does depend on the kernel is the *source expression*
  * a probe writes, because vmlinux.h is generated from the build host's BTF; that
  * is why the build host minimum is 6.3 and the runtime floor is unchanged at the
@@ -273,12 +273,12 @@ struct allseer_exec_payload {
  *
  * Every one of them is an init_user_ns value. A kuid_t is namespace-independent
  * by construction and its `.val` is the init-namespace uid, which is also
- * exactly what bpf_get_current_uid_gid() returns — so uid_real here and
+ * exactly what bpf_get_current_uid_gid() returns -- so uid_real here and
  * struct allseer_proc.uid are the same number and a record cannot disagree with
  * itself about who acted. The consequence is worth stating because it surprises:
  * a task inside a user namespace reports its *host* uid. A container's "root",
- * uid 0 as the container sees it, appears here as whatever it is on the host —
- * 100000, say — and that is the correct answer for a host-level governance
+ * uid 0 as the container sees it, appears here as whatever it is on the host --
+ * 100000, say -- and that is the correct answer for a host-level governance
  * system rather than a bug in the field.
  *
  * # ngroups: a count, and only a count
@@ -289,13 +289,13 @@ struct allseer_exec_payload {
  * credential syscall for a field with no consumer, and the eBPF stack is 512
  * bytes against a worst case of 256 KiB.
  *
- * So the count answers what a count can. setgroups(0, NULL) — the classic step
+ * So the count answers what a count can. setgroups(0, NULL) -- the classic step
  * that drops supplementary groups before dropping privilege, and whose *absence*
- * before a setuid is a textbook privilege-retention bug — is reported exactly,
+ * before a setuid is a textbook privilege-retention bug -- is reported exactly,
  * as ngroups N to 0. A change that keeps the size, {100,200} to {100,300}, is
  * not visible here. It is not silent, though: `operation` still says the task
  * changed its supplementary groups and `ret` still says the kernel allowed it,
- * which is the granularity the rest of the system works at anyway —
+ * which is the granularity the rest of the system works at anyway --
  * internal/telemetry/resolve is explicit that for this domain "exercising the
  * capability is the whole observation", because a privilege event names no
  * resource.
@@ -312,7 +312,7 @@ struct allseer_exec_payload {
  * namespace is not CAP_SYS_ADMIN over the host, and unshare(CLONE_NEWUSER)
  * hands the caller a full set in the namespace it just created. A consumer that
  * compared `before` against `after` across such a call would read every one of
- * them as total capability escalation — and configs/rules.default.yaml blocks
+ * them as total capability escalation -- and configs/rules.default.yaml blocks
  * priv.escalate terminally, so the result would be a hard block on every
  * containerized build step on the host. The sets are comparable only when
  * before.userns_inum equals after.userns_inum, and that condition is the reason
@@ -371,7 +371,7 @@ struct allseer_priv_state {
  * happened, and `after` differs from `before`. A negative return is one that was
  * attempted and refused: the kernel committed nothing, the two snapshots are
  * equal, and the errno says why. Both are emitted, because a failed action is a
- * governance signal in its own right — an agent that repeatedly fails to reach
+ * governance signal in its own right -- an agent that repeatedly fails to reach
  * uid 0 has said something about itself, on the same terms as the credential
  * -egress fixture where a read of a key that failed with ENOENT must not be
  * treated as a disclosure.
@@ -379,7 +379,7 @@ struct allseer_priv_state {
  * `ns_flags` is the CLONE_* argument as the caller supplied it: unshare's flags,
  * setns's nstype. One field because both name the same vocabulary, and the
  * constants are Linux's rather than this file's, so they are named here and not
- * redefined — the same way struct allseer_net_payload names AF_INET and
+ * redefined -- the same way struct allseer_net_payload names AF_INET and
  * IPPROTO_TCP without declaring them. It is zero, with its bit clear, for every
  * operation that is not a namespace one.
  *
@@ -446,8 +446,8 @@ struct allseer_event {
  * `allseer_abi_version` as a read-only global; telemetry.checkABIVersion reads it
  * out of the object's .rodata through the ELF symbol table and refuses to load on
  * a disagreement. The field in each record remains the backstop rather than the
- * mechanism — it reports the mismatch one event at a time, after the probes are
- * already running, which is later than the loader could have known — and
+ * mechanism -- it reports the mismatch one event at a time, after the probes are
+ * already running, which is later than the loader could have known -- and
  * internal/telemetry/decode.go still checks it before it believes any other
  * field. The two are complements: the loader's check is per-object and free, the
  * decoder's is per-record and is the only one that can see a record at all. */

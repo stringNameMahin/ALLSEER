@@ -831,8 +831,8 @@ func TestPipelineReproducesTheHandWrittenOrchestration(t *testing.T) {
 			}
 
 			// The one intended divergence, asserted rather than glossed over:
-			// the hand-written loop produced no decision.Decision at all — it
-			// built the CLI's own result shape — so it never called
+			// the hand-written loop produced no decision.Decision at all -- it
+			// built the CLI's own result shape -- so it never called
 			// RecordDecision and its violation and decision counters stayed at
 			// zero. The pipeline emits the record the daemon needs and counts
 			// it. Anything beyond this in the diff would be a real regression,
@@ -1048,8 +1048,8 @@ func TestStatsBreakDownByStage(t *testing.T) {
 	}
 }
 
-// What to do about a governance fault is deployment-specific — an unattended CI
-// run has no human to ask — which is why ErrorHandler is an interface and the
+// What to do about a governance fault is deployment-specific -- an unattended CI
+// run has no human to ask -- which is why ErrorHandler is an interface and the
 // action is settable rather than fixed in the pipeline.
 func TestCustomErrorHandler(t *testing.T) {
 	env := envelope([]capability.Grant{pathGrant(capability.KindFileWrite, 0, "/ws/**")}, nil, ece.Constraints{})

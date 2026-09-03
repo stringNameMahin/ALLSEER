@@ -6,8 +6,8 @@ package telemetry
 // The question is "how big does this object think struct allseer_event is",
 // asked before the object is loaded. internal/telemetry/abi describes the
 // loader reading the object "through BTF before it attaches anything", and this
-// is that read. Everything else BTF carries — every other type, the func and
-// line info, the CO-RE relocations — is skipped over, because a reader that
+// is that read. Everything else BTF carries -- every other type, the func and
+// line info, the CO-RE relocations -- is skipped over, because a reader that
 // interprets more than it needs is a reader with more ways to be wrong about an
 // object it is supposed to be checking.
 //
@@ -31,7 +31,7 @@ var ErrMalformedBTF = errors.New("telemetry: object .BTF section is malformed")
 
 // btfMagic identifies the section and, by which way round it reads, its byte
 // order. Objects are compiled on the host that loads them, so the swapped case
-// is not expected — it is handled because detecting it costs one comparison and
+// is not expected -- it is handled because detecting it costs one comparison and
 // misreading every u32 in the section costs a wrong answer to a safety check.
 const btfMagic = 0xEB9F
 
@@ -149,8 +149,8 @@ func recordSizeFromBTF(raw []byte) (int, error) {
 
 		if kind == btfKindStruct && btfString(strs, nameOff) == btfRecordStruct {
 			// size_or_type is the size for a struct. The record is a
-			// fixed-size struct by construction — the header forbids pointers
-			// and requires fixed-size arrays — so there is no flexible tail to
+			// fixed-size struct by construction -- the header forbids pointers
+			// and requires fixed-size arrays -- so there is no flexible tail to
 			// account for.
 			return int(sizeOrType), nil
 		}

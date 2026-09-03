@@ -10,7 +10,7 @@ import (
 
 // requireCgroupV2 is checked against the host rather than mocked: /proc/mounts
 // is not injectable and the value of the check is that it agrees with reality.
-// Both outcomes are legitimate, so both are accepted — what is asserted is that
+// Both outcomes are legitimate, so both are accepted -- what is asserted is that
 // it does not return a path and an error, or neither.
 //
 // That is also why this test is `linux`-tagged rather than skipped elsewhere. A

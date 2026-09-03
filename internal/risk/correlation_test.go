@@ -49,7 +49,7 @@ func uncorrelatedEvent(kind capability.Kind, addrPort string) *event.Event {
 	return e
 }
 
-// bareObservationEvent carries a target and no attributes at all — an
+// bareObservationEvent carries a target and no attributes at all -- an
 // observation this build's resolver never emits for the network domain, and
 // therefore the shape whose correlation cannot be established.
 func bareObservationEvent(kind capability.Kind, target string) *event.Event {
@@ -92,7 +92,7 @@ func TestACorrelatedDestinationProducesNoFactor(t *testing.T) {
 	}
 }
 
-// A hostname-only destination — no address attribute at all — is still
+// A hostname-only destination -- no address attribute at all -- is still
 // correlated: the target names the host, which is the whole question.
 func TestAHostnameOnlyDestinationProducesNoFactor(t *testing.T) {
 	e := observedEvent(capability.KindNetConnect, "registry.npmjs.org:443")
@@ -176,7 +176,7 @@ func TestMissingCorrelationEvidenceIsIndeterminate(t *testing.T) {
 			}(),
 		},
 		{
-			// No destination to speak about at all — the shape the validator
+			// No destination to speak about at all -- the shape the validator
 			// reports as indeterminate.
 			name:  "no resolved destination",
 			event: bareObservationEvent(capability.KindNetConnect, ""),
@@ -292,7 +292,7 @@ func TestADNSQueryIsNeverAnUncorrelatedDestination(t *testing.T) {
 func TestTheQualifyingSetMatchesEgressToday(t *testing.T) {
 	for _, k := range capability.AllKinds() {
 		if namesRemoteDestination(k) != IsEgress(k) {
-			t.Errorf("%s: namesRemoteDestination = %v but IsEgress = %v — if that divergence is "+
+			t.Errorf("%s: namesRemoteDestination = %v but IsEgress = %v -- if that divergence is "+
 				"intended, update this test and say why in both predicates",
 				k, namesRemoteDestination(k), IsEgress(k))
 		}
@@ -431,7 +431,7 @@ func TestSensitivityAndCorrelationAreIndependent(t *testing.T) {
 	}
 
 	// An unlisted address gets the correlation factor and an explicit unknown
-	// from the list — the two answering separately about one destination.
+	// from the list -- the two answering separately about one destination.
 	unlisted := scoreWith(t, e, netDeparture(uncorrelatedEvent(capability.KindNetConnect, "203.0.113.10:8443")))
 	if got := factor(unlisted, FactorSensitiveHost).Evidence[EvidenceSensitivity]; got != SensitivityUnknownLabel {
 		t.Errorf("sensitive_host reported %q for an unlisted address, want unknown", got)
@@ -540,7 +540,7 @@ func TestCorrelationScorerMetadata(t *testing.T) {
 	}
 }
 
-// The scorer needs no oracle, so it is in every engine — including the one a
+// The scorer needs no oracle, so it is in every engine -- including the one a
 // caller gets by default.
 func TestEveryEngineCarriesTheCorrelationScorer(t *testing.T) {
 	has := func(e *BaselineEngine) bool {

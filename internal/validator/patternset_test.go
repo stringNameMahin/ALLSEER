@@ -84,7 +84,7 @@ func patternAt(patterns []string, i int) string {
 }
 
 // The index is declaration order, which is what lets a caller encode a
-// precedence — internal/risk orders by grade so the first match is the highest
+// precedence -- internal/risk orders by grade so the first match is the highest
 // grade, and never compares.
 func TestPatternSetReturnsTheFirstMatch(t *testing.T) {
 	set, err := CompilePatterns([]string{"/ws/secrets/**", "/ws/**"})

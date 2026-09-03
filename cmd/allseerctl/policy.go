@@ -26,8 +26,8 @@ import (
 // `policy dry-run` answers the question an operator has to answer before
 // trusting a rule change: what would this policy have done?
 //
-// It is the first command that runs the governance pipeline end to end —
-// replay, validation, policy — and it does so by calling the same code the
+// It is the first command that runs the governance pipeline end to end --
+// replay, validation, policy -- and it does so by calling the same code the
 // daemon will. Nothing here evaluates anything itself. A second evaluator
 // living in the CLI would answer the question with a different policy than the
 // one that runs in production, which is worse than not answering it.
@@ -220,7 +220,7 @@ func runPolicyDryRun(args []string) int {
 	// assigned into an interface parameter is a non-nil interface holding a nil
 	// pointer, so evaluateStream's "was a list supplied" check would answer yes
 	// and the run would report resources as rated against a list nobody passed.
-	// The oracle survives a nil receiver, so nothing would crash — the report
+	// The oracle survives a nil receiver, so nothing would crash -- the report
 	// would just quietly stop distinguishing "unrated" from "nobody looked",
 	// which is the one distinction this whole feature exists to keep.
 	var oracle risk.SensitivityOracle
@@ -348,7 +348,7 @@ func evaluateStream(ctx context.Context, events <-chan event.Event, env *ece.Env
 // encodes only the mode definitions the project already committed to. Monitor
 // and warn never intervene. Interactive suspends and asks, so both block and
 // request_approval reach enforcement. Enforce blocks without prompting, and
-// request_approval has no one to ask — which is why a CI rule set is expected
+// request_approval has no one to ask -- which is why a CI rule set is expected
 // to collapse it to block rather than relying on this function to do it
 // silently.
 func wouldEnforce(mode policy.Mode, action ece.Action) bool {
@@ -540,7 +540,7 @@ func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet,
 			n, plural(n, "event is", "events are"), plural(n, "it", "them")))
 	}
 
-	// Grant budgets and session constraints *are* evaluated now — the run
+	// Grant budgets and session constraints *are* evaluated now -- the run
 	// accumulates session state as the daemon will. Duration is the one budget
 	// that can still go unchecked, and only for a specific reason: a recording
 	// is measured by its own wall clocks, so a stream that carries none cannot
@@ -584,11 +584,11 @@ func printDryRunSummary(w io.Writer, results []dryRunResult, rs *policy.RuleSet,
 		// same as unremarkable.
 		if sensPath == "" {
 			fmt.Fprintf(&b, "  - NO sensitivity list was supplied, so every resource in this run is\n"+
-				"    **unrated** — which is not the same as unremarkable. Nothing here can tell a\n"+
+				"    **unrated** -- which is not the same as unremarkable. Nothing here can tell a\n"+
 				"    credential file from a toolchain header. Pass -sensitivity %s to rate them.\n",
 				"configs/sensitivity.default.yaml")
 		} else {
-			fmt.Fprintf(&b, "  - resources were rated against %s — files against its\n"+
+			fmt.Fprintf(&b, "  - resources were rated against %s -- files against its\n"+
 				"    `paths` section, network destinations against its `hosts` section. Anything\n"+
 				"    neither section covers is reported as unrated rather than as unremarkable.\n", sensPath)
 		}
@@ -624,8 +624,3 @@ func riskConditionedRules(rs *policy.RuleSet) int {
 	return n
 }
 
-// Done: envelopeHasBudgets is gone. It existed to raise a caveat that grant
-// budgets and session constraints went unevaluated, which stopped being true
-// when internal/session landed and evaluateStream started accumulating state.
-// The narrower caveat that survives is duration, which a recording without wall
-// clocks genuinely cannot establish.

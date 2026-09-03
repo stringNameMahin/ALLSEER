@@ -25,11 +25,11 @@ var (
 	// ErrLayoutDrift: the compiled object and this binary disagree about the
 	// size of struct allseer_event.
 	//
-	// This is the check Decoder.EventSize is documented to feed — "used to
+	// This is the check Decoder.EventSize is documented to feed -- "used to
 	// catch layout drift between the loaded object and this binary at startup
-	// rather than at the first event" — and internal/telemetry/abi names the
+	// rather than at the first event" -- and internal/telemetry/abi names the
 	// loader as one of its two enforcement points, because it is "the only
-	// point at which a mismatch costs nothing — no probes are running and no
+	// point at which a mismatch costs nothing -- no probes are running and no
 	// events have been believed".
 	ErrLayoutDrift = errors.New("telemetry: loaded object's event layout differs from this binary's")
 
@@ -37,7 +37,7 @@ var (
 	//
 	// Refused rather than skipped. An object whose BTF does not describe
 	// struct allseer_event is either not this program or was built without
-	// BTF, and both mean the layout cannot be checked — which is the same
+	// BTF, and both mean the layout cannot be checked -- which is the same
 	// position as having no check, arrived at silently.
 	ErrNoRecordType = errors.New("telemetry: object BTF declares no struct allseer_event")
 
@@ -47,8 +47,8 @@ var (
 	// The companion to ErrLayoutDrift and not a duplicate of it. A size
 	// comparison catches a layout that changed size; it passes unchanged for a
 	// layout that "stayed the same size and changed meaning", as
-	// bpf/include/allseer_event.h puts it — a field retyped, two fields
-	// swapped, a bound moved from one array to another — and those records
+	// bpf/include/allseer_event.h puts it -- a field retyped, two fields
+	// swapped, a bound moved from one array to another -- and those records
 	// "decode without complaint into confident nonsense". The version is what
 	// the header raises against exactly that case, and this is the version read
 	// at the point where a mismatch still costs nothing.
@@ -150,8 +150,8 @@ func checkRecordLayout(objectPath string, want int) error {
 // later than the loader could have known". This is the earlier point, and
 // bpf/allseer.bpf.c declares `allseer_abi_version` so that it exists.
 //
-// Fails closed on all three of the ways this can go wrong — a global that is
-// absent, one that cannot be read, and one that disagrees — because all three
+// Fails closed on all three of the ways this can go wrong -- a global that is
+// absent, one that cannot be read, and one that disagrees -- because all three
 // leave the same question unanswered.
 func checkABIVersion(objectPath string, want uint32) error {
 	got, err := readOnlyU32FromObject(objectPath, objectABIVersionGlobal)

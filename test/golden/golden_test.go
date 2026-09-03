@@ -16,9 +16,9 @@
 //
 // # It runs the production path, not a copy of it
 //
-//	replay.Source ──▶ EventPipeline.Run ──▶ validate ──▶ score ──▶ decide
-//	                                             │
-//	                                             └──▶ emit ──▶ audit.JSONLSink ──▶ file
+//	replay.Source --> EventPipeline.Run --> validate --> score --> decide
+//	                                             |
+//	                                             +--> emit --> audit.JSONLSink --> file
 //
 // Every component is the one a daemon would run: the shipped rule set from
 // configs/rules.default.yaml, the shipped sensitivity list from
@@ -44,8 +44,8 @@
 //     keys.
 //   - Decision.Latency is the one field that measures the host rather than the
 //     session. It is pinned by injecting a stopped clock through
-//     pipeline.Config.Now — the seam the pipeline already documents as being
-//     there "so a replayed session produces a reproducible record" — which
+//     pipeline.Config.Now -- the seam the pipeline already documents as being
+//     there "so a replayed session produces a reproducible record" -- which
 //     makes every latency exactly zero. That is an honest zero for a replay:
 //     the number the field exists to report is the delay charged to a live
 //     agent's syscall, and a replay charges none.
@@ -210,7 +210,7 @@ func run(t *testing.T, tc goldenCase) []byte {
 		t.Fatalf("%s: closing the sink: %v", tc.Name, err)
 	}
 
-	// A sink error is counted and never returned, by design — an audit failure
+	// A sink error is counted and never returned, by design -- an audit failure
 	// must not stop governance. That makes it invisible unless it is checked,
 	// and a golden generated over a sink that dropped records would be a
 	// silently short file.
@@ -281,7 +281,7 @@ func TestGolden(t *testing.T) {
 // Distinct from TestGolden, which would also catch this: that one compares
 // against a file generated at some earlier moment, so it proves reproducibility
 // across time but not that two runs agree *now*. Map iteration order is the
-// failure this separates out — it varies per run, not per build, and a
+// failure this separates out -- it varies per run, not per build, and a
 // serializer that leaked it would pass a freshly regenerated golden and fail
 // the next day.
 func TestGoldenIsDeterministic(t *testing.T) {
@@ -302,8 +302,8 @@ func TestGoldenIsDeterministic(t *testing.T) {
 // from what they contain.
 //
 // A byte comparison cannot tell a formatting change from a semantic one, and
-// the audit format's promise to external tooling — one decision per line, no
-// embedded newlines, a trailing newline on the last record — is a promise about
+// the audit format's promise to external tooling -- one decision per line, no
+// embedded newlines, a trailing newline on the last record -- is a promise about
 // the shape rather than the values.
 func TestGoldenStreamIsWellFormed(t *testing.T) {
 	for _, tc := range cases {
@@ -357,7 +357,7 @@ func TestGoldenStreamIsWellFormed(t *testing.T) {
 //
 // Deliberately not a second copy of the risk and policy unit tests: no weight,
 // threshold, or matcher semantics is restated here. What is pinned is the
-// system's conclusion per event — verdict, score, level, rule, action — which
+// system's conclusion per event -- verdict, score, level, rule, action -- which
 // is the thing no single-component test can see.
 func TestGoldenDecisionsAreTheExpectedFindings(t *testing.T) {
 	for _, tc := range cases {
@@ -376,7 +376,7 @@ func TestGoldenDecisionsAreTheExpectedFindings(t *testing.T) {
 				d := got[i]
 				// Ordering first: everything below is meaningless if the
 				// records are not the ones being compared. Per-session order is
-				// a correctness guarantee, not a presentation detail — risk
+				// a correctness guarantee, not a presentation detail -- risk
 				// scoring reads history, so a reordered stream silently changes
 				// verdicts.
 				if d.EventID != w.EventID {
@@ -444,13 +444,13 @@ func TestGoldenDecisionsAreTheExpectedFindings(t *testing.T) {
 // api/schema/decision.v1alpha1.schema.json requires risk.level to be one of five
 // named levels and risk.factors to be an array. Decision.Risk is a value, so a
 // decision nothing scored publishes "" and null, and the schema admits neither
-// — an open wire-format question recorded in docs/milestones.md and STATUS.md
+// -- an open wire-format question recorded in docs/milestones.md and STATUS.md
 // and deliberately not settled here.
 //
 // Both golden streams run the scored pipeline over recordings that reach policy
 // on every event, so neither contains that shape. This test says so rather than
 // leaving it to be assumed, and it is the thing that will fail if a future
-// change routes a golden event through a stage failure — at which point the
+// change routes a golden event through a stage failure -- at which point the
 // wire-format question has to be answered before the golden can be regenerated.
 func TestNoGoldenDecisionIsUnscored(t *testing.T) {
 	for _, tc := range cases {
@@ -486,7 +486,7 @@ func TestGoldenEnvelopesAreAdmissible(t *testing.T) {
 			issues := validator.LintEnvelope(env)
 
 			// Only a blocking issue fails. The linter reports judgment calls
-			// too — a broad pattern, an unanchored glob — and a fixture written
+			// too -- a broad pattern, an unanchored glob -- and a fixture written
 			// the way a real envelope would be written is expected to draw some
 			// of those. They are logged so a reader can see what the shipped
 			// linter thinks of a realistic envelope.

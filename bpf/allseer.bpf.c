@@ -8,18 +8,18 @@
  *
  * That is the current model and it has a decided end date. A mandatory
  * architectural milestone requires this object to be split into independently
- * loadable telemetry modules after M5 — see the TODO(architecture) entry in
+ * loadable telemetry modules after M5 -- see the TODO(architecture) entry in
  * internal/telemetry/telemetry.go for the requirement and the exception that
  * brings it forward. The sentence above is what that milestone overturns, so it
  * should be read as a statement about today rather than about the design.
  *
  * At this point the file declares six maps and twenty-eight programs:
  * sched_process_exec and sched_process_exit, which each produce a record on
- * their own; two syscall pairs — sys_enter_openat / sys_exit_openat and
- * sys_enter_connect / sys_exit_connect — which each produce one record between
+ * their own; two syscall pairs -- sys_enter_openat / sys_exit_openat and
+ * sys_enter_connect / sys_exit_connect -- which each produce one record between
  * them; and eleven more syscall pairs for the credential syscalls, which
  * between them produce every ALLSEER_EVT_PRIV_CHANGE. The maps are what the
- * probes emit into, are filtered by, and — for the thirteen syscall pairs —
+ * probes emit into, are filtered by, and -- for the thirteen syscall pairs --
  * hold half-built events in between.
  *
  * allseer_event.h is included for a reason that outlives the absence of probes:
@@ -47,7 +47,7 @@
 /* bpf_ntohs, for the one field on the wire that is not in the machine's own byte
  * order. A sockaddr's port is big-endian by definition and struct
  * allseer_net_payload declares `dport` as __u16 rather than __be16, so the probe
- * is the side that converts — see connect_enter, and decode.go on what the
+ * is the side that converts -- see connect_enter, and decode.go on what the
  * alternative reading costs. */
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
@@ -62,7 +62,7 @@
  * which a per-CPU perf ring does not, and pkg/event.Event.Sequence is defined
  * as giving "a total order when timestamps collide". It also allows reserving
  * space and writing the record in place, which this record shape requires
- * rather than merely prefers — struct allseer_event is 856 bytes against a
+ * rather than merely prefers -- struct allseer_event is 856 bytes against a
  * 512-byte eBPF stack, so a probe cannot build one on the stack and copy it
  * out. internal/telemetry/abi asserts that size relationship precisely so this
  * conclusion is revisited if the record ever shrinks past it.
@@ -85,7 +85,7 @@ struct {
  *
  * Both ends now exist. telemetry.BPFLoader adds a cgroup with UpdateMap and
  * removes one with DeleteMap, and removal is a delete rather than a zeroed
- * value because presence is the entire signal — the lookup below is tested for
+ * value because presence is the entire signal -- the lookup below is tested for
  * NULL and never dereferenced, so there is nothing a value could say. Those two
  * calls are the whole of how a session becomes governed and stops being
  * governed.
@@ -95,13 +95,13 @@ struct {
  * declared governed, so every event misses the filter and nothing is reported.
  * That is the direction to fail in. Reporting on a cgroup nobody asked about
  * would be surveillance the system has no mandate for, and the opposite default
- * — report everything until told otherwise — is the one that cannot be undone
+ * -- report everything until told otherwise -- is the one that cannot be undone
  * after the fact. Silence here is a filter with no members, not a probe that is
  * failing to fire, and telemetry.Loader.ReadCounter is what distinguishes a
  * host that observed nothing from one that lost what it observed.
  *
  * BPF_MAP_TYPE_HASH and not BPF_MAP_TYPE_LRU_HASH. An LRU map evicts under
- * pressure, and an evicted entry here does not degrade anything visibly — it
+ * pressure, and an evicted entry here does not degrade anything visibly -- it
  * silently stops a governed session from being observed, which reads
  * downstream as an agent that did nothing. Membership is decided by user space
  * and must only change when user space says so, so a full map has to fail the
@@ -140,7 +140,7 @@ struct {
  * maps above: it is kernel-internal state, and telemetry.MapOpenatScratch exists
  * so the runtime tests can look at it rather than because the loader needs it.
  *
- * allseer_maps.h holds the whole contract — why the key is a thread and not a
+ * allseer_maps.h holds the whole contract -- why the key is a thread and not a
  * process, why a thread cannot have two of these at once, why PID reuse needs a
  * start-time stamp on top of the key, why this one is an LRU where
  * tracked_cgroups is deliberately not, and every failure path with its answer.
@@ -177,9 +177,9 @@ struct {
  * and a check on it; two maps make the distinction structural, and a program
  * that looked in the wrong one would not compile.
  *
- * Everything else is identical to openat_scratch by construction — the same
+ * Everything else is identical to openat_scratch by construction -- the same
  * allseer_syscall_key_t, the same LRU, the same capacity argument, the same
- * identity stamp — and allseer_maps.h holds the reasoning for all of it. */
+ * identity stamp -- and allseer_maps.h holds the reasoning for all of it. */
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, ALLSEER_MAX_CONNECT_SCRATCH);
@@ -192,7 +192,7 @@ struct {
  *
  * A third map under the protocol allseer_maps.h settled for openat, and the
  * first one to be shared by more than one syscall. That header carries the
- * argument for why sharing is right here and what it costs — the eleven
+ * argument for why sharing is right here and what it costs -- the eleven
  * operations have one value shape and none of them is hot, so neither reason for
  * splitting applies, and the syscall tag the shared case needs is the
  * `operation` field the value already carries for the record.
@@ -202,7 +202,7 @@ struct {
  * most one syscall at a time", which is a property of the kernel rather than of
  * openat, so it holds for these eleven unchanged. A privilege syscall cannot
  * overlap another from the same thread, and every thread of a process can be
- * inside setuid at once — which is exactly the case a tgid key would collapse
+ * inside setuid at once -- which is exactly the case a tgid key would collapse
  * and this one keeps apart.
  *
  * BPF_MAP_TYPE_LRU_HASH for the third time, for the reason the header gives at
@@ -218,8 +218,8 @@ struct {
 
 /* Required before any program in this object can load. Declared with the maps
  * because it belongs to the object rather than to any one probe, and because
- * the helpers the probes will need — bpf_probe_read_kernel and the task
- * accessors among them — are GPL-only and refuse to verify without it. */
+ * the helpers the probes will need -- bpf_probe_read_kernel and the task
+ * accessors among them -- are GPL-only and refuse to verify without it. */
 char LICENSE[] SEC("license") = "GPL";
 
 /* The record ABI version this object was compiled against.
@@ -234,7 +234,7 @@ char LICENSE[] SEC("license") = "GPL";
  *
  * `const` and not `const volatile`. Both land in .rodata and both are frozen by
  * libbpf after load, but `const volatile` is the libbpf idiom for a global the
- * *loader* fills in before load — a tunable — and this is the opposite of a
+ * *loader* fills in before load -- a tunable -- and this is the opposite of a
  * tunable. It is a fact about the compiled object, and a loader that could
  * write it could only ever write over the mismatch it exists to detect.
  *
@@ -260,12 +260,12 @@ const __u32 allseer_abi_version = ALLSEER_ABI_VERSION;
  * Called from the one place this object loses a record it meant to emit: a
  * bpf_ringbuf_reserve that returned NULL. It is deliberately not called
  * anywhere else, and in particular not where the cgroup filter rejects an
- * event — allseer_maps.h says why at the map, and the short form is that a
+ * event -- allseer_maps.h says why at the map, and the short form is that a
  * filtered event is not a lost one.
  *
  * __sync_fetch_and_add rather than a plain `*slot += 1`. The slot belongs to
  * this CPU, so there is no other CPU to race, but a tracepoint program can be
- * interrupted on its own CPU — by an NMI-driven perf program among others — and
+ * interrupted on its own CPU -- by an NMI-driven perf program among others -- and
  * a read-modify-write split across that interrupt loses a count silently. The
  * atomic is uncontended by construction and it runs only on the path where a
  * record has already been lost, so its cost is charged to the case that is
@@ -327,7 +327,7 @@ static __always_inline void count_ringbuf_drop(void)
  * argv is not carried, because this tracepoint does not carry it. The exec
  * payload has room for ALLSEER_ARGV_MAX arguments and argc is written 0, which
  * internal/telemetry/decode.go already reads as "no arguments in this record"
- * rather than "a process invoked with none" only by accident — the two are
+ * rather than "a process invoked with none" only by accident -- the two are
  * indistinguishable downstream, and that is the honest cost of this hook. The
  * arguments exist at this point only in the new process's user stack, reachable
  * through task->mm->arg_start, or in struct linux_binprm, reachable only from a
@@ -364,7 +364,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * returns non-NULL means this cgroup is governed". So the returned pointer
 	 * is tested against NULL and never dereferenced. Reading the byte it
 	 * points at and treating a zero as untracked would invent a second, unstated
-	 * meaning for a value user space has never been told to set — and would
+	 * meaning for a value user space has never been told to set -- and would
 	 * turn a memset in a future loader into a silent, total loss of telemetry.
 	 * The header says the byte is one byte only "so that adding a field is a
 	 * visible ABI change on both sides instead of a silent reinterpretation of
@@ -380,8 +380,8 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * gives: "a filter keyed by PID would have to be updated on every fork the
 	 * agent performs, from user space, racing the child's first syscall". The
 	 * cost of that choice is that a governed process outside a tracked cgroup
-	 * is invisible from here — Collector.AttachSession's "PID ancestry
-	 * otherwise" branch cannot see what the kernel already dropped — so placing
+	 * is invisible from here -- Collector.AttachSession's "PID ancestry
+	 * otherwise" branch cannot see what the kernel already dropped -- so placing
 	 * the session in a cgroup is a requirement on the loader and not an
 	 * optimisation. pkg/capability records the other end of the same fact:
 	 * priv.namespace is "how a process escapes the attribution the collector
@@ -392,7 +392,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * Cgroup ID 0 gets no special case, because the repository gives it no
 	 * special meaning: it is looked up like any other key and misses unless
 	 * user space put it there. That matters most in the environment where
-	 * bpf_get_current_cgroup_id() cannot answer — a kernel without cgroup v2 —
+	 * bpf_get_current_cgroup_id() cannot answer -- a kernel without cgroup v2 --
 	 * where every exec misses and this object observes nothing. Special-casing
 	 * 0 to pass the filter would convert that into reporting *everything*,
 	 * which is the wrong direction to fail in and would hide the misconfigured
@@ -409,8 +409,8 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * pkg/event.Event.Dropped exists to report and telemetry.Config
 	 * .FailClosedOnDrop exists to act on.
 	 *
-	 * The record cannot be saved from in here — there is nowhere to put it and
-	 * no waiting on the exec path — but the fact of it can be, and that is the
+	 * The record cannot be saved from in here -- there is nowhere to put it and
+	 * no waiting on the exec path -- but the fact of it can be, and that is the
 	 * whole difference between a hole in the stream and a hole nobody knows
 	 * about. Counting is all this branch can do and all it does. */
 	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
@@ -419,7 +419,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 		return 0;
 	}
 
-	/* Reserved space is not zeroed — it is whatever the ring held before —
+	/* Reserved space is not zeroed -- it is whatever the ring held before --
 	 * so every byte of the record is written, including the two named pads
 	 * and the whole payload union. The union is cleared once rather than
 	 * field by field because the exec member is the largest one and so is the
@@ -441,7 +441,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * the kernel means them and as event.Process documents them; ppid is the
 	 * parent's tgid, because a parent is identified by its process and not by
 	 * whichever of its threads happened to fork. start_boottime paired with
-	 * pid is what event.Process.StartTime is for — "the pair (PID, StartTime)
+	 * pid is what event.Process.StartTime is for -- "the pair (PID, StartTime)
 	 * is unique for a boot; PID alone is not". */
 	/* The value the filter already matched on, not a second call. The record
 	 * and the filter decision must agree about which cgroup this was. */
@@ -459,7 +459,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 
 	/* __data_loc is the tracepoint ABI's variable-length encoding: the low 16
 	 * bits are the string's offset from the start of this record, the high 16
-	 * its length. The length is not used — the destination is fixed size and
+	 * its length. The length is not used -- the destination is fixed size and
 	 * the copy has to stop at ALLSEER_PATH_MAX regardless, which is the
 	 * truncation the header warns about and abi.CString reports.
 	 *
@@ -488,8 +488,8 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 /* sched_process_exit: a task is leaving.
  *
  * The pair to proc_exec above, and the reason it is worth having is not that an
- * exit is interesting on its own — pkg/capability rates process.exit
- * SeverityInfo — but that without it a governed process has a beginning and no
+ * exit is interesting on its own -- pkg/capability rates process.exit
+ * SeverityInfo -- but that without it a governed process has a beginning and no
  * end. telemetry.ProcessTracker.Untrack is declared as "removes a process on
  * exit" and has nothing to call it; internal/session/dispatch.go names PID reuse
  * as what a tracker keyed on (PID, StartTime) exists to prevent, and a pair
@@ -509,7 +509,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
  * ten-thread process exiting ten times, and a tracker acting on those would
  * untrack a live process nine times before it died.
  *
- * The filter is pid == tid — the thread group leader — read from the one helper
+ * The filter is pid == tid -- the thread group leader -- read from the one helper
  * proc_exec already uses for both halves. It is the leader that carries the
  * process's identity: `pid` in struct allseer_proc is documented as the thread
  * group ID, and start_boottime read from the leader is the same value proc_exec
@@ -517,26 +517,26 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
  * across the two events.
  *
  * The narrow case this gets wrong is worth stating rather than leaving to be
- * found. A group leader that exits while its siblings keep running — a bare
- * pthread_exit from main — becomes a zombie without ending the process, and this
+ * found. A group leader that exits while its siblings keep running -- a bare
+ * pthread_exit from main -- becomes a zombie without ending the process, and this
  * probe reports an exit for a process that is still alive. The kernel does
  * distinguish the two: this tracepoint carries `group_dead`, true only on the
  * last thread of the group, which is the precise signal. It is not read here for
  * one reason, and it is a portability reason rather than a preference: the field
  * is a recent addition to the context, so reading it means either requiring a
- * kernel that has it or carrying a bpf_core_field_exists branch and a fallback —
+ * kernel that has it or carrying a bpf_core_field_exists branch and a fallback --
  * and the fallback would be this comparison anyway. See the TODO at the foot of
  * this file.
  *
  * # What is not carried
  *
  * The exit status. `ret` is written 0, and the header defines that field as
- * "syscall return; negative is -errno" — a definition a process exit does not
+ * "syscall return; negative is -errno" -- a definition a process exit does not
  * fit. task->exit_code is an encoded wait status, a shifted exit code or a
  * signal number in the low bits, and putting it in `ret` unshifted would make
  * exit(1) decode as ReturnCode 256 and Succeeded true, because
  * internal/telemetry/decode.go reads ret >= 0 as success. Writing 0 says the
- * one thing that is true of every record here — the task exited — and says
+ * one thing that is true of every record here -- the task exited -- and says
  * nothing that is false. Carrying the status honestly needs a field of its own,
  * which is a record-layout change; see the TODO at the foot of this file.
  *
@@ -553,7 +553,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 	allseer_cgroup_id_t cgroup_id;
 	__u64 pid_tgid, uid_gid;
 
-	/* The filter, and the first thing this probe does — the same obligation
+	/* The filter, and the first thing this probe does -- the same obligation
 	 * proc_exec carries and for the same reason. internal/telemetry states it
 	 * as a standing requirement on every probe added after the first: "the
 	 * filter is per-probe rather than a property of the object, so every
@@ -562,7 +562,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 	 *
 	 * First, ahead of the cheaper thread-leader comparison below, deliberately.
 	 * Ordering the comparison first would skip a hash lookup for every
-	 * non-leader thread, which is a real saving on a threaded process — and it
+	 * non-leader thread, which is a real saving on a threaded process -- and it
 	 * would also mean that "no untracked cgroup is ever observed" could no
 	 * longer be checked by reading the top of each probe. The invariant is
 	 * worth more than the lookup.
@@ -606,7 +606,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 	 * is what makes the two records comparable: start_boottime does not change
 	 * over a task's life and exec does not replace the task_struct, so the
 	 * (pid, start_time) pair here is the pair the exec record carried for the
-	 * same process — which is exactly the pair event.Process.StartTime is
+	 * same process -- which is exactly the pair event.Process.StartTime is
 	 * documented to make unique.
 	 *
 	 * pid and tid are equal by the filter above and both are written anyway,
@@ -629,7 +629,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 
 	/* Zeroed even though nothing reads it. Reserved space is whatever the ring
 	 * held before, so skipping this would submit a record carrying 776 bytes of
-	 * the previous event — a path, an argv, a peer address — under a type that
+	 * the previous event -- a path, an argv, a peer address -- under a type that
 	 * declares no payload. The decoder ignores it today; a raw-record dump, a
 	 * recorder, or a future payload member would not, and none of those should
 	 * have to discover that exit records are not clean. */
@@ -644,8 +644,8 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * Two programs, one event. sys_enter_openat has the arguments and no return;
  * sys_exit_openat has the return and no arguments; struct allseer_event needs
  * both, so neither tracepoint can produce a record on its own and the pair is
- * joined through `openat_scratch`. The protocol — the key, the identity stamp,
- * the map type, the lifecycle, every failure path — is written down once in
+ * joined through `openat_scratch`. The protocol -- the key, the identity stamp,
+ * the map type, the lifecycle, every failure path -- is written down once in
  * allseer_maps.h, because sys_enter_connect will use the same one.
  *
  * The three rules those two programs implement, restated here because they are
@@ -666,8 +666,8 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * event" has two candidate answers and they can differ. The answer taken here is
  * **the cgroup the task was in when it made the call**, which is the one that
  * was governed at the moment the process asked for the file. It follows that a
- * task moved *into* a tracked cgroup mid-syscall produces no event — its entry
- * was filtered, so there is nothing to complete — and a task moved *out* of one
+ * task moved *into* a tracked cgroup mid-syscall produces no event -- its entry
+ * was filtered, so there is nothing to complete -- and a task moved *out* of one
  * still produces the event it earned on the way in. Both are the same rule, and
  * the record's cgroup_id agrees with the lookup that admitted it in every case,
  * because it is a copy of it rather than a second reading.
@@ -677,7 +677,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  *
  * Emits nothing. That is the point of it: the record it would emit has a `ret`
  * field the header defines as "syscall return; negative is -errno", and at this
- * instant there is no return — the open has not been attempted. Writing 0 there
+ * instant there is no return -- the open has not been attempted. Writing 0 there
  * would make every failed open decode as Succeeded, and
  * internal/telemetry/decode.go is explicit that a failed action is a governance
  * signal in its own right: "the credential-egress fixture turns on it, where a
@@ -694,7 +694,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  *   args[3]  mode       the creation mode
  *
  * dfd is captured nowhere, and that is a decision rather than an oversight. It
- * is only meaningful joined to the path, and joining them is path resolution —
+ * is only meaningful joined to the path, and joining them is path resolution --
  * which the repository has already placed in M6 and which
  * internal/telemetry/resolve is built around refusing to guess at: it "refuses
  * to fall back from ResolvedPath to Path precisely so that a pre-resolution path
@@ -709,7 +709,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * and yields nothing, or on an architecture without a split address space reads
  * whatever kernel memory happens to live at that number and copies it into an
  * audit record. proc_exec's use of the kernel variant is not a precedent for
- * this one — its string is inside the tracepoint record, which is kernel memory.
+ * this one -- its string is inside the tracepoint record, which is kernel memory.
  */
 SEC("tracepoint/syscalls/sys_enter_openat")
 int openat_enter(struct trace_event_raw_sys_enter *ctx)
@@ -722,7 +722,7 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 
 	/* The filter, first, and before the path is read out of user memory
 	 * rather than after. Every probe in this object carries the same
-	 * obligation — internal/telemetry states it as a standing requirement:
+	 * obligation -- internal/telemetry states it as a standing requirement:
 	 * "the filter is per-probe rather than a property of the object, so every
 	 * tracepoint added after this one has to perform the same lookup or it
 	 * silently reports on cgroups nobody declared."
@@ -743,7 +743,7 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * are load-bearing rather than defensive habit: the verifier refuses to
 	 * copy stack memory into a map unless every byte of it has been written,
 	 * and the path array below is filled by a helper that writes only as far as
-	 * the string goes, so the tail is whatever this stack slot held before —
+	 * the string goes, so the tail is whatever this stack slot held before --
 	 * which is another process's data, on its way into an audit record. */
 	__builtin_memset(&s, 0, sizeof(s));
 
@@ -768,11 +768,11 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * start_time is read from the group leader and not from the current task,
 	 * which is the one place this probe differs from the two above it, and it
 	 * differs because it has to. Those two report on a process at a moment when
-	 * the current task is the process — exec installs a new image, exit is
+	 * the current task is the process -- exec installs a new image, exit is
 	 * filtered to the group leader. openat is called by whichever thread wants
 	 * a file, and a worker thread's start_boottime is its own, not its
 	 * process's. Pairing that with proc.pid, which is the tgid, would produce a
-	 * (PID, StartTime) that no other record in the stream carries — and
+	 * (PID, StartTime) that no other record in the stream carries -- and
 	 * event.Process.StartTime exists precisely so that pair identifies a
 	 * process, with telemetry.ProcessTracker keyed on it. Reading the leader
 	 * gives the same value proc_exec recorded for the same process, which is
@@ -794,7 +794,7 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 *
 	 * mode is stored whatever the flags say. It is meaningful only when the
 	 * flags permit creation, and the record reports what the process passed
-	 * rather than substituting a zero it did not pass — the decoder is where
+	 * rather than substituting a zero it did not pass -- the decoder is where
 	 * flags decide meaning, and kindForOpenFlags already does exactly that. */
 	s.flags = (__u32)ctx->args[2];
 	s.mode = (__u32)ctx->args[3];
@@ -810,16 +810,16 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * in internal/telemetry/decode.go and is a record-layout change, not a
 	 * probe change.
 	 *
-	 * The return is deliberately not checked. On failure — an unmapped or
-	 * paged-out user address — the field keeps the zero the memset left, and
+	 * The return is deliberately not checked. On failure -- an unmapped or
+	 * paged-out user address -- the field keeps the zero the memset left, and
 	 * the entry is stored regardless: the syscall happened, the process that
 	 * made it is known, and refusing to report a real open because one field
 	 * could not be read would hide the event entirely. An empty path means the
 	 * read failed; it cannot mean a process opened nothing. */
 	bpf_probe_read_user_str(&s.path, sizeof(s.path), (const char *)ctx->args[1]);
 
-	/* BPF_ANY, so this thread's previous entry — if it has one, which means an
-	 * exit it never reached — is replaced rather than kept. That is what makes
+	/* BPF_ANY, so this thread's previous entry -- if it has one, which means an
+	 * exit it never reached -- is replaced rather than kept. That is what makes
 	 * an orphaned entry self-healing for a thread that is still alive.
 	 *
 	 * The return is not checked because there is nothing to do with it. An LRU
@@ -836,14 +836,14 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 /* sys_exit_openat: the open has returned, and the record can be completed.
  *
  * This is the side that emits, and the only thing it contributes to the record
- * is `ret`. Everything else — the timestamp, the identity, the cgroup, the path,
- * the flags, the mode — is copied out of the scratch entry the entry side wrote,
+ * is `ret`. Everything else -- the timestamp, the identity, the cgroup, the path,
+ * the flags, the mode -- is copied out of the scratch entry the entry side wrote,
  * unexamined and unrecomputed. That is rule 1 above: one decision, made once,
  * carried forward.
  *
  * It performs no tracked_cgroups lookup. Doing so would be a second, independent
  * governance decision on a task whose cgroup may have changed since the call was
- * made, and the two decisions can disagree — which is how a record ends up
+ * made, and the two decisions can disagree -- which is how a record ends up
  * carrying a cgroup_id that is not the one that admitted it. The absence of that
  * lookup is not a hole in the filter: an untracked caller's entry side stored
  * nothing, so there is no entry here to find, and the lookup below is what
@@ -858,7 +858,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	allseer_syscall_key_t key;
 
 	/* No entry, no event, and no further work. This is where an untracked
-	 * cgroup is rejected on this side — not by a filter lookup, but by the
+	 * cgroup is rejected on this side -- not by a filter lookup, but by the
 	 * absence of the state a filter lookup on the other side would have
 	 * produced. */
 	key = bpf_get_current_pid_tgid();
@@ -868,7 +868,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 
 	/* The entry is keyed by a thread ID, and thread IDs are reused. This is the
 	 * check that keeps a dead thread's entry from being completed by whatever
-	 * thread inherits its number — see PID reuse in allseer_maps.h for the
+	 * thread inherits its number -- see PID reuse in allseer_maps.h for the
 	 * shape of the case, which ends in an untracked process producing a
 	 * governed event.
 	 *
@@ -886,7 +886,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	 * A failed reservation deletes the entry before returning. The scratch
 	 * entry has served its purpose the moment this program has looked at it,
 	 * and a path that returned early without deleting would leave an orphan for
-	 * every record lost — which is exactly the moment the host is already
+	 * every record lost -- which is exactly the moment the host is already
 	 * struggling. Deleting here is what makes "the exit side owns deletion"
 	 * true on every path rather than on the happy one. */
 	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
@@ -900,8 +900,8 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	e->type = ALLSEER_EVT_FILE_OPEN;
 
 	/* The one field this side owns. The tracepoint's `ret` is a long because
-	 * every syscall's return goes through this context; openat's is an int — a
-	 * file descriptor or a negative errno — so narrowing to the __s32 the header
+	 * every syscall's return goes through this context; openat's is an int -- a
+	 * file descriptor or a negative errno -- so narrowing to the __s32 the header
 	 * declares is exact for every value openat can produce.
 	 *
 	 * Written as it is, negative and all. internal/telemetry/decode.go turns
@@ -913,7 +913,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	e->_pad = 0;
 
 	/* Identity as it was when the call was made, copied rather than re-read.
-	 * Re-reading it here would mostly agree — it is the same task — and
+	 * Re-reading it here would mostly agree -- it is the same task -- and
 	 * "mostly" is the problem: a reparented process's ppid changes underneath a
 	 * blocking open, and the record would then describe an ancestry the process
 	 * did not have when it acted. */
@@ -950,7 +950,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
  * The second instance of the protocol openat established, and deliberately the
  * same shape: sys_enter_connect captures and stores, sys_exit_connect completes
  * and emits, and the three rules stated above the openat pair hold here
- * unchanged and unrestated —
+ * unchanged and unrestated --
  *
  *   1. the entry side decides, performing the one tracked_cgroups lookup and
  *      putting the ID it matched into the record;
@@ -986,7 +986,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
  *
  * For AF_INET that is the whole of struct sockaddr_in: inet_dgram_connect and
  * __inet_stream_connect both reject an addr_len below sizeof(struct
- * sockaddr_in) with EINVAL. For AF_INET6 it is *not* the whole struct — the
+ * sockaddr_in) with EINVAL. For AF_INET6 it is *not* the whole struct -- the
  * trailing sin6_scope_id is optional and the kernel's minimum is
  * SIN6_LEN_RFC2133, the 24 bytes up to and including sin6_addr. Requiring the
  * full 28 here would silently skip the destination of every connect made with
@@ -1003,7 +1003,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
  * On entry the scratch value has already been zeroed, and every path that
  * cannot produce an address simply leaves it that way: family AF_UNSPEC, no
  * port, no address. Nothing here reports a failure to its caller, because there
- * is nothing the caller would do with one — allseer_maps.h states the decision,
+ * is nothing the caller would do with one -- allseer_maps.h states the decision,
  * and it is openat's: the record is stored and emitted regardless, since "a
  * connect happened and the process that made it is known; dropping the record
  * because one field could not be read would hide a real connection attempt".
@@ -1017,7 +1017,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
  * Two reads rather than one, and the first is two bytes. The family has to be
  * known before the size of the thing to read is known, and reading the larger
  * structure speculatively would fault on a caller that passed a correctly-sized
- * smaller one — turning a well-formed AF_INET connect into an unreadable
+ * smaller one -- turning a well-formed AF_INET connect into an unreadable
  * sockaddr. Reading the family first costs one extra helper call on a syscall
  * that is about to do far more work than that.
  *
@@ -1025,8 +1025,8 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
  * compared with. connect's third argument is an int and a process may pass a
  * negative one; left unsigned, -1 becomes 4294967295, clears every minimum, and
  * the probe reads a sockaddr the kernel is about to reject with EINVAL. The
- * property this function is written to keep — an address it captured is one the
- * kernel also considered well-formed — would be false for exactly that call.
+ * property this function is written to keep -- an address it captured is one the
+ * kernel also considered well-formed -- would be false for exactly that call.
  */
 static __always_inline void capture_peer_address(struct allseer_connect_scratch *s,
 						 const void *uaddr, __s32 addrlen)
@@ -1056,7 +1056,7 @@ static __always_inline void capture_peer_address(struct allseer_connect_scratch 
 		s->dport = bpf_ntohs(v4.sin_port);
 		/* Four bytes, into the front of a sixteen-byte field, because the
 		 * record header says so: "v4 addresses occupy the first 4 bytes".
-		 * Copied in wire order rather than byte-swapped — that order is
+		 * Copied in wire order rather than byte-swapped -- that order is
 		 * what netip.AddrFrom4 reads, and reversing it here would turn
 		 * 10.0.0.1 into 1.0.0.10 on the way out. */
 		__builtin_memcpy(s->daddr, &v4.sin_addr, sizeof(v4.sin_addr));
@@ -1078,7 +1078,7 @@ static __always_inline void capture_peer_address(struct allseer_connect_scratch 
 		return;
 
 	default:
-		/* A family that carries no address of this shape — AF_UNIX above
+		/* A family that carries no address of this shape -- AF_UNIX above
 		 * all, but also netlink, packet, bluetooth and the rest. The
 		 * family is reported and the address is not, which is not an
 		 * exception to the family rule but an application of it: these
@@ -1101,7 +1101,7 @@ static __always_inline void capture_peer_address(struct allseer_connect_scratch 
  * Emits nothing, for the reason openat_enter does not: `ret` has no value yet,
  * and connect's is worth more than most. A connect that fails with
  * ECONNREFUSED, EHOSTUNREACH or EPERM is a different governance fact from one
- * that succeeded — the difference between an agent that reached an endpoint and
+ * that succeeded -- the difference between an agent that reached an endpoint and
  * one that tried to.
  *
  * The tracepoint's arguments, from its format file:
@@ -1147,7 +1147,7 @@ int connect_enter(struct trace_event_raw_sys_enter *ctx)
 	task = (struct task_struct *)bpf_get_current_task();
 
 	/* The identity stamp, checked at exit against the thread running there.
-	 * The calling thread's own start time, not the group leader's — see the
+	 * The calling thread's own start time, not the group leader's -- see the
 	 * PID reuse section of allseer_maps.h. */
 	s.task_start_time = BPF_CORE_READ(task, start_boottime);
 
@@ -1170,7 +1170,7 @@ int connect_enter(struct trace_event_raw_sys_enter *ctx)
 	/* BPF_ANY, and the return unchecked, for the reasons openat_enter gives:
 	 * a thread's previous entry is replaced rather than kept, an LRU insert
 	 * does not fail for want of room, and a failure here means the exit finds
-	 * nothing and emits nothing — which is already the documented behaviour of
+	 * nothing and emits nothing -- which is already the documented behaviour of
 	 * a missing entry. Nothing has been reserved, so ringbuf_drops must not
 	 * move. */
 	key = pid_tgid;
@@ -1199,8 +1199,8 @@ int connect_enter(struct trace_event_raw_sys_enter *ctx)
  * sight of this tracepoint; the record says Succeeded false with errno
  * EINPROGRESS, which is a true statement about the syscall and a misleading one
  * about the connection if read as "no connection was made". The record cannot
- * say more, because the fact that would resolve it — whether the handshake later
- * completed — happens in the network stack rather than in any syscall this
+ * say more, because the fact that would resolve it -- whether the handshake later
+ * completed -- happens in the network stack rather than in any syscall this
  * object hooks. A downstream reader must treat EINPROGRESS as "attempted, and
  * this stream does not know the outcome" rather than as a failure.
  */
@@ -1271,7 +1271,7 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
  *
  * Eleven syscalls, twenty-two programs, one pair of bodies. Every credential
  * syscall the ABI enumerates gets its own tracepoint pair because the syscall is
- * what names the operation — struct allseer_event carries no syscall number, so
+ * what names the operation -- struct allseer_event carries no syscall number, so
  * `operation` is the only thing that can tell a setuid record from a capset one,
  * and a program attached to one tracepoint knows its own answer as a constant.
  *
@@ -1288,9 +1288,9 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
  * setresgid's three gids, or capset's user-space capability header.
  *
  * That is a decision rather than an omission. The seven identity syscalls each
- * give their arguments a different meaning — setuid takes one uid whose effect
+ * give their arguments a different meaning -- setuid takes one uid whose effect
  * depends on whether the caller is privileged, setreuid takes two of which
- * either may be -1 for "leave alone", setresuid takes three on the same terms —
+ * either may be -1 for "leave alone", setresuid takes three on the same terms --
  * and a probe that tried to compute the resulting credentials from them would be
  * reimplementing the kernel's own rules, in a place where being subtly wrong
  * produces a confident audit record rather than an error. The two snapshots make
@@ -1355,20 +1355,20 @@ _Static_assert(ALLSEER_PRIV_FIELD_AFTER_SECCOMP == ALLSEER_PRIV_FIELD_BEFORE_SEC
  * holds 32-63, which is exactly where bits 0-31 and 32-63 of the u64 sit. Both
  * targets this object is built for are little-endian. So the ABI's `__u64` is
  * the correct wire type on every kernel and nothing in allseer_event.h depends
- * on which one is running — the difference is entirely in the *source
+ * on which one is running -- the difference is entirely in the *source
  * expression* a probe has to write, because there is no member named `val`
  * before 6.3 and no member named `cap` after it.
  *
  * vmlinux.h is generated from the build host's BTF, so the compiler only ever
  * sees one of the two. The build host is therefore 6.3 or newer, which is where
- * `.val` is spelled — but the *runtime* floor stays where the ring buffer put
+ * `.val` is spelled -- but the *runtime* floor stays where the ring buffer put
  * it, at 5.8, and that is the whole point of what follows.
  *
  * struct cred___legacy is a CO-RE flavor: libbpf strips everything from `___`
  * onward when it looks for a target type, so this is matched against the
  * kernel's own `struct cred`. Only the five members this object reads are
  * declared, because CO-RE resolves members by name against the target and takes
- * the offsets from there — the offsets in this declaration are never used, and a
+ * the offsets from there -- the offsets in this declaration are never used, and a
  * partial declaration is the ordinary way to write one.
  */
 struct kernel_cap_struct___legacy {
@@ -1389,15 +1389,15 @@ struct cred___legacy {
  * # Why this is safe to load rather than merely correct to read
  *
  * Both branches are compiled, and on any given kernel exactly one of them
- * carries a CO-RE relocation that cannot resolve — `.val` before 6.3, `cap[]`
+ * carries a CO-RE relocation that cannot resolve -- `.val` before 6.3, `cap[]`
  * after it. That is not a load failure. libbpf answers an unresolvable field
  * relocation by *poisoning* the instruction: it rewrites it as a call to an
  * invalid helper (the marker 0xbad2310, which is present in the libbpf this
  * repository links against), so the object still loads and the instruction only
  * fails if something reaches it.
  *
- * Nothing reaches it. bpf_core_field_exists is a different kind of relocation —
- * it is defined to resolve to 0 when the field is absent rather than to poison —
+ * Nothing reaches it. bpf_core_field_exists is a different kind of relocation --
+ * it is defined to resolve to 0 when the field is absent rather than to poison --
  * so after load the condition is a constant, and the verifier prunes the branch
  * it did not take instead of walking into the poison. That pairing, an EXISTS
  * relocation guarding a read relocation, is the mechanism libbpf provides for
@@ -1412,8 +1412,8 @@ struct cred___legacy {
  * # What it does not do
  *
  * It does not truncate. Both halves of the legacy pair are read and recombined,
- * so all 64 bits reach the record on either kernel, and a capability above 31 —
- * CAP_PERFMON, CAP_BPF and CAP_CHECKPOINT_RESTORE are all in that range — is not
+ * so all 64 bits reach the record on either kernel, and a capability above 31 --
+ * CAP_PERFMON, CAP_BPF and CAP_CHECKPOINT_RESTORE are all in that range -- is not
  * silently lost on an older host.
  *
  * A `do { } while (0)` writing through a destination rather than a statement
@@ -1439,13 +1439,13 @@ struct cred___legacy {
  * to get its own. Every bit it sets is a statement that the read behind those
  * fields succeeded, and every bit it leaves clear is the ABI's way of saying
  * "not observed" about fields whose zero would otherwise be indistinguishable
- * from an observation — uid 0 is root, gid 0 is root, and an empty capability
+ * from an observation -- uid 0 is root, gid 0 is root, and an empty capability
  * set is a task holding no capabilities.
  *
  * # Which cred, and why it agrees with the rest of the record
  *
  * task->cred, the subjective credentials, and not task->real_cred. It is what
- * governs what this task may do, and it is what bpf_get_current_uid_gid reads —
+ * governs what this task may do, and it is what bpf_get_current_uid_gid reads --
  * so uid_real here and struct allseer_proc.uid, filled from that helper by the
  * caller, are the same number by construction rather than by coincidence. A
  * record cannot disagree with itself about who acted.
@@ -1459,8 +1459,8 @@ struct cred___legacy {
  * # The three pointers that can fail, and the one field that cannot
  *
  * seccomp.mode is embedded in task_struct, so there is no pointer to lose and
- * its bit is always set. The other three groups hang off pointers — cred itself,
- * cred->user_ns and cred->group_info — and each is checked before the fields
+ * its bit is always set. The other three groups hang off pointers -- cred itself,
+ * cred->user_ns and cred->group_info -- and each is checked before the fields
  * behind it are read. group_info is the one that has ever legitimately been
  * NULL; the other two are checked because a helper that trusts a pointer it did
  * not verify is one kernel change away from reporting a page of zeroes as a
@@ -1538,7 +1538,7 @@ static __always_inline __u32 capture_priv_state(struct task_struct *task,
  * `ret` field the header defines as the syscall return, and at this instant
  * there is no return. What it does that openat's entry side does not is capture
  * the `before` snapshot, and that is the whole reason the pairing is mandatory
- * here rather than merely convenient — pre-change credentials exist only until
+ * here rather than merely convenient -- pre-change credentials exist only until
  * the syscall commits, and no later hook can recover them.
  *
  * `ns_arg` is the index of the CLONE_* argument, or negative for the operations
@@ -1555,17 +1555,17 @@ static __always_inline int priv_enter(struct trace_event_raw_sys_enter *ctx,
 	__u64 pid_tgid, uid_gid;
 
 	/* The filter, first, and before any credential is read. The standing
-	 * per-probe obligation internal/telemetry states — "every tracepoint added
+	 * per-probe obligation internal/telemetry states -- "every tracepoint added
 	 * after this one has to perform the same lookup or it silently reports on
-	 * cgroups nobody declared" — and the reason it is first rather than after
+	 * cgroups nobody declared" -- and the reason it is first rather than after
 	 * the cheaper work is that "no untracked cgroup is ever observed" has to
 	 * stay checkable by reading the top of each probe.
 	 *
 	 * The ID matched here is the one that ends up in the record, so the event's
 	 * attribution and its reason for existing cannot come from different
-	 * cgroups. None of these syscalls moves a task between cgroups —
+	 * cgroups. None of these syscalls moves a task between cgroups --
 	 * unshare(CLONE_NEWCGROUP) and setns to a cgroup namespace change what the
-	 * task can see of the hierarchy, not which cgroup it is in — so unlike a
+	 * task can see of the hierarchy, not which cgroup it is in -- so unlike a
 	 * blocking openat there is not even a window in which the two could
 	 * diverge. */
 	cgroup_id = bpf_get_current_cgroup_id();
@@ -1576,7 +1576,7 @@ static __always_inline int priv_enter(struct trace_event_raw_sys_enter *ctx,
 	 * into a map to have been written, and the named pad is part of that. */
 	__builtin_memset(&s, 0, sizeof(s));
 
-	/* The instant the call was made, not the instant it finished — the
+	/* The instant the call was made, not the instant it finished -- the
 	 * convention allseer_maps.h settled for openat and connect, kept here
 	 * unchanged. It matters more for this event than for those two: it is the
 	 * instant the `before` snapshot describes, so a record whose timestamp came
@@ -1614,14 +1614,14 @@ static __always_inline int priv_enter(struct trace_event_raw_sys_enter *ctx,
 	 * validated and not interpreted: the header defines the field as what was
 	 * asked for, and what actually happened is the userns_inum pair. A setns
 	 * whose nstype is 0 names no type at all, which is legal, and the bit is
-	 * still set — the honest reading is "the caller named nothing", not "this
+	 * still set -- the honest reading is "the caller named nothing", not "this
 	 * was not captured".
 	 *
 	 * Written as two comparisons against literals rather than one indexed by
 	 * `ns_arg`, so that the only subscripts appearing anywhere in this function
 	 * are the constants 0 and 1. Every call site passes a compile-time constant
 	 * and the optimiser would fold `ctx->args[-1]` away before the verifier ever
-	 * saw it — but "the optimiser will delete the out-of-bounds read" is a load
+	 * saw it -- but "the optimiser will delete the out-of-bounds read" is a load
 	 * -bearing assumption about -O2, and an object that fails to verify fails to
 	 * load at all, taking the four probes that were already working with it. */
 	if (ns_arg == 0) {
@@ -1635,7 +1635,7 @@ static __always_inline int priv_enter(struct trace_event_raw_sys_enter *ctx,
 	/* BPF_ANY and the return unchecked, exactly as openat_enter and
 	 * connect_enter do it: a thread's previous entry is replaced rather than
 	 * kept, an LRU insert does not fail for want of room, and an update that
-	 * did fail means the exit finds nothing and emits nothing — which is
+	 * did fail means the exit finds nothing and emits nothing -- which is
 	 * already the documented behaviour of a missing entry. Nothing has been
 	 * reserved, so ringbuf_drops must not move. */
 	key = pid_tgid;
@@ -1654,7 +1654,7 @@ static __always_inline int priv_enter(struct trace_event_raw_sys_enter *ctx,
  *
  * `after` is captured whether the syscall succeeded or failed, and that is the
  * ABI's contract rather than an economy. A negative `ret` means the kernel
- * committed nothing, so the two snapshots hold the same values — and the record
+ * committed nothing, so the two snapshots hold the same values -- and the record
  * saying so is a stronger statement than the record being silent. It turns
  * "nothing changed" from an absence into an assertion a reader can check against
  * `before`, and it costs one read on a path that is already reserving 856 bytes.
@@ -1717,7 +1717,7 @@ static __always_inline int priv_exit(struct trace_event_raw_sys_exit *ctx, __u32
 	/* Reserved space is whatever the ring held before, so the whole union is
 	 * cleared before any of it is filled. The privilege payload is 208 bytes of
 	 * a 776-byte union, which means most of what this clears is never written
-	 * again — and a record carrying 568 bytes of the previous event under a
+	 * again -- and a record carrying 568 bytes of the previous event under a
 	 * type that declares 208 is exactly what a raw-record dump or a later
 	 * payload member would trip over. */
 	__builtin_memset(&e->payload, 0, sizeof(e->payload));
@@ -1786,23 +1786,23 @@ ALLSEER_PRIV_PAIR(setgroups, ALLSEER_PRIV_OP_SETGROUPS, -1)
 
 /* capset writes the effective, permitted and inheritable sets from a user-space
  * struct this probe does not read. Both snapshots carry all five sets, so the
- * delta is recoverable without trusting the caller's buffer — which would also
+ * delta is recoverable without trusting the caller's buffer -- which would also
  * have been a user-memory read on a path that can fail after it. */
 ALLSEER_PRIV_PAIR(capset, ALLSEER_PRIV_OP_CAPSET, -1)
 
-/* unshare(int flags) — args[0]. Of its flags only CLONE_NEWUSER touches
+/* unshare(int flags) -- args[0]. Of its flags only CLONE_NEWUSER touches
  * credentials; the rest swap task->nsproxy and leave both snapshots identical,
  * which is why ns_flags is the only thing in such a record that reports what
  * happened. */
 ALLSEER_PRIV_PAIR(unshare, ALLSEER_PRIV_OP_UNSHARE, 0)
 
-/* setns(int fd, int nstype) — args[1]. The fd is not resolved: doing so means
+/* setns(int fd, int nstype) -- args[1]. The fd is not resolved: doing so means
  * walking task->files to a struct ns_common, and the userns_inum pair already
  * answers the question that walk would be for, from observed state rather than
  * from a descriptor the caller could have closed. */
 ALLSEER_PRIV_PAIR(setns, ALLSEER_PRIV_OP_SETNS, 1)
 
-/* seccomp(2) only. prctl(PR_SET_SECCOMP) is deliberately not hooked — the ABI
+/* seccomp(2) only. prctl(PR_SET_SECCOMP) is deliberately not hooked -- the ABI
  * says so and the reason is that prctl is the hottest syscall of the candidates
  * and its privilege-relevant effects are already visible as snapshot deltas.
  *
@@ -1824,9 +1824,9 @@ ALLSEER_PRIV_PAIR(seccomp, ALLSEER_PRIV_OP_SECCOMP, -1)
  * "BTF carries only types something references", and a local variable in one
  * program is not a reference BTF records. So without this declaration the
  * record type is absent from the compiled object, and telemetry's startup check
- * — the one internal/telemetry/abi describes as reading the object "through BTF
+ * -- the one internal/telemetry/abi describes as reading the object "through BTF
  * before it attaches anything", because that is "the only point at which a
- * mismatch costs nothing" — has nothing to compare against and must refuse to
+ * mismatch costs nothing" -- has nothing to compare against and must refuse to
  * start.
  *
  * A pointer rather than an instance: it costs 8 bytes of .bss instead of 856,
@@ -1855,8 +1855,8 @@ struct allseer_event *_allseer_record_btf_anchor;
  * exit is not a syscall return: task->exit_code is an encoded wait status, and
  * writing it into that field would make exit(1) decode as ReturnCode 256 with
  * Succeeded true. Whether a governed agent's build failed is a governance fact
- * worth having, so this wants a field of its own — a __s32 exit_status, or an
- * exit payload member — which is a record-layout change and so belongs with the
+ * worth having, so this wants a field of its own -- a __s32 exit_status, or an
+ * exit payload member -- which is a record-layout change and so belongs with the
  * other open ABI edits rather than inside a probe issue.
  *
  * TODO(bpf): use `group_dead` to decide when a process has exited. proc_exit
@@ -1865,7 +1865,7 @@ struct allseer_event *_allseer_record_btf_anchor;
  * its siblings keep running. The tracepoint context carries `group_dead`, true
  * only on the last thread of the group, which answers the question exactly.
  * Reading it needs a bpf_core_field_exists guard and a fallback for kernels
- * whose context predates the field — and the fallback is the comparison already
- * written — so it is a portability decision with a measurable cost, not a
+ * whose context predates the field -- and the fallback is the comparison already
+ * written -- so it is a portability decision with a measurable cost, not a
  * one-line fix.
  */
