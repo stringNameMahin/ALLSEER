@@ -6,12 +6,23 @@
  * and two filter sets, and sharing one between them means pinning it and
  * agreeing on a bpffs path. Probes are added to this file as they are written.
  *
- * That is the current model and it has a decided end date. A mandatory
- * architectural milestone requires this object to be split into independently
- * loadable telemetry modules after M5 — see the TODO(architecture) entry in
- * internal/telemetry/telemetry.go for the requirement and the exception that
- * brings it forward. The sentence above is what that milestone overturns, so it
- * should be read as a statement about today rather than about the design.
+ * That is the current model and it is now the decided one. An earlier revision
+ * of this preamble said the sentence above had "a decided end date", because a
+ * mandatory architectural milestone required this object to be split into
+ * independently loadable telemetry modules after M5. That decision was reversed
+ * on 2026-09-11: the split is an evidence-triggered contingency now rather than
+ * a milestone, and one object is the architecture rather than a stage of it.
+ * The failure mode it was meant to bound - a verifier rejection failing the
+ * whole load - is real, and is instead planned to be handled inside this object
+ * by disabling the refused probe family and retrying. See the TODO(architecture)
+ * entries in internal/telemetry/telemetry.go for the mechanism, the M7
+ * fail-closed requirement, and the two triggers that would reopen the split.
+ *
+ * One consequence for this file is that the pairing below is load-bearing in a
+ * way it was not before. Degradation is per probe family, so an enter and an
+ * exit program sharing a scratch map are one unit and are disabled together;
+ * proc_exec and proc_exit are not a family but a floor, because everything else
+ * attributes through them.
  *
  * At this point the file declares six maps and twenty-eight programs:
  * sched_process_exec and sched_process_exit, which each produce a record on
@@ -1916,11 +1927,21 @@ struct allseer_event *_allseer_record_btf_anchor;
 
 /* --- Open items -------------------------------------------------------------
  *
- * TODO(architecture): split this object into independently loadable telemetry
- * modules after M5. The requirement, its exception and the reasoning are
- * recorded once, in internal/telemetry/telemetry.go; it is repeated here as a
- * pointer because this file is the one the milestone changes most, and because
- * the capability compatibility macro above is the first workaround it predicts.
+ * Architecture: one object, and no split is scheduled. The mandatory milestone
+ * that used to sit here - split this object into independently loadable
+ * telemetry modules after M5 - was reversed on 2026-09-11 and is now an
+ * evidence-triggered contingency. The decision, the mechanism that replaces it
+ * (family-granular reactive autoload degradation, planned for M6/M7), the M7
+ * fail-closed requirement and the two triggers that would reopen it are
+ * recorded once, in internal/telemetry/telemetry.go. This pointer stays because
+ * this file is the one a split would change most.
+ *
+ * The capability compatibility macro above used to be cited here as the first
+ * accumulated workaround forcing that split. It is better read as what it is: a
+ * CO-RE flavor absorbing a field-shape change, which is the mechanism working
+ * rather than failing. Two divergences were named in advance as the kind that
+ * would force the split - the 6.3 kernel_cap_t change and BPF LSM
+ * unavailability - and neither did.
  *
  * TODO(bpf): carry a task's exit status. proc_exit writes ret = 0 because the
  * header defines `ret` as "syscall return; negative is -errno" and a process

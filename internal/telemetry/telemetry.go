@@ -603,37 +603,190 @@ type Config struct {
 // passing suite exercised exactly that. The recombination arithmetic itself is
 // unverified until this object is run on a kernel between 5.8 and 6.2.
 //
-// TODO(architecture): after M5 is complete, transition the telemetry
-// architecture from the current single-BPF-object model toward independently
-// loadable telemetry modules/objects — "Option 3" in the kernel_cap_t
-// compatibility review — providing mechanism and kernel-version isolation and
-// preparing the platform architecture for future Linux kernel diversity and
-// Windows support.
+// Architecture: one BPF object. Decided 2026-09-11, reversing the 2026-09-07
+// decision to split it.
 //
-// If M5 encounters a concrete problem caused by the single-object architecture
-// before M5 completes — particularly a kernel compatibility, verifier or load
-// failure, or feature-isolation problem that cannot be safely solved within the
-// current object — transition to Option 3 immediately rather than accumulating
-// additional workarounds.
+// The failure mode this section has always been about is unchanged, and it is
+// stated first because it is what any mechanism here has to bound. A CO-RE
+// relocation that cannot resolve is poisoned rather than fatal, which is what
+// makes this object loadable on kernels it was not built on. A *verifier*
+// rejection is not: bpf_object__load fails entire, so one program a future
+// kernel refuses takes the other twenty-seven down with it, and it is not
+// detectable by testing on the build host.
 //
-// This is a mandatory architectural milestone and not a suggestion. It is not
-// "consider Option 3", it is not conditional on the current workaround failing,
-// and it is not to be deferred past M5. In particular it must not be removed
-// because Option 2 — the dual-representation capability read now in
-// bpf/allseer.bpf.c — works: that read is the first accumulated workaround, not
-// a reason the milestone was avoided, and the next kernel divergence has nowhere
-// to go inside one object.
+// What changed is the answer, not the question. "Option 3" - splitting this
+// object into independently loadable telemetry modules, so named because it was
+// option 3 in the kernel_cap_t compatibility review - was recorded here as a
+// mandatory architectural milestone gated on M5 completion. It is now an
+// evidence-triggered contingency and it is not scheduled. The reversal is
+// recorded in full in STATUS.md under "The Option 3 decision"; the short form
+// is that two of its four arguments were withdrawn on measurement, and the one
+// mechanism that survived is better served by something cheaper and
+// finer-grained than a split.
 //
-// The reason it is recorded here rather than left to a review is that the
-// pressure runs the other way. bpf/allseer.bpf.c opens by stating "One object,
-// not one per probe", and every probe added since has made that sentence more
-// expensive to reverse: one ring buffer, one filter map, three scratch maps and
-// twenty-eight programs now share a single load. A CO-RE relocation that cannot
-// resolve is poisoned rather than fatal, which is what makes the current object
-// loadable on kernels it was not built on — but a *verifier* rejection is fatal
-// to the whole object, so one program that a future kernel refuses takes the
-// other twenty-seven down with it. That is the failure mode Option 3 exists to
-// bound, and it is not detectable by testing on the build host.
+// TODO(architecture): implement family-granular reactive autoload degradation
+// in M6/M7, alongside the capability reporting that makes partial observability
+// safe. On a load failure, identify the refused program, disable its probe
+// family with BPFProg.SetAutoload(false) - or a refused map with
+// BPFMap.SetAutocreate(false) - reopen, retry, converge on the maximal loadable
+// subset, and report the gap. The open-to-load window this needs already exists
+// in loader_linux.go and already carries resizeRingBuffer and
+// applyForceWakeup, so the intervention point is not new.
+//
+// Identify the culprit by bisecting the autoload set, not by parsing the
+// verifier log. libbpfgo can capture that log through SetLoggerCbs and it is
+// worth capturing as the diagnostic, but it is process-global mutable state and
+// a string match against libbpf's wording is not a control flow to depend on.
+// Bisecting is deterministic, needs no log, and costs at most fifteen
+// reopen-and-load cycles at startup.
+//
+// Three constraints on that work, none of them optional:
+//
+//  1. The unit of degradation is the probe family, never the program. Thirteen
+//     of the twenty-eight programs are syscall enter/exit pairs sharing a
+//     scratch map, so dropping sys_exit_openat while keeping sys_enter_openat
+//     would leak openat_scratch and emit nothing, which is worse than dropping
+//     both. That is fifteen degradation units - two sched singletons and
+//     thirteen pairs - and never twenty-eight.
+//  2. proc_exec and proc_exit are a floor rather than a family. They are the
+//     attribution backbone every other probe hangs off, so a host that cannot
+//     load them must refuse to run rather than degrade. See the M7 requirement
+//     below.
+//  3. The gap must reach ProbeInfo.Capabilities, MemoryCatalog.SetObservable
+//     through CapabilitiesFor, the audit record and allseerctl status. A
+//     partial load that does not report itself is the silent degradation this
+//     project rejects everywhere else, and it would be strictly worse than the
+//     loud total failure it replaces. That reporting is the bulk of the work,
+//     not a follow-up to it, and it is why the mechanism is sequenced with M6
+//     rather than built now.
+//
+// TODO(architecture): M7 must fail closed when core telemetry cannot load.
+// This is the mitigation for the catastrophic case and it costs no
+// architecture, which is why it lands first. The governance argument that made
+// the split look mandatory - a daemon reporting a quiet session because nothing
+// ever loaded, and quiet being what a well-behaved agent looks like - describes
+// a daemon that starts anyway and governs nothing. cmd/allseerd is a stub, so
+// that daemon does not exist yet and does not have to. The discipline is the
+// one docs/roadmap.md already states for the shim: launching ungoverned is the
+// one failure mode capable of quietly nullifying the entire system. Config
+// already carries FailClosedOnDrop for the analogous case of losing records
+// mid-session; this is the same posture at load time.
+//
+// Option 3 stays available, triggered by evidence rather than by a milestone.
+// Exactly two things trigger it, plus one scheduled review. Each is written to
+// be decidable by a test rather than by judgment, because the mandate this
+// replaced failed precisely by having no falsifiable condition.
+//
+//  1. A refusal that is not attributable to any bounded subset.
+//     bpf_object__load fails, and no subset of programs disabled with
+//     SetAutoload(false) and no subset of maps disabled with
+//     SetAutocreate(false) makes it succeed. The test is mechanical and is the
+//     same bisection the degradation mechanism already performs: if any
+//     loadable subset exists, this has not fired; if the object is still
+//     refused with everything above proc_exec and proc_exit disabled, it has.
+//
+//     Explicitly NOT in this class: common-mode failures. A refusal
+//     originating in anything every module would carry - allseer_event.h, the
+//     vmlinux.h-derived types, the BTF anchor, the .rodata globals, or the
+//     object's BTF blob as a whole - is *reproduced* by a split, not isolated
+//     by it. Four objects each carrying the record ABI and each built against
+//     the same BTF fail the same way. An earlier wording of this trigger said
+//     "an object-level or BTF-level rejection", which was wrong for exactly
+//     that reason and is withdrawn.
+//
+//     What that leaves may be empty, and the estimate is recorded rather than
+//     hidden. For a split to help, the refusal has to be caused by the
+//     aggregate rather than by any part of it. Most candidate limits are
+//     per-program and therefore unhelped by splitting: the verifier's
+//     instruction and complexity budgets are evaluated per program, the
+//     maps-per-program limit is per program and no program here approaches it,
+//     and a locked-memory limit is about total map memory, which a split does
+//     not reduce. The plausible survivor is a per-object BTF size limit. That
+//     is reasoning about how these limits are structured, not a measurement.
+//     The honest expectation is that this trigger never fires.
+//
+//  2. A consumer that needs a probe set replaced without losing continuity.
+//     Something needs one group of probes swapped while a session continues,
+//     and needs events, tracked_cgroups and ringbuf_drops to survive the swap
+//     so attribution and Sequence ordering are unbroken across it.
+//
+//     The test, in order, and all three parts are required. (a) Name the
+//     consumer and what it needs replaced. (b) Show that re-opening the whole
+//     object with a different autoload mask - attach the new set, detach the
+//     old, close the old module - does not serve it. That path exists today
+//     and needs no split. (c) State why not. The only answer that survives is
+//     that the shared maps cannot be carried across the swap, which is the
+//     continuity requirement and what pinning would buy. If (b) is not ruled
+//     out with a stated reason, the consumer has not earned a split.
+//
+//     No consumer exists today: cmd/allseerd is a stub and the Collector is
+//     M6, so nothing can yet want this.
+//
+//  3. One scheduled review, at M12. Not a trigger and not a commitment to
+//     split - a commitment to re-ask deliberately. M12 is when an lsm/ program
+//     would first enter the object, which is the first program of a different
+//     *type* rather than another tracepoint, and a type whose attach path
+//     differs. W4 measured that an lsm/ program loads with bpf absent from the
+//     active LSM stack, so the old argument that it would break the load is
+//     dead and must not be revived here. What is left is that the object's
+//     composition genuinely changes, and that is the natural place to look
+//     again rather than letting one object become permanent by default.
+//
+// Absent 1 or 2, do not split this object. The ratchet argument that used to
+// force the timing - every probe added makes the split more expensive to
+// reverse - does not transfer to the mechanism above, which is generic and
+// independent of program count.
+//
+// A separate escalation, which is NOT an Option 3 trigger and is recorded here
+// so it is not mistaken for one. If degradation converges only by leaving a
+// capability the active envelope grants unobservable, the session must not
+// proceed as though nothing happened - that is the "blind spot dressed as a
+// control" pkg/capability already names, and it needs a decision. The decision
+// is very unlikely to be a split, because a split would contain no better:
+// degradation converges on the *maximal* loadable subset, while a split offers
+// a *fixed* partition, and the maximal subset is by construction at least as
+// large as whatever modules a split would leave standing. Absent an aggregate
+// limit under trigger 1, reactive degradation weakly dominates any split on
+// surviving probe count. The remedies worth weighing there are per-kernel
+// builds, raising the runtime floor, or declaring a domain unsupported on that
+// kernel - not object granularity.
+//
+// Both triggers are field-observable only, which makes them dependent on the
+// M6 reporting path. The pre-6.3 capability path has never executed and no
+// 5.8-6.2 kernel is available in this verification environment, so neither
+// trigger will fire from this project's own testing; they fire on somebody
+// else's kernel. A capability gap reported in allseerctl status on an
+// operator's machine is not evidence that reaches whoever decides about
+// Option 3, so the M6 reporting work must carry the gap into the audit record
+// and into whatever a bug report contains, not only into a status query.
+//
+// The expected outcome, said plainly. These triggers are deliberately hard to
+// fire, which is the correct bias given that two predicted forcing problems
+// both failed to materialise. The practical consequence is that one BPF object
+// is likely to be permanent, and trigger 2 is the only realistic path to a
+// split. That is recorded rather than left as an emergent property, because
+// the reversed mandate failed as a standing commitment that stopped being
+// re-examined, and a contingency nobody expects to fire can fail the same way
+// in the opposite direction.
+//
+// Two things the reversal does not change. First, none of this is performance
+// work and no part of it may be justified as such: attach cost measured +0.19%
+// and +0.18% across all twenty-eight programs on two different machines, and
+// the emit step +0.67% with an interval containing zero, so the question is
+// closed from both directions. Second, the concentration of risk is real -
+// twenty-two of the twenty-eight programs sit on the most kernel-variable
+// syscalls in the set - and it is precisely why the degradation floor and the
+// family granularity above are shaped the way they are.
+//
+// Two claims from the superseded mandate are withdrawn rather than carried
+// forward. It said the split would prepare "the platform architecture for
+// future Linux kernel diversity and Windows support". The Linux half holds and
+// is what the contingency is for; the Windows half does not, because Windows
+// arrives through the event.Source seam that replay and synth already exercise,
+// and splitting one Linux-only object into four Linux-only objects moves
+// nothing toward it. It also said the milestone "is not conditional on the
+// current workaround failing" - a clause that made the decision unfalsifiable,
+// and the reason it outlived two measurements that disconfirmed it.
 // TODO(telemetry): decide the path resolution strategy. Full dentry walking in
 // the kernel is expensive and bounded by the verifier's loop limits; resolving
 // in user space races with rename. Neither is clean.
