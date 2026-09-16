@@ -52,6 +52,11 @@ type Collector interface {
 type ProbeInfo struct {
 	Name string `json:"name"`
 
+	// Family is the degradation unit this probe belongs to. Programs in a
+	// family attach together or not at all, so a family is what coverage is
+	// computed over rather than the program.
+	Family string `json:"family"`
+
 	// Type is the eBPF program type: "tracepoint", "kprobe", "fentry", "lsm".
 	Type string `json:"type"`
 
@@ -61,6 +66,12 @@ type ProbeInfo struct {
 	// Capabilities lists the kinds this probe can observe, which is what lets
 	// the daemon compute coverage against an envelope.
 	Capabilities []capability.Kind `json:"capabilities"`
+
+	// Loaded reports whether the program is in the loaded object at all.
+	// Distinct from Attached because a partial load and a failed attach are
+	// different faults with the same symptom: a program that was never loaded
+	// cannot be retried, and one that loaded but did not attach can.
+	Loaded bool `json:"loaded"`
 
 	// Attached reports whether attachment succeeded. A probe that failed to
 	// attach is a blind spot and must be surfaced loudly, not logged at debug

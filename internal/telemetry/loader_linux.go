@@ -118,145 +118,6 @@ const (
 	MapPrivScratch = "priv_scratch"
 )
 
-// Program names, as bpf/allseer.bpf.c declares them, for Attach. libbpf
-// resolves the attach point from each program's SEC(), so the tracepoint is
-// named in one place — the C file — and not restated here.
-//
-// Attaching is per program and the caller chooses which: the loader has no list
-// of "all probes" and deliberately does not honour Config.EnabledProbes, for
-// the reason recorded at the foot of this file.
-const (
-	// ProgProcExec is the sched_process_exec program, emitting
-	// ALLSEER_EVT_PROC_EXEC.
-	ProgProcExec = "proc_exec"
-
-	// ProgProcExit is the sched_process_exit program, emitting
-	// ALLSEER_EVT_PROC_EXIT. The pair to ProgProcExec: attaching one without
-	// the other gives a governed process a beginning with no end, which is what
-	// telemetry.ProcessTracker.Untrack has no signal for until both are on.
-	ProgProcExit = "proc_exit"
-
-	// ProgOpenatEnter is the sys_enter_openat program. It emits nothing.
-	//
-	// Named as a probe anyway because it is one: it performs the cgroup filter
-	// decision for every open this object reports, and it is what captures the
-	// path, the flags and the mode. What it does with them is store them, in
-	// openat_scratch, for ProgOpenatExit to complete — the entry has the
-	// arguments and no return, and struct allseer_event has a `ret` field the
-	// header defines as a syscall return.
-	ProgOpenatEnter = "openat_enter"
-
-	// ProgOpenatExit is the sys_exit_openat program, emitting
-	// ALLSEER_EVT_FILE_OPEN.
-	//
-	// A pair in a stronger sense than ProgProcExec and ProgProcExit are, which
-	// are two probes reporting two different things. These two are one probe
-	// split across two hooks by the shape of a syscall, and attaching either
-	// alone yields no events at all rather than half of them: the entry side
-	// never emits, and the exit side emits only what it finds a scratch entry
-	// for. A caller that attaches one and not the other has a blind spot that
-	// looks exactly like a quiet host.
-	ProgOpenatExit = "openat_exit"
-
-	// ProgConnectEnter is the sys_enter_connect program. It emits nothing.
-	//
-	// The entry half of the second syscall pair, and the same shape as
-	// ProgOpenatEnter: it performs the cgroup filter decision for every connect
-	// this object reports, captures the destination out of user memory, and
-	// stores it in connect_scratch for ProgConnectExit to complete.
-	ProgConnectEnter = "connect_enter"
-
-	// ProgConnectExit is the sys_exit_connect program, emitting
-	// ALLSEER_EVT_NET_CONNECT.
-	//
-	// Useless apart from ProgConnectEnter in the same way ProgOpenatExit is
-	// from its own entry side: attaching either alone yields no events rather
-	// than half of them, which looks exactly like a host that made no outbound
-	// connections. For a capability the catalog rates SeverityHigh — "it is how
-	// data leaves, and it cannot be undone after the fact" — that is the blind
-	// spot most worth not having by accident.
-	ProgConnectExit = "connect_exit"
-)
-
-// The privilege programs, one enter/exit pair per credential syscall, all
-// emitting ALLSEER_EVT_PRIV_CHANGE.
-//
-// Eleven pairs rather than one program, because the syscall is what names the
-// operation: struct allseer_event carries no syscall identifier, so the
-// `operation` field in the payload is the only thing that separates a setuid
-// record from a capset one, and a program attached to a single tracepoint knows
-// its own answer as a compile-time constant.
-//
-// Every pair behaves like the openat and connect pairs and fails the same way
-// when half-attached: the entry side never emits and the exit side emits only
-// what it finds a scratch entry for, so one without the other is a blind spot
-// that looks exactly like a process that never changed its credentials. All
-// five privilege capabilities in the M1 catalog are graded critical or high, so
-// that is a blind spot worth not having by accident — which is why
-// ProgPrivPairs exists rather than leaving each caller to assemble the list.
-const (
-	ProgPrivSetuidEnter = "priv_enter_setuid"
-	ProgPrivSetuidExit  = "priv_exit_setuid"
-
-	ProgPrivSetreuidEnter = "priv_enter_setreuid"
-	ProgPrivSetreuidExit  = "priv_exit_setreuid"
-
-	ProgPrivSetresuidEnter = "priv_enter_setresuid"
-	ProgPrivSetresuidExit  = "priv_exit_setresuid"
-
-	ProgPrivSetgidEnter = "priv_enter_setgid"
-	ProgPrivSetgidExit  = "priv_exit_setgid"
-
-	ProgPrivSetregidEnter = "priv_enter_setregid"
-	ProgPrivSetregidExit  = "priv_exit_setregid"
-
-	ProgPrivSetresgidEnter = "priv_enter_setresgid"
-	ProgPrivSetresgidExit  = "priv_exit_setresgid"
-
-	ProgPrivSetgroupsEnter = "priv_enter_setgroups"
-	ProgPrivSetgroupsExit  = "priv_exit_setgroups"
-
-	ProgPrivCapsetEnter = "priv_enter_capset"
-	ProgPrivCapsetExit  = "priv_exit_capset"
-
-	ProgPrivUnshareEnter = "priv_enter_unshare"
-	ProgPrivUnshareExit  = "priv_exit_unshare"
-
-	ProgPrivSetnsEnter = "priv_enter_setns"
-	ProgPrivSetnsExit  = "priv_exit_setns"
-
-	ProgPrivSeccompEnter = "priv_enter_seccomp"
-	ProgPrivSeccompExit  = "priv_exit_seccomp"
-)
-
-// ProgPrivPairs is every privilege program, entry before its own exit.
-//
-// A list rather than a set of loose constants, because the failure it prevents
-// is arithmetic: twenty-two names attached by hand is twenty-two chances to
-// omit one, and an omitted exit program is silent — it produces no error, no
-// event, and no way to tell the difference between "this syscall was never
-// called" and "this half was never attached".
-//
-// It is not a general "all probes" list and does not make one: the loader still
-// has no such concept, still attaches per program, and still does not honour
-// Config.EnabledProbes. A caller that wants exec, exit, openat and connect
-// without privilege telemetry simply does not range over this.
-func ProgPrivPairs() []string {
-	return []string{
-		ProgPrivSetuidEnter, ProgPrivSetuidExit,
-		ProgPrivSetreuidEnter, ProgPrivSetreuidExit,
-		ProgPrivSetresuidEnter, ProgPrivSetresuidExit,
-		ProgPrivSetgidEnter, ProgPrivSetgidExit,
-		ProgPrivSetregidEnter, ProgPrivSetregidExit,
-		ProgPrivSetresgidEnter, ProgPrivSetresgidExit,
-		ProgPrivSetgroupsEnter, ProgPrivSetgroupsExit,
-		ProgPrivCapsetEnter, ProgPrivCapsetExit,
-		ProgPrivUnshareEnter, ProgPrivUnshareExit,
-		ProgPrivSetnsEnter, ProgPrivSetnsExit,
-		ProgPrivSeccompEnter, ProgPrivSeccompExit,
-	}
-}
-
 const (
 	// ringBufferPollMS is how long libbpf waits in epoll before checking
 	// whether it has been asked to stop. It bounds shutdown latency and
@@ -352,6 +213,16 @@ type BPFLoader struct {
 	links    map[string]*bpf.BPFLink
 	ringBufs map[string]*bpf.RingBuffer
 	closed   bool
+
+	// loaded is which programs the loaded object actually carries, recorded at
+	// Load. Every program is present today; family-granular degradation is what
+	// will make this a subset.
+	loaded map[string]bool
+
+	// attachErrs is why an attach failed, kept because the failure is the
+	// report. A probe that did not attach is a blind spot, and a blind spot
+	// with no reason attached cannot be acted on.
+	attachErrs map[string]string
 }
 
 var _ Loader = (*BPFLoader)(nil)
@@ -368,10 +239,12 @@ func NewLoader(cfg Config, decoder Decoder) *BPFLoader {
 		decoder = NewDecoder()
 	}
 	return &BPFLoader{
-		cfg:      cfg,
-		decoder:  decoder,
-		links:    make(map[string]*bpf.BPFLink),
-		ringBufs: make(map[string]*bpf.RingBuffer),
+		cfg:        cfg,
+		decoder:    decoder,
+		links:      make(map[string]*bpf.BPFLink),
+		ringBufs:   make(map[string]*bpf.RingBuffer),
+		loaded:     make(map[string]bool),
+		attachErrs: make(map[string]string),
 	}
 }
 
@@ -460,7 +333,21 @@ func (l *BPFLoader) Load(ctx context.Context, objectPath string) error {
 	}
 
 	l.module = module
+	l.recordLoadedLocked()
 	return nil
+}
+
+// recordLoadedLocked notes which of the object's programs are present.
+//
+// Asked per known program rather than by iterating the module, so a program the
+// object gained without this table hearing about it does not quietly become
+// coverage. The staleness test is what keeps the table honest.
+func (l *BPFLoader) recordLoadedLocked() {
+	for _, d := range AllProbes() {
+		if _, err := l.module.GetProgram(d.Name); err == nil {
+			l.loaded[d.Name] = true
+		}
+	}
 }
 
 // resizeRingBuffer applies Config.RingBufferSize to the events map.
@@ -535,15 +422,60 @@ func (l *BPFLoader) Attach(ctx context.Context, programName string) error {
 
 	prog, err := l.module.GetProgram(programName)
 	if err != nil {
-		return fmt.Errorf("telemetry: program %q: %w", programName, err)
+		err = fmt.Errorf("telemetry: program %q: %w", programName, err)
+		l.attachErrs[programName] = err.Error()
+		return err
 	}
 	link, err := prog.AttachGeneric()
 	if err != nil {
-		return fmt.Errorf("telemetry: attaching %q: %w", programName, err)
+		err = fmt.Errorf("telemetry: attaching %q: %w", programName, err)
+		l.attachErrs[programName] = err.Error()
+		return err
 	}
 
+	delete(l.attachErrs, programName)
 	l.links[programName] = link
 	return nil
+}
+
+// Probes reports per-program load and attach status, in declaration order.
+//
+// The loader owns this because the loader is what knows: which programs the
+// object carried is a Load-time fact and which attached is an Attach-time one,
+// and neither is recoverable afterwards from the kernel. Collector.Probes
+// becomes a thin adapter over this rather than a second tally.
+//
+// Static fields come from the portable probe table, so a build without a kernel
+// still knows what each probe would have observed.
+func (l *BPFLoader) Probes() []ProbeInfo {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	descs := AllProbes()
+	out := make([]ProbeInfo, 0, len(descs))
+	for _, d := range descs {
+		_, attached := l.links[d.Name]
+		out = append(out, ProbeInfo{
+			Name:         d.Name,
+			Family:       d.Family,
+			Type:         d.Type,
+			AttachPoint:  d.AttachPoint,
+			Capabilities: capabilitiesFor([]ProbeDescriptor{d}),
+			Loaded:       l.loaded[d.Name],
+			Attached:     attached,
+			Error:        l.attachErrs[d.Name],
+		})
+	}
+	return out
+}
+
+// Coverage reports what this loader's attached set can observe.
+//
+// The whole chain in one call: attached programs to complete families to
+// observable capabilities. Pass the result to Coverage.Apply to record it on
+// the catalog an envelope is validated against.
+func (l *BPFLoader) Coverage() Coverage {
+	return ComputeCoverage(l.Probes())
 }
 
 // RingBuffer returns the raw record stream for a named map.
