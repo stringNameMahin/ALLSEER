@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://allseer.dev/schema/decision/v1alpha1.json",
+  "$id": "https://allseer.dev/schema/decision.v1alpha1.schema.json",
   "title": "ALLSEER Governance Decision",
   "description": "The verdict rendered for an observed event, with the full reasoning chain behind it. This is the system's public product and the record a human reads when asking why an agent was stopped, so it carries the reasoning rather than just the outcome.",
   "type": "object",

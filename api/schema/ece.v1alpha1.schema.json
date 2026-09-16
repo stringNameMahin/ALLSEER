@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://allseer.dev/schema/ece/v1alpha1.json",
+  "$id": "https://allseer.dev/schema/ece.v1alpha1.schema.json",
   "title": "Expected Capability Envelope",
   "description": "A task-specific specification of the capabilities an AI agent is expected to exercise, derived from user intent before execution begins. The envelope is the reference against which all observed kernel behavior is validated. It is immutable once sealed.",
   "type": "object",

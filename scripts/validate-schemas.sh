@@ -10,8 +10,14 @@ SCHEMA_DIR="api/schema"
 EXAMPLE_DIR="api/schema/examples"
 
 if ! command -v check-jsonschema >/dev/null 2>&1; then
-  echo "check-jsonschema not found, install with: pip install check-jsonschema"
+  echo "check-jsonschema not found. Install with one of:"
+  echo "    sudo apt-get install python3-check-jsonschema"
+  echo "    pip install check-jsonschema"
   echo "skipping schema validation"
+  echo ""
+  echo "NOTE: this skip is not a pass. Every example in api/schema/examples/"
+  echo "went unvalidated for the life of this script because nobody had the"
+  echo "tool installed, and one of them did not validate. Install it."
   exit 0
 fi
 
@@ -46,9 +52,7 @@ validate "$SCHEMA_DIR/ece.v1alpha1.schema.json" "$EXAMPLE_DIR/ece.example.json"
 validate "$SCHEMA_DIR/decision.v1alpha1.schema.json" "$EXAMPLE_DIR/decision.example.json"
 validate "$SCHEMA_DIR/decision.v1alpha1.schema.json" "$EXAMPLE_DIR/decision.unscored.example.json"
 
-# TODO: event.example.json is not written yet. Add it here once it exists; a
-# missing example is reported as a failure so the gap stays visible rather than
-# passing silently.
+validate "$SCHEMA_DIR/event.v1alpha1.schema.json" "$EXAMPLE_DIR/event.example.json"
 
 echo ""
 if [[ $fail -eq 0 ]]; then

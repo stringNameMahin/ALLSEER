@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://allseer.dev/schema/event/v1alpha1.json",
+  "$id": "https://allseer.dev/schema/event.v1alpha1.schema.json",
   "title": "ALLSEER Kernel Event",
   "description": "A single kernel-observed action attributed to a governed process. Events originate in eBPF programs as fixed-size C structs, cross into user space via ring buffer, and are decoded and enriched into this form. Everything downstream consumes this schema and nothing else, which is what allows the eBPF layer to be replaced or replayed without any other module noticing.",
   "type": "object",

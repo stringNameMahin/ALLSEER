@@ -1,0 +1,40 @@
+{
+  "id": "gt-008",
+  "session_id": "s-git",
+  "sequence": 8,
+  "kernel_timestamp": 16400000,
+  "wall_clock": "2026-03-02T12:40:00.016Z",
+  "capability": "fs.write",
+  "domain": "filesystem",
+  "syscall": "openat",
+  "result": {
+    "return_code": 8,
+    "succeeded": true
+  },
+  "process": {
+    "pid": 6300,
+    "tid": 6300,
+    "ppid": 6299,
+    "uid": 1000,
+    "gid": 1000,
+    "comm": "git",
+    "executable": "/usr/bin/git",
+    "cgroup_id": 9003,
+    "start_time": 91800000,
+    "ancestry_depth": 0
+  },
+  "file": {
+    "path": ".github/workflows/release.yml",
+    "resolved_path": "/home/dev/project/.github/workflows/release.yml",
+    "flags": 577,
+    "mode": 420,
+    "inode": 525700,
+    "device": 2049,
+    "bytes_transferred": 1420
+  },
+  "observation": {
+    "kind": "fs.write",
+    "domain": "filesystem",
+    "target": "/home/dev/project/.github/workflows/release.yml"
+  }
+}

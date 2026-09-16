@@ -91,7 +91,7 @@ clean: ## Remove build artifacts
 ##@ Quality
 
 .PHONY: check
-check: fmt-check vet lint test ## Run every check the CI pipeline runs
+check: fmt-check vet lint schema-check test ## Run every check the CI pipeline runs
 
 .PHONY: fmt
 fmt: ## Format all Go source

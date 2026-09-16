@@ -1,5 +1,4 @@
 {
-  "$comment": "Reference envelope for the prompt 'add a rate limiter to the HTTP middleware and run the tests'. Hand-written to illustrate the intended precision of a generated envelope: narrow path globs, a specific executable allowlist, a proxy-only network grant, and explicit denials carving dangerous paths out of a broad workspace write grant. Used as a schema fixture and as a few-shot example for the LLM analyzer.",
 
   "schema_version": "allseer.dev/ece/v1alpha1",
   "id": "3f8a1c2e-5b7d-4e91-a0c3-8d2f6b4e9a17",
