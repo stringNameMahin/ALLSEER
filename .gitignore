@@ -58,6 +58,13 @@ future_work.md
 devdocs/
 LICENSE
 
+# Generated development reports belong in devdocs/ and are covered by the rule
+# above. These two patterns catch the case where one is written to the
+# repository root instead, which is where the habit puts them and where nothing
+# else would stop a `git add -A` from publishing internal notes.
+Audit_*.md
+Report_*.md
+
 # Merge / patch leftovers
 *.orig
 *.rej
