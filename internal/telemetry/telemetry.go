@@ -157,9 +157,22 @@ type Decoder interface {
 type Enricher interface {
 	// Enrich augments the event in place.
 	//
+	// It may only fill fields the decoder left empty - ResolvedPath, Hostname,
+	// Executable, Interpreter, BinaryHash, AncestryDepth. It must never
+	// overwrite a value that came off the wire. pkg/event states the rule and
+	// why it replaced the immutability claim that used to sit beside this
+	// signature: the record is evidence, and an enriched field disagreeing with
+	// a decoded one destroys the ability to say which was observed.
+	//
+	// The event is mutated through this pointer rather than returned as a new
+	// value. That is deliberate and was settled on 2026-09-16; the fill-only
+	// rule is what makes it safe, and it is a rule a test can check.
+	//
 	// An error means enrichment failed, which downstream must treat as
 	// VerdictIndeterminate rather than a benign absence of data. Failing to
-	// resolve a path is not the same as the path being safe.
+	// resolve a path is not the same as the path being safe. An enricher that
+	// returns an error must leave the event as it found it, so a partially
+	// filled record never reaches validation looking complete.
 	Enrich(ctx context.Context, e *event.Event) error
 
 	// Name identifies the enricher for metrics and configuration.

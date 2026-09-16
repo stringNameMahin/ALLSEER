@@ -12,8 +12,29 @@
 //  1. The kernel side must stay cheap. Probes emit small flat records with
 //     minimal string work; enrichment happens in user space where it is safe to
 //     be slow.
-//  2. Events are immutable once decoded. Enrichment produces a new value rather
-//     than mutating in place, so a stage that panics cannot corrupt the record.
+//
+//  2. Enrichment fills, never overwrites. A decoded event is already complete
+//     in every field the kernel supplied, and telemetry.Enricher may only
+//     populate fields the decoder deliberately left empty - ResolvedPath,
+//     Hostname, Executable, Interpreter, BinaryHash, AncestryDepth. It must
+//     never change a value that came off the wire. The record is evidence, and
+//     an enriched field that disagrees with the decoded one destroys the
+//     ability to say which of the two was observed.
+//
+//     Enrichment mutates in place, through the *Event that
+//     telemetry.Enricher.Enrich takes. An earlier revision of this list said
+//     the opposite - that enrichment "produces a new value rather than mutating
+//     in place, so a stage that panics cannot corrupt the record" - while the
+//     interface had always taken a pointer. Resolved 2026-09-16 in favour of
+//     the signature, for three reasons: the copy bought nothing the pipeline
+//     does not already have, since EventPipeline recovers from a stage panic
+//     and turns it into an explicit indeterminate decision rather than
+//     continuing with the record; copying an event per enricher is four copies
+//     per event on the hot path, for a guarantee against a case that is already
+//     handled; and a claim no signature enforced was going to be contradicted
+//     by the first enricher written against it. The fill-only rule above is the
+//     invariant that survives, and unlike immutability it is testable.
+//
 //  3. Every event must be independently interpretable. Correlation IDs ride on
 //     the event itself, so an audit log line needs no external state to be
 //     understood months later.
