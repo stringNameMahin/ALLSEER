@@ -24,7 +24,7 @@ import (
 // when the grant does not narrow that dimension at all. That holds for denials
 // as well as grants, which is what makes it safe in both directions.
 //
-// See docs/selector-matching.md.
+// See devdocs/selector-matching.md.
 
 // MatchResult is the outcome of matching one observation against one grant.
 //
@@ -182,7 +182,7 @@ func (m *SelectorMatcher) matchNetwork(sel capability.Selector, obs capability.O
 // destination: its correlated name, its literal address, or both.
 //
 // Both are tried because both are facts. Matching the address against a CIDR
-// grant is not the hopeful equivalence docs/network-matching.md forbids — the
+// grant is not the hopeful equivalence devdocs/network-matching.md forbids — the
 // address is what the kernel connected to. What is forbidden is treating an
 // address as standing in for a name nobody observed, and that case ends here as
 // unevaluable rather than as a mismatch.

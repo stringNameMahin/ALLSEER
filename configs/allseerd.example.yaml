@@ -101,7 +101,7 @@ risk:
     - "**/.env.*"
   # Both lists are deployment-specific *additions*. The shipped baseline lives
   # in configs/sensitivity.default.yaml, which has a `paths` section and a
-  # `hosts` section; host patterns follow docs/network-matching.md's vocabulary
+  # `hosts` section; host patterns follow devdocs/network-matching.md's vocabulary
   # and are not filesystem globs.
   sensitive_hosts: []
   thresholds:

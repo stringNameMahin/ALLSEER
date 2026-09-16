@@ -168,8 +168,8 @@ func TestNormalFlowThroughEveryStage(t *testing.T) {
 	}
 	// Risk was never assessed, and the record has to say so rather than let a
 	// zero score read as an assessment.
-	if d.Risk.Level != "" {
-		t.Errorf("Risk.Level = %q, want empty for an unscored decision", d.Risk.Level)
+	if d.Risk.Level != decision.LevelUnscored {
+		t.Errorf("Risk.Level = %q, want %q for an unscored decision", d.Risk.Level, decision.LevelUnscored)
 	}
 	if !hasReasoning(d, "risk", "not assessed") {
 		t.Error("no reasoning step recording that risk did not run")

@@ -8,7 +8,7 @@ import (
 )
 
 // Path matching is the sharpest security surface in the system, so its rules
-// are stated once, here and in docs/path-matching.md, and implemented literally.
+// are stated once, here and in devdocs/path-matching.md, and implemented literally.
 //
 // The whole semantics in brief:
 //

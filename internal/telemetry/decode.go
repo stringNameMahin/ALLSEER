@@ -163,7 +163,7 @@ var (
 // It holds no state. Decoding one record must not depend on any record before
 // it: a decoder with memory gives two answers for the same bytes, which makes
 // both the fuzz property here and the replay-equals-live property in
-// docs/roadmap.md unprovable.
+// devdocs/roadmap.md unprovable.
 type EventDecoder struct{}
 
 var _ Decoder = (*EventDecoder)(nil)
@@ -693,7 +693,7 @@ func kindForConnectFamily(family uint16) capability.Kind {
 // An open is the one event type whose capability is not fixed by its name, and
 // the repository settles it in two places rather than leaving it open: the
 // catalog lists open/openat/openat2 under fs.read, fs.write *and* fs.create —
-// "Kinds are coarser than syscalls" — and docs/dataflow.md traces
+// "Kinds are coarser than syscalls" — and devdocs/dataflow.md traces
 // `openat(..., O_WRONLY)` through the pipeline as `Kind: fs.write`. The flags
 // are what separate them, which is why the M5 issue for the openat probe
 // specifies that it emits "flags, mode, and the syscall return".

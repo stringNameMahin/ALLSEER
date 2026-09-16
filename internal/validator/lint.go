@@ -41,7 +41,7 @@ import (
 //
 // Only critical refuses admission. Everything else is reported for a human to
 // weigh, because a linter that blocks on judgment calls is a linter operators
-// route around. See docs/grant-precedence.md §5 and docs/path-matching.md §5.
+// route around. See devdocs/grant-precedence.md §5 and devdocs/path-matching.md §5.
 
 // EnvelopeLinter implements ece.Validator over this package's selector
 // semantics.
@@ -323,7 +323,7 @@ func lintPathPatterns(patterns []string, field string, role entryRole) []ece.Iss
 // lintPathAmbiguity reports patterns whose bytes may not be the bytes the
 // kernel will present. Matching is byte-exact by design — it has to agree with
 // the kernel about file identity — so these are resolved by a human at approval
-// time or not at all. See docs/path-matching.md §5.
+// time or not at all. See devdocs/path-matching.md §5.
 func lintPathAmbiguity(pattern, field string, role entryRole) []ece.Issue {
 	var issues []ece.Issue
 

@@ -8,7 +8,7 @@ make a denial miss one it should catch.
 It is loaded by `internal/validator/network_corpus_test.go` and run against
 `validator.MatchHost`, `validator.ValidateHostPattern`, and
 `validator.CorrelationMissing`. The semantics it encodes are specified in
-[`docs/network-matching.md`](../../../docs/network-matching.md); when the two
+[`devdocs/network-matching.md`](../../../devdocs/network-matching.md); when the two
 disagree, the specification is right.
 
 ## Format

@@ -38,9 +38,17 @@ echo ""
 echo "Validating example documents:"
 validate "$SCHEMA_DIR/ece.v1alpha1.schema.json" "$EXAMPLE_DIR/ece.example.json"
 
-# TODO: event.example.json and decision.example.json are not written yet. Add
-# them here once they exist; a missing example is reported as a failure so the
-# gap stays visible rather than passing silently.
+# Two decision documents rather than one, because the schema admits two shapes
+# that differ in the field it is easiest to get wrong. The scored example is a
+# real record lifted from test/testdata/golden/; the unscored one is what a
+# stage failure produces, and it is the shape that was rejected by this schema
+# until the wire format was settled.
+validate "$SCHEMA_DIR/decision.v1alpha1.schema.json" "$EXAMPLE_DIR/decision.example.json"
+validate "$SCHEMA_DIR/decision.v1alpha1.schema.json" "$EXAMPLE_DIR/decision.unscored.example.json"
+
+# TODO: event.example.json is not written yet. Add it here once it exists; a
+# missing example is reported as a failure so the gap stays visible rather than
+# passing silently.
 
 echo ""
 if [[ $fail -eq 0 ]]; then

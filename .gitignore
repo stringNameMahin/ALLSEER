@@ -1,11 +1,11 @@
-# --- Secrets
+# Secrets
 .env
 .env.*
 !.env.example
 *.pem
 *.key
 
-# --- Build output
+# Build output
 /bin/
 /dist/
 /out/
@@ -14,18 +14,14 @@
 *.so
 *.dylib
 
-# --- Benchmark sessions
-# scripts/bench-overhead.sh writes one JSONL of run records and one Markdown
-# report per session here. They are measurements of one machine on one day, so
-# the numbers worth keeping go into STATUS.md rather than into the tree.
 /bench/
 
-# --- eBPF artifacts
+# eBPF artifacts
 *.bpf.o
 /bpf/**/vmlinux.h
 /bpf/*.o
 
-# --- Go
+# Go
 *.test
 *.out
 coverage.*
@@ -36,7 +32,7 @@ __debug_bin*
 go.work
 go.work.sum
 
-# --- Tooling / editors
+# Tooling / editors
 .idea/
 .vscode/
 .claude/
@@ -55,15 +51,13 @@ desktop.ini
 *.pid
 *.log
 
-# --- Extras: for devs 
+# Extras: for devs
 STATUS.md
 devRead.md
 future_work.md
-
-# --- WIP DOCS
-docs/
+devdocs/
 LICENSE
 
-# --- Merge / patch leftovers
+# Merge / patch leftovers
 *.orig
 *.rej

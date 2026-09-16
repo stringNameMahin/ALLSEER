@@ -8,7 +8,7 @@
 // # Format
 //
 // Append-only JSON Lines, one decision.Decision per line. Fixed by
-// docs/architecture.md as a communication decision — an audit record has to be
+// devdocs/architecture.md as a communication decision — an audit record has to be
 // greppable and consumable by external tooling without a library — and by
 // config.AuditConfig.Format, which names "jsonl". The record is exactly what
 // encoding/json produces for a Decision: this package adds no envelope, no
@@ -379,4 +379,4 @@ func routine(d decision.Decision) bool {
 // TODO(audit): the drop-with-a-counter behavior decision.Sink's contract
 // suggests. It cannot be written before the end-to-end backpressure policy
 // exists, which is an open decision recorded in internal/pipeline, pkg/event,
-// and docs/dataflow.md, and which M5 and M6 have to inform.
+// and devdocs/dataflow.md, and which M5 and M6 have to inform.

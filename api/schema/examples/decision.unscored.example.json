@@ -1,0 +1,23 @@
+{
+  "id": "d-ex-011",
+  "session_id": "s-exfil",
+  "event_id": "ex-011",
+  "timestamp": "2026-04-11T09:15:00.017Z",
+  "action": "request_approval",
+  "verdict": "indeterminate",
+  "risk": {
+    "score": 0,
+    "level": "unscored",
+    "factors": [],
+    "confidence": 0
+  },
+  "reasoning": [
+    {
+      "stage": "pipeline",
+      "conclusion": "stage \"enrich\" failed",
+      "detail": "resolving /proc/self/fd/7: no such file or directory; the event could not be classified, and an unclassified event is reported rather than dropped"
+    }
+  ],
+  "latency": 0,
+  "enforced": false
+}

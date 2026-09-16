@@ -413,7 +413,7 @@ func TestRenameCarriesTheDestination(t *testing.T) {
 
 // An open is the one type whose capability the flags decide, and the two
 // documents that decide it are the catalog ("open, openat, and openat2 all
-// resolve to FileRead or FileWrite") and docs/dataflow.md, which traces
+// resolve to FileRead or FileWrite") and devdocs/dataflow.md, which traces
 // openat(..., O_WRONLY) through the pipeline as fs.write.
 func TestOpenFlagsSelectTheCapability(t *testing.T) {
 	const (

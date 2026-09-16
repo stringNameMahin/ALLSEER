@@ -66,6 +66,9 @@ func scored() decision.Decision {
 // unscored is the shape both an unscored pipeline and every stage failure
 // produce: Decision.Risk is a value, so a decision nothing scored still carries
 // a zero RiskAssessment. See contradiction 1 in the package doc.
+// unscored is the decision a stage failure produces, in the shape
+// pipeline.IndeterminateHandler now actually produces it: the level named
+// rather than left to the zero value.
 func unscored() decision.Decision {
 	return decision.Decision{
 		ID:        "d-gt-009",
@@ -74,10 +77,24 @@ func unscored() decision.Decision {
 		Timestamp: stamp,
 		Action:    ece.ActionRequestApproval,
 		Verdict:   decision.VerdictIndeterminate,
+		Risk: decision.RiskAssessment{
+			Level:   decision.LevelUnscored,
+			Factors: []decision.Factor{},
+		},
 		Reasoning: []decision.ReasoningStep{
 			{Stage: "pipeline", Conclusion: `stage "score" failed`, Detail: "unreadable input"},
 		},
 	}
+}
+
+// unscoredZero is the same decision with the risk assessment left entirely
+// unset, which is what a producer that forgets would emit. It exists so the
+// marshaler's backstop is exercised by something, rather than only the explicit
+// path the two real producers take.
+func unscoredZero() decision.Decision {
+	d := unscored()
+	d.Risk = decision.RiskAssessment{}
+	return d
 }
 
 // allowed is the routine case RecordAllEvents=false suppresses.
@@ -503,15 +520,21 @@ func TestIdenticalDecisionsSerializeIdentically(t *testing.T) {
 	}
 }
 
-// Contradiction 1, pinned. An unscored decision reaches disk with an empty risk
-// level and a null factor list, neither of which
-// api/schema/decision.v1alpha1.schema.json admits. The writer does not repair
-// it: "" is how a consumer tells unscored from scored-none, and a fabricated
-// level would be an assessment nobody made.
+// Contradiction 1, settled. An unscored decision used to reach disk with an
+// empty risk level and a null factor list, neither of which
+// api/schema/decision.v1alpha1.schema.json admitted, so this build could
+// publish a record that failed its own contract.
 //
-// This test is deliberately a shape assertion rather than a schema check. When
-// the wire-format decision is finally taken — an "unscored" level, a pointer
-// Risk, or an anyOf in the schema — this fails and says so here.
+// The wire-format decision was taken in favour of a named absence:
+// decision.LevelUnscored is now in the schema's level enum, and
+// decision.RiskAssessment.MarshalJSON renders the zero assessment as it. The
+// writer still does not repair anything - it serializes whatever the type
+// produces - and the distinction the empty string used to carry is preserved,
+// because "unscored" is not a member of decision.AllLevels either.
+//
+// This test remains a shape assertion rather than a schema check, and it is
+// what fails if the sink ever starts substituting a real band for an
+// assessment nobody made.
 func TestUnscoredDecisionIsWrittenFaithfully(t *testing.T) {
 	s, path := openSink(t, config.AuditConfig{RecordAllEvents: true})
 
@@ -533,19 +556,50 @@ func TestUnscoredDecisionIsWrittenFaithfully(t *testing.T) {
 		t.Fatalf("decoding: %v", err)
 	}
 	if raw.Risk.Level == nil {
-		t.Fatal("risk.level is absent; it must be present and empty, not omitted")
+		t.Fatal("risk.level is absent; it must be present, not omitted")
 	}
-	if *raw.Risk.Level != "" {
-		t.Errorf(`risk.level = %q, want ""; the sink must not invent a level for an unscored decision`, *raw.Risk.Level)
+	if decision.Level(*raw.Risk.Level) != decision.LevelUnscored {
+		t.Errorf("risk.level = %q, want %q; the sink must not invent a band for an unscored decision",
+			*raw.Risk.Level, decision.LevelUnscored)
 	}
 	if decision.ValidLevel(decision.Level(*raw.Risk.Level)) {
-		t.Error("the empty level is a member of decision.AllLevels; unscored is no longer distinguishable from scored")
+		t.Error("the unscored level is a member of decision.AllLevels; unscored is no longer distinguishable from scored")
 	}
-	if !strings.Contains(line, `"factors":null`) {
-		t.Errorf(`the record does not carry "factors":null; the sink must not substitute an empty array`+"\nline: %s", line)
+	if strings.Contains(line, `"factors":null`) {
+		t.Errorf(`the record carries "factors":null, which the decision schema rejects`+"\nline: %s", line)
+	}
+	if raw.Risk.Factors == nil {
+		t.Errorf("risk.factors decoded as nil; the schema requires an array\nline: %s", line)
+	}
+	if len(raw.Risk.Factors) != 0 {
+		t.Errorf("risk.factors has %d entries; an assessment nobody made has no factors behind it",
+			len(raw.Risk.Factors))
 	}
 	if raw.Risk.Score != 0 || raw.Risk.Confidence != 0 {
 		t.Errorf("score/confidence = %v/%v, want 0/0", raw.Risk.Score, raw.Risk.Confidence)
+	}
+}
+
+// A producer that leaves Risk entirely unset must not be able to publish the
+// shape the schema rejects. The two real producers set the level explicitly, so
+// without this nothing would exercise the marshaler's backstop through the
+// sink.
+func TestUnsetRiskIsWrittenInTheCanonicalUnscoredForm(t *testing.T) {
+	s, path := openSink(t, config.AuditConfig{RecordAllEvents: true})
+
+	if err := s.Emit(context.Background(), unscoredZero()); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	line := lines(t, path)[0]
+	if strings.Contains(line, `"level":""`) {
+		t.Errorf(`the record carries "level":"", which the decision schema rejects`+"\nline: %s", line)
+	}
+	if strings.Contains(line, `"factors":null`) {
+		t.Errorf(`the record carries "factors":null, which the decision schema rejects`+"\nline: %s", line)
+	}
+	if !strings.Contains(line, `"level":"unscored"`) {
+		t.Errorf("the unset assessment did not render as unscored\nline: %s", line)
 	}
 }
 

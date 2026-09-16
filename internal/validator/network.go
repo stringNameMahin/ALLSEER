@@ -22,7 +22,7 @@ import (
 // easiest way to evade a network grant, and nothing in the log would look
 // wrong.
 //
-// See docs/network-matching.md for the full specification.
+// See devdocs/network-matching.md for the full specification.
 
 // HostKind classifies a host pattern or an observed destination.
 //

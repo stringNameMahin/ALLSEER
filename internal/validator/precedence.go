@@ -30,7 +30,7 @@ import (
 //  2. Within a class, the most specific entry wins; ties break toward the
 //     earlier position in the envelope.
 //
-// See docs/grant-precedence.md for the full specification.
+// See devdocs/grant-precedence.md for the full specification.
 
 // Match is one envelope entry that covered an observation, with its position in
 // the envelope's Grants or Denials slice.
@@ -142,7 +142,7 @@ func pickNarrowest(matches []Match, skip int) int {
 // carrying a decorative narrow pattern alongside.
 //
 // The dimensions are compared in a fixed order, documented in
-// docs/grant-precedence.md. The order is part of the specification: a change to
+// devdocs/grant-precedence.md. The order is part of the specification: a change to
 // it changes which grant an audit log names.
 type Specificity struct {
 	dims [numDimensions]int

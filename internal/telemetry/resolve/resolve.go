@@ -1,7 +1,7 @@
 // Package resolve turns a decoded event into the normalized, selector-matchable
 // capability.Observation the validator compares against an envelope.
 //
-// This is the seam named in docs/architecture.md: the envelope declares
+// This is the seam named in devdocs/architecture.md: the envelope declares
 // capabilities as grants, the collector resolves each kernel event to an
 // observation, and the validator asks whether the observation is covered. It
 // lives under telemetry because resolution is the last enrichment step, not a
@@ -18,7 +18,7 @@
 // permitted, never compares against a selector, and never repairs a target it
 // was handed. In particular it will not fall back from ResolvedPath to the raw
 // syscall path: matching a pre-resolution path is exactly the symlink escape
-// docs/path-matching.md exists to prevent, so an event whose path could not be
+// devdocs/path-matching.md exists to prevent, so an event whose path could not be
 // resolved yields an observation with an empty target, and the matcher reports
 // it as unevaluable.
 //

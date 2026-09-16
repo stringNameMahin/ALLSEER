@@ -219,7 +219,7 @@ type Issue struct {
 // TODO(config): implement layered loading with the restrict-only override rule
 // for security-relevant fields.
 // TODO(config): enumerate which fields are security-relevant and therefore
-// restrict-only. That list is itself a security control and belongs in docs/,
+// restrict-only. That list is itself a security control and belongs in devdocs/,
 // not only in code.
 // TODO(config): add `allseerctl config validate` so misconfiguration is caught
 // before a session depends on it.

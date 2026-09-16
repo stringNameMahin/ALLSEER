@@ -492,7 +492,7 @@ type Config struct {
 // allseer_event_type maps to a capability.Kind and the Kind's domain comes from
 // the M1 catalog, never from a second table. ALLSEER_EVT_FILE_OPEN is the one
 // type whose kind the payload decides — the open flags separate fs.read,
-// fs.write, and fs.create, which is the mapping docs/dataflow.md already traces.
+// fs.write, and fs.create, which is the mapping devdocs/dataflow.md already traces.
 // ALLSEER_EVT_PRIV_CHANGE is the second type whose kind the payload decides,
 // and it became decodable when ALLSEER_ABI_VERSION 2 gave the header an `enum
 // allseer_priv_op` to select on: the operation names the syscall, and
@@ -667,7 +667,7 @@ type Config struct {
 // ever loaded, and quiet being what a well-behaved agent looks like - describes
 // a daemon that starts anyway and governs nothing. cmd/allseerd is a stub, so
 // that daemon does not exist yet and does not have to. The discipline is the
-// one docs/roadmap.md already states for the shim: launching ungoverned is the
+// one devdocs/roadmap.md already states for the shim: launching ungoverned is the
 // one failure mode capable of quietly nullifying the entire system. Config
 // already carries FailClosedOnDrop for the analogous case of losing records
 // mid-session; this is the same posture at load time.

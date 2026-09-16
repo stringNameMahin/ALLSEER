@@ -82,7 +82,7 @@ import (
 //
 // # Capability-set deltas are not representable, and this does not pretend
 //
-// docs/milestones.md specifies this scorer "over PrivPayload, including
+// devdocs/milestones.md specifies this scorer "over PrivPayload, including
 // capability set deltas". A delta needs a before and an after. The repository
 // has neither, and its two halves disagree about what it has instead:
 //
@@ -136,7 +136,7 @@ import (
 // FactorPrivilegeChange is the factor's name, and it is a wire contract like
 // every other factor name.
 //
-// The name docs/roadmap.md and configs/allseerd.example.yaml already use, kept
+// The name devdocs/roadmap.md and configs/allseerd.example.yaml already use, kept
 // verbatim: the example config's `privilege_change: 1.5` weight entry has been
 // inert since it was written, and a rename would have left it inert for a
 // second reason.

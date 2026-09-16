@@ -9,6 +9,7 @@ package decision
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
@@ -111,11 +112,20 @@ func ValidVerdict(v Verdict) bool {
 }
 
 // AllLevels returns every risk level, from lowest to highest.
+//
+// LevelUnscored is deliberately absent. This list is an ordering of severity
+// bands, and "no assessment was made" has no place in it: it is not lower than
+// LevelNone, it is not a band at all. Keeping it out is also what stops
+// internal/policy accepting `risk_level: unscored` in a rule condition, which
+// would be a policy feature rather than a wire-format fix.
 func AllLevels() []Level {
 	return []Level{LevelNone, LevelLow, LevelMedium, LevelHigh, LevelCritical}
 }
 
 // ValidLevel reports whether l is a level the risk engine can assign.
+//
+// False for LevelUnscored, which is the point of that value: the risk engine
+// cannot assign it, because it means the engine never ran.
 func ValidLevel(l Level) bool {
 	for _, known := range AllLevels() {
 		if known == l {
@@ -144,6 +154,44 @@ type RiskAssessment struct {
 	Confidence float64 `json:"confidence"`
 }
 
+// MarshalJSON renders the zero assessment in the one form the schema admits.
+//
+// Decision.Risk is a value rather than a pointer, so an unscored decision
+// carries a zero RiskAssessment no matter what the producer does. Written out
+// literally that is `"level": ""` and `"factors": null`, and
+// api/schema/decision.v1alpha1.schema.json admits neither - which meant this
+// build could publish a record that fails its own contract, and did, to disk.
+//
+// Two normalizations, and the distinction between them matters:
+//
+//   - The empty Level becomes LevelUnscored. This is naming an absence, not
+//     inventing an assessment. The empty string and "unscored" carry exactly
+//     the same information; one of them is in the schema's enum and one is a
+//     value that happens not to be.
+//   - A nil Factors becomes an empty array. No factor contributed to an
+//     assessment nobody made, so the empty array is true rather than
+//     flattering. Score and Confidence are left at zero and are not touched:
+//     zero confidence is the honest reading of no evidence.
+//
+// What is deliberately not done is substituting a *band*. Rendering an unscored
+// assessment as LevelNone would turn a governance fault into a clean event, and
+// internal/audit.JSONLSink still writes whatever this produces without
+// inspecting it - the sink stays faithful because the type now has a faithful
+// wire form, not because the sink learned to repair one.
+func (r RiskAssessment) MarshalJSON() ([]byte, error) {
+	// A distinct type so json.Marshal does not re-enter this method.
+	type wire RiskAssessment
+
+	w := wire(r)
+	if w.Level == "" {
+		w.Level = LevelUnscored
+	}
+	if w.Factors == nil {
+		w.Factors = []Factor{}
+	}
+	return json.Marshal(w)
+}
+
 // Level is a bucketed risk score.
 type Level string
 
@@ -153,6 +201,22 @@ const (
 	LevelMedium   Level = "medium"
 	LevelHigh     Level = "high"
 	LevelCritical Level = "critical"
+
+	// LevelUnscored means no risk assessment was made at all.
+	//
+	// It is not a sixth band and it is not "none". LevelNone is a finding -
+	// the engine ran and nothing departed. LevelUnscored is the absence of a
+	// finding: either no risk stage was configured, or a stage failed before
+	// one could be produced. Collapsing the two would make a governance fault
+	// read as a clean event, which is the one substitution this project's
+	// treatment of absent evidence exists to prevent.
+	//
+	// Producers set it explicitly. RiskAssessment.MarshalJSON renders the zero
+	// value as this as well, so a producer that forgets cannot publish a shape
+	// api/schema/decision.v1alpha1.schema.json rejects. That mirrors how the
+	// record ABI version is handled: the explicit set is the mechanism, the
+	// marshaler is the backstop.
+	LevelUnscored Level = "unscored"
 )
 
 // Factor is one contribution to a risk score.

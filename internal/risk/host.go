@@ -29,7 +29,7 @@ import (
 // halves of the system disagreeing about what a host is.
 //
 // That decision settles the vocabulary questions before they can be answered
-// twice, and every answer below is read out of docs/network-matching.md rather
+// twice, and every answer below is read out of devdocs/network-matching.md rather
 // than chosen here:
 //
 //	entry                what it covers
@@ -59,7 +59,7 @@ import (
 //
 // # The name/address boundary is respected, not bridged
 //
-// docs/network-matching.md §1: a name and an address are never assumed to be
+// devdocs/network-matching.md §1: a name and an address are never assumed to be
 // the same thing. MatchHost enforces it, so a name entry can only ever rate an
 // observed name and an address entry can only ever rate an observed address.
 // Nothing here reverse-resolves, and nothing here treats an address as standing
@@ -265,7 +265,7 @@ func compileHostRules(entries []HostSensitivityEntry) []hostRule {
 // canCompare reports whether a pattern of this kind could match an observation
 // of that kind.
 //
-// It is the name/address boundary of docs/network-matching.md §1, and it is
+// It is the name/address boundary of devdocs/network-matching.md §1, and it is
 // used purely to skip work: MatchHost enforces the same boundary and would
 // return false for every pair this rejects, so declining to ask is provably
 // equivalent to asking and being told no.
@@ -372,7 +372,7 @@ func (s SensitiveHostScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 
 	// The observation's target is "host:port" for an endpoint and a bare name
 	// for a DNS query. MatchHost takes a bare host and the caller splits, which
-	// docs/network-matching.md §2 states and this is the caller.
+	// devdocs/network-matching.md §2 states and this is the caller.
 	host := bareHost(sc.target)
 	kind := hostKindLabel(host)
 

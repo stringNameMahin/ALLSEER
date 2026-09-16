@@ -248,6 +248,15 @@ func (h *IndeterminateHandler) Handle(_ context.Context, pc *ProcessingContext, 
 		// field is read downstream as "what covered this", and a run that could
 		// not finish has not established that anything did.
 		Enforced: false,
+
+		// A stage failure is the second way an unscored decision reaches disk,
+		// and the more important one: it is a governance fault rather than a
+		// configuration choice. Saying so explicitly keeps it from arriving as
+		// a zero value that only the marshaler names.
+		Risk: decision.RiskAssessment{
+			Level:   decision.LevelUnscored,
+			Factors: []decision.Factor{},
+		},
 	}
 	if pc.Event != nil {
 		d.EventID = pc.Event.ID

@@ -50,7 +50,7 @@ import (
 //
 // Cross-session parallelism would mean a queue and a worker per session, and a
 // bounded queue needs an answer to what happens when it fills. That answer is
-// the end-to-end backpressure policy, which docs/milestones.md assigns to M6,
+// the end-to-end backpressure policy, which devdocs/milestones.md assigns to M6,
 // where the kernel ring buffer it is really about lives, and which cannot be
 // settled before M5 and M6 establish what the kernel side does under load.
 // Building the queue here would be settling it by accident.

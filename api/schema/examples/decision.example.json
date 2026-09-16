@@ -1,0 +1,121 @@
+{
+  "id": "d-ex-009",
+  "session_id": "s-exfil",
+  "event_id": "ex-009",
+  "timestamp": "2026-04-11T09:15:00.017Z",
+  "action": "request_approval",
+  "verdict": "indeterminate",
+  "risk": {
+    "score": 78,
+    "level": "high",
+    "factors": [
+      {
+        "name": "verdict",
+        "weight": 20,
+        "description": "how the validator classified this event against the envelope",
+        "evidence": {
+          "verdict": "indeterminate"
+        }
+      },
+      {
+        "name": "violation_severity",
+        "weight": 15,
+        "description": "the inherent seriousness of the most serious violation on this event",
+        "evidence": {
+          "severity": "high"
+        }
+      },
+      {
+        "name": "sensitive_host",
+        "weight": 0,
+        "description": "how consequential the destination reached is; this one is unrated",
+        "evidence": {
+          "dimension": "host",
+          "host": "198.51.100.77",
+          "host_kind": "address",
+          "hostname_correlated": "false",
+          "sensitivity": "unknown",
+          "target": "198.51.100.77:8443"
+        }
+      },
+      {
+        "name": "uncorrelated_destination",
+        "weight": 5,
+        "description": "the destination was reached by address with no correlated hostname, so a grant naming hosts could not be compared against it",
+        "evidence": {
+          "capability": "net.connect",
+          "correlation": "missing",
+          "dest_ip": "198.51.100.77",
+          "host": "198.51.100.77",
+          "host_kind": "address",
+          "target": "198.51.100.77:8443"
+        }
+      },
+      {
+        "name": "credential_access_egress",
+        "weight": 30,
+        "description": "a successful read of a resource graded high or above was followed, within the detector's window, by a capability that moves data off the host",
+        "evidence": {
+          "access_capability": "fs.read",
+          "access_event_id": "ex-003",
+          "access_reason": "Long-lived cloud access keys. Disclosure grants access to infrastructure that outlives the session, and the blast radius is whatever the account can reach rather than whatever the workspace contains.\n",
+          "access_sensitivity": "critical",
+          "access_succeeded": "true",
+          "access_target": "/home/dev/.aws/credentials",
+          "distance_events": "6",
+          "egress_capability": "net.connect",
+          "egress_target": "198.51.100.77:8443",
+          "window_events": "256"
+        }
+      },
+      {
+        "name": "novel_target",
+        "weight": 5,
+        "description": "this target had not been touched earlier in the session",
+        "evidence": {
+          "capability": "net.connect",
+          "target": "198.51.100.77:8443"
+        }
+      },
+      {
+        "name": "violation_history",
+        "weight": 3,
+        "description": "violations already recorded this session, one point each up to the cap",
+        "evidence": {
+          "prior_violations": "3"
+        }
+      },
+      {
+        "name": "evidence_basis",
+        "weight": 0,
+        "description": "which of the model's evidence inputs were available",
+        "evidence": {
+          "history_available": "true",
+          "target_resolved": "true",
+          "verdict_conclusive": "false"
+        }
+      }
+    ],
+    "confidence": 0.6
+  },
+  "reasoning": [
+    {
+      "stage": "validator",
+      "conclusion": "resolved observation",
+      "detail": "net.connect on \"198.51.100.77:8443\""
+    },
+    {
+      "stage": "validator",
+      "conclusion": "no grant could be evaluated against this observation",
+      "detail": "cannot tell whether [198.51.100.77] is \"registry.npmjs.org\": no correlated hostname"
+    },
+    {
+      "stage": "policy",
+      "conclusion": "rule \"indeterminate-high-risk\" matched, action request_approval",
+      "detail": "verdict indeterminate, capability net.connect, risk 78 (high), mode monitor"
+    }
+  ],
+  "matched_rule": "indeterminate-high-risk",
+  "latency": 0,
+  "enforced": false
+}

@@ -13,7 +13,7 @@ import (
 //
 // # What it is, and the four things it is not
 //
-// docs/network-matching.md §1 states the rule the whole network side is built
+// devdocs/network-matching.md §1 states the rule the whole network side is built
 // on — a name and an address are never assumed to be the same thing — and names
 // the consequence: when an envelope grants a hostname and the observation
 // carries only an address, matching answers no, and "that false is not an
@@ -51,8 +51,8 @@ import (
 //
 // # Why novel_network_destination is not this scorer, and is not coming
 //
-// The planned scorer list in docs/roadmap.md names novel_network_destination,
-// and docs/milestones.md specifies it as "using risk.History.TargetSeen". That
+// The planned scorer list in devdocs/roadmap.md names novel_network_destination,
+// and devdocs/milestones.md specifies it as "using risk.History.TargetSeen". That
 // specification predates NovelTargetScorer, which implements exactly that
 // mechanism, is domain-agnostic, and already fires on network events —
 // registry.npmjs.org alone produces three separate novelty findings in the npm

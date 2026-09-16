@@ -208,10 +208,13 @@ func TestRiskConditionedRulesStayInertWithoutAScoreStage(t *testing.T) {
 		t.Errorf("Action = %q, want the default action %q", up.Outcome.Action, ece.ActionWarn)
 	}
 
-	// The published record still says so in words as well as in the empty level,
-	// so a reader need not know that "" is not a member of AllLevels.
-	if up.Decision.Risk.Level != "" {
-		t.Errorf("Decision.Risk.Level = %q, want the empty level that means unscored", up.Decision.Risk.Level)
+	// The published record still says so in words as well as in the level, so a
+	// reader need not know that LevelUnscored is not a member of AllLevels.
+	if up.Decision.Risk.Level != decision.LevelUnscored {
+		t.Errorf("Decision.Risk.Level = %q, want %q", up.Decision.Risk.Level, decision.LevelUnscored)
+	}
+	if decision.ValidLevel(up.Decision.Risk.Level) {
+		t.Error("the unscored level is assignable by the risk engine; unscored is no longer distinct from scored")
 	}
 	var said bool
 	for _, s := range up.Decision.Reasoning {

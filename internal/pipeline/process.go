@@ -250,11 +250,19 @@ func (p *EventPipeline) finalize(pc *ProcessingContext) *decision.Decision {
 	if pc.Risk != nil {
 		d.Risk = *pc.Risk
 	} else {
-		// Decision.Risk is a value, so an unscored event publishes a zero
-		// assessment no matter what. What keeps that from reading as an
-		// assessment is Level: "" is not a member of decision.AllLevels, so a
-		// consumer can tell unscored from scored-none. The reasoning says it in
-		// words as well, because a reader should not have to know that.
+		// Decision.Risk is a value, so an unscored event publishes an
+		// assessment no matter what. What keeps that from reading as one is
+		// the level: decision.LevelUnscored is not a member of AllLevels, so a
+		// consumer can tell unscored from scored-none. It is set here rather
+		// than left to the zero value so the in-memory decision and the record
+		// on disk say the same thing; RiskAssessment.MarshalJSON would produce
+		// it either way, and is the backstop rather than the mechanism. The
+		// reasoning says it in words as well, because a reader should not have
+		// to know any of that.
+		d.Risk = decision.RiskAssessment{
+			Level:   decision.LevelUnscored,
+			Factors: []decision.Factor{},
+		}
 		d.Reasoning = append(d.Reasoning, decision.ReasoningStep{
 			Stage:      "risk",
 			Conclusion: "not assessed",

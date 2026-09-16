@@ -8,7 +8,7 @@ make a denial miss something it should catch.
 It is loaded by `internal/validator/path_corpus_test.go`, which runs every line
 against `validator.MatchPath`, `validator.ValidatePattern`, and
 `validator.IsResolved`. The semantics the table encodes are specified in
-[`docs/path-matching.md`](../../../docs/path-matching.md); when the two
+[`devdocs/path-matching.md`](../../../devdocs/path-matching.md); when the two
 disagree, the specification is right and one of the other two is a bug.
 
 ## Format

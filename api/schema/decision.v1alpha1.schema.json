@@ -76,7 +76,8 @@
 
     "level": {
       "type": "string",
-      "enum": ["none", "low", "medium", "high", "critical"]
+      "enum": ["none", "low", "medium", "high", "critical", "unscored"],
+      "description": "The bucketed risk score. The first five are severity bands the risk engine assigns, ordered lowest to highest. 'unscored' is not a sixth band: it means no assessment was made, because no risk stage ran or because a stage failed before one could be produced. A consumer must not read it as a low score. 'none' is a finding - the engine ran and nothing departed; 'unscored' is the absence of a finding, and a decision carrying it says so in its reasoning chain as well."
     },
 
     "riskAssessment": {

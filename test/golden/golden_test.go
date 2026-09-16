@@ -444,7 +444,7 @@ func TestGoldenDecisionsAreTheExpectedFindings(t *testing.T) {
 // api/schema/decision.v1alpha1.schema.json requires risk.level to be one of five
 // named levels and risk.factors to be an array. Decision.Risk is a value, so a
 // decision nothing scored publishes "" and null, and the schema admits neither
-// — an open wire-format question recorded in docs/milestones.md and STATUS.md
+// — an open wire-format question recorded in devdocs/milestones.md and STATUS.md
 // and deliberately not settled here.
 //
 // Both golden streams run the scored pipeline over recordings that reach policy

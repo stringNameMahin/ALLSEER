@@ -217,7 +217,7 @@ const (
 	// It is carried but not matched: an Observation has one Target, and
 	// selector matching evaluates only that. A rename *into* a protected path
 	// is therefore not caught by a path selector on the destination. See
-	// docs/selector-matching.md.
+	// devdocs/selector-matching.md.
 	AttrNewPath = "new_path"
 )
 

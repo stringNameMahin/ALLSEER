@@ -37,7 +37,7 @@ func TestObserveFile(t *testing.T) {
 // TestObserveFileNeverFallsBackToRawPath is the symlink-escape guard. The raw
 // syscall path may be relative and may traverse a symlink; using it as the
 // target would hand the matcher exactly the pre-resolution path that
-// docs/path-matching.md exists to keep out.
+// devdocs/path-matching.md exists to keep out.
 func TestObserveFileNeverFallsBackToRawPath(t *testing.T) {
 	e := &event.Event{
 		Capability: capability.KindFileRead,

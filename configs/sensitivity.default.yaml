@@ -253,7 +253,7 @@ paths:
 # Patterns here go through internal/validator's ValidateHostPattern and
 # MatchHost — the same functions an envelope's network grants use — so an entry
 # means exactly what an identically written grant means. See
-# docs/network-matching.md, which is the normative specification.
+# devdocs/network-matching.md, which is the normative specification.
 #
 #   api.github.com     an exact name. Compared case-insensitively, with the
 #                      root's trailing dot ignored, on WHOLE names. It does not

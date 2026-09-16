@@ -180,7 +180,7 @@ type Baseline interface {
 // validator.MatchHost rather than through the path matcher — different
 // configuration, different vocabulary, different matcher, and therefore a
 // factor of its own rather than a dimension of another one.
-// Closed: novel_network_destination will not be built. docs/milestones.md
+// Closed: novel_network_destination will not be built. devdocs/milestones.md
 // specifies it as "using risk.History.TargetSeen", and NovelTargetScorer
 // implements exactly that, is domain-agnostic, and already fires on network
 // events — registry.npmjs.org alone produces three separate novelty findings in
@@ -236,7 +236,7 @@ type Baseline interface {
 // SensitiveHostScorer in host.go, over a hosts section of the same list file.
 // The vocabulary is validator.ValidateHostPattern and MatchHost rather than a
 // second one, so an entry means exactly what an identically written network
-// grant means, and the name/address boundary of docs/network-matching.md §1
+// grant means, and the name/address boundary of devdocs/network-matching.md §1
 // holds inside sensitivity too: a destination is rated by the identity the
 // observation carries, and a list meaning to cover both spellings writes both.
 // TODO(risk): the detector proves a temporal relationship and claims nothing
