@@ -842,9 +842,12 @@ type Config struct {
 // where that guess would look reasonable.
 // Its tests need no kernel, no root, no libbpf and no compiled object, which is
 // the property the whole thing exists for.
-// TODO(telemetry): benchmark probe overhead against a realistic build. Target
-// under 5% wall clock, measured rather than assumed.
-// TODO(telemetry): evaluate LSM BPF hooks for synchronous blocking. Tracepoints
-// observe after the fact and can only detect; real prevention needs an LSM hook
-// or seccomp-unotify, and that choice decides what ActionBlock can honestly
-// mean.
+// Done: W3 measured 2026-09-06 at +0.91% wall clock, 95% CI [-0.02%, +1.60%]
+// over 22 pairs, inside the 5% target. The apparatus is bench_linux_test.go,
+// the benchstat package and scripts/bench-overhead.sh. One question stays open
+// and is recorded in STATUS.md: whether a PASS on one uncontended host closes
+// the criterion, or needs a confirming run under stated load.
+// Done: W4 evaluated and closed 2026-09-07. BPF LSM is unavailable by default
+// even where CONFIG_BPF_LSM=y, because it also needs bpf in the lsm= boot
+// parameter, so ActionBlock means "detected and recorded" until M12 chooses an
+// enforcement mechanism.

@@ -17,9 +17,15 @@ if ! command -v check-jsonschema >/dev/null 2>&1; then
   echo ""
   echo "NOTE: this skip is not a pass. Every example in api/schema/examples/"
   echo "went unvalidated for the life of this script because nobody had the"
-  echo "tool installed, and one of them did not validate. Install it."
+  echo "tool installed, and one of them did not validate until 2026-09-16."
+  echo "Install it."
   exit 0
 fi
+
+# The cross-file $refs are relative and the schemas carry absolute $id values,
+# so a resolver treats them as remote and reaches for the network. Pointing the
+# base URI at this directory resolves them to the sibling files instead.
+BASE_URI="file://$(cd "$SCHEMA_DIR" && pwd)/"
 
 fail=0
 
@@ -31,11 +37,11 @@ validate() {
     return
   fi
   printf '  %s ... ' "$(basename "$doc")"
-  if check-jsonschema --schemafile "$schema" "$doc" >/dev/null 2>&1; then
+  if check-jsonschema --base-uri "$BASE_URI" --schemafile "$schema" "$doc" >/dev/null 2>&1; then
     echo "ok"
   else
     echo "FAILED"
-    check-jsonschema --schemafile "$schema" "$doc" || true
+    check-jsonschema --base-uri "$BASE_URI" --schemafile "$schema" "$doc" || true
     fail=1
   fi
 }

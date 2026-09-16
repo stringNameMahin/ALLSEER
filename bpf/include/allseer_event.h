@@ -419,9 +419,11 @@ struct allseer_priv_payload {
  * either way. Naming them means the C compiler and the generated Go decoder
  * agree about them rather than each deciding separately.
  *
- * TODO(bpf): a union of payloads keeps the record small but forces a
- * fixed-size worst-case reservation. Per-type ring buffers would be tighter but
- * multiply the reader complexity. Measure before choosing. */
+ * Done: issue 12 closed 2026-09-07 at one pinned shared ring, on ordering
+ * rather than size. Per-type rings cannot preserve cross-CPU ordering, and
+ * event.Sequence depends on it. The 2026-09-11 Option 3 reversal settled the
+ * question rather than deferring it, since nothing now forces a topology
+ * choice. */
 struct allseer_event {
     __u64 timestamp;        /* bpf_ktime_get_ns(), monotonic since boot */
     __u32 type;             /* enum allseer_event_type */

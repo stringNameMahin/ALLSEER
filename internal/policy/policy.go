@@ -217,6 +217,5 @@ type LintIssue struct {
 // one provable default_action finding is that a catch-all rule displaces it.
 // TODO(policy): decide whether rule sets should be signed. Policy is the file
 // an attacker with local write access would most want to modify.
-// TODO(policy): add a dry-run evaluator replaying a recorded session against a
-// candidate rule set, so operators can see what a change would have done before
-// enabling it.
+// Done: allseerctl policy dry-run replays a recorded stream against a candidate
+// rule set without enforcing. See cmd/allseerctl/policy.go.
