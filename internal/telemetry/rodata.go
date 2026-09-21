@@ -27,7 +27,6 @@ package telemetry
 
 import (
 	"debug/elf"
-	"encoding/binary"
 	"fmt"
 )
 
@@ -111,6 +110,6 @@ func readOnlyU32FromELF(f *elf.File, symbol string) (uint32, error) {
 	// rather than assumed for the reason btf.go gives about BTF's magic:
 	// detecting the other case costs nothing and misreading it costs a wrong
 	// answer to a safety check.
-	var bo binary.ByteOrder = f.ByteOrder
+	bo := f.ByteOrder
 	return bo.Uint32(data[sym.Value : sym.Value+width]), nil
 }

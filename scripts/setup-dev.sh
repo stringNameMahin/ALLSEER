@@ -36,18 +36,20 @@ fi
 
 # --- Linting and validation --------------------------------------------------
 echo ""
-echo "Optional tooling:"
+echo "Required by make check:"
 
 if command -v golangci-lint >/dev/null 2>&1; then
   info "golangci-lint present"
 else
-  warn "golangci-lint not found, install: https://golangci-lint.run/usage/install/"
+  err "golangci-lint not found, install: https://golangci-lint.run/usage/install/"
+  missing=1
 fi
 
 if command -v check-jsonschema >/dev/null 2>&1; then
   info "check-jsonschema present"
 else
-  warn "check-jsonschema not found, install: pip install check-jsonschema"
+  err "check-jsonschema not found, install: pip install check-jsonschema"
+  missing=1
 fi
 
 # --- eBPF toolchain (Linux only) ---------------------------------------------

@@ -108,10 +108,13 @@ vet: ## Run go vet
 	$(GO) vet ./...
 
 .PHONY: lint
-lint: ## Run golangci-lint if installed
-	@command -v golangci-lint >/dev/null \
-		&& golangci-lint run ./... \
-		|| echo "golangci-lint not installed, skipping (see scripts/setup-dev.sh)"
+lint: ## Run golangci-lint. Required: a gate that skips itself is not a gate
+	@command -v golangci-lint >/dev/null || { \
+		echo "golangci-lint not found, and lint is part of check."; \
+		echo "Install it with scripts/setup-dev.sh or from"; \
+		echo "https://golangci-lint.run/usage/install/"; \
+		exit 1; }
+	golangci-lint run ./...
 
 .PHONY: test
 test: ## Run unit tests

@@ -1,0 +1,91 @@
+# ALLSEER continuous integration.
+#
+# The check job runs `make check` rather than restating its steps, so what CI
+# enforces and what a developer runs locally cannot drift apart. golangci-lint
+# is installed explicitly before it, because the whole point of this job is that
+# the lint gate cannot skip itself.
+#
+# The ebpf job vets the code behind `//go:build linux && ebpf`, which the
+# default targets never compile. It stops at vet on purpose. Linking the
+# collector needs a libbpf matching the one libbpfgo pins (1.5.1), and the
+# runner image decides that version, so a link step here would fail for a reason
+# unrelated to the change under test. Loading probes needs root, a BTF-carrying
+# kernel and a compiled object, which is a measurement environment rather than a
+# merge gate, the same split the Makefile makes for test-ebpf.
+
+name: CI
+
+on:
+  push:
+    branches: [stable, dev, experimental]
+  pull_request:
+    branches: [stable, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOLANGCI_LINT_VERSION: v2.5.0
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" "$GOLANGCI_LINT_VERSION"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install check-jsonschema
+        run: pipx install check-jsonschema
+
+      - name: Confirm both gates are present
+        run: |
+          golangci-lint --version
+          check-jsonschema --version
+
+      - name: make check
+        run: make check
+
+      - name: Generated ABI is current
+        run: make gen-check
+
+      - name: Build binaries
+        run: make build
+
+  ebpf:
+    name: ebpf vet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install libbpf headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libbpf-dev
+
+      - name: Vet with the ebpf tag
+        run: go vet -tags ebpf ./...
