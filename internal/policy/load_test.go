@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
@@ -391,12 +392,45 @@ func TestErrorsNameTheSource(t *testing.T) {
 	}
 }
 
+// TestWatchReportsNoSupport pins the distinction the old (nil, nil) return
+// could not make. A caller has to be able to tell "this loader never reloads"
+// from "nothing has changed yet", and only the error carries that.
 func TestWatchReportsNoSupport(t *testing.T) {
 	ch, err := NewLoader().Watch(context.Background(), defaultRuleSetPath)
-	if err != nil {
-		t.Fatalf("Watch: %v", err)
+
+	if err == nil {
+		t.Fatal("Watch reported success; a caller cannot tell there is no hot reload")
+	}
+	if !errors.Is(err, ErrWatchUnsupported) {
+		t.Errorf("Watch error %v does not match ErrWatchUnsupported", err)
+	}
+	if !errors.Is(err, errors.ErrUnsupported) {
+		t.Errorf("Watch error %v does not match errors.ErrUnsupported", err)
 	}
 	if ch != nil {
-		t.Error("Watch returned a channel; nothing delivers to it yet")
+		t.Error("Watch returned a channel; nothing delivers to it")
+	}
+}
+
+// TestWatchFailureIsCheckableBeforeReceiving is the regression guard for the
+// hang. A caller that checks the error first never reaches the nil channel, so
+// the sequence below has to complete rather than block.
+func TestWatchFailureIsCheckableBeforeReceiving(t *testing.T) {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		ch, err := NewLoader().Watch(context.Background(), defaultRuleSetPath)
+		if err != nil {
+			return
+		}
+		for range ch {
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a caller that checks the error still blocked on the channel")
 	}
 }

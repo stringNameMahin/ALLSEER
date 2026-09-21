@@ -165,8 +165,13 @@ type Loader interface {
 	// Load reads a rule set from a path.
 	Load(ctx context.Context, path string) (*RuleSet, error)
 
-	// Watch reports changes to the rule set, enabling hot reload. Nil is a
-	// valid return for implementations that do not support watching.
+	// Watch reports changes to the rule set, enabling hot reload.
+	//
+	// An implementation that cannot watch must return an error wrapping
+	// ErrWatchUnsupported. A nil channel with a nil error is not an acceptable
+	// answer for it: the caller cannot tell that apart from a watcher that has
+	// simply seen no change, and ranging over the nil channel waits forever
+	// while the error check reports success.
 	Watch(ctx context.Context, path string) (<-chan *RuleSet, error)
 }
 

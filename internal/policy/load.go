@@ -76,16 +76,28 @@ func (FileLoader) Load(_ context.Context, path string) (*RuleSet, error) {
 	return parseRuleSet(data, path)
 }
 
-// Watch is not implemented. Nil is the interface's documented answer for a
-// loader that cannot watch, and a caller must read it as "no hot reload" rather
-// than as "nothing has changed yet".
+// ErrWatchUnsupported reports a loader that cannot watch a rule set for
+// changes.
 //
-// TODO(policy): implement watching. It needs a decision first — fsnotify is a
+// It exists because a nil channel and a nil error cannot say this together. A
+// caller that ranges over the nil channel waits forever while its error check
+// reports success, so the loader ends up looking like a watcher that has seen
+// no change rather than one that will never see any. Returning an error keeps
+// "there is no hot reload here" apart from "nothing has changed yet".
+//
+// It wraps errors.ErrUnsupported, so a caller may test either sentinel.
+var ErrWatchUnsupported = fmt.Errorf(
+	"policy: this loader cannot watch a rule set for changes: %w", errors.ErrUnsupported)
+
+// Watch is not implemented and refuses rather than returning an empty success.
+// FileLoader reads a file once; nothing here notices a later write.
+//
+// TODO(policy): implement watching. It needs a decision first: fsnotify is a
 // second dependency, and polling a mtime is dependency-free but has a window in
 // which a half-written file is readable. Whichever wins, a reload must go
 // through Load so a bad file is rejected before it reaches the engine.
 func (FileLoader) Watch(_ context.Context, _ string) (<-chan *RuleSet, error) {
-	return nil, nil
+	return nil, ErrWatchUnsupported
 }
 
 // parseRuleSet decodes and validates rule set bytes. Separate from Load so the
