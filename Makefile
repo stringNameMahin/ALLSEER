@@ -111,8 +111,9 @@ vet: ## Run go vet
 lint: ## Run golangci-lint. Required: a gate that skips itself is not a gate
 	@command -v golangci-lint >/dev/null || { \
 		echo "golangci-lint not found, and lint is part of check."; \
-		echo "Install it with scripts/setup-dev.sh or from"; \
-		echo "https://golangci-lint.run/usage/install/"; \
+		echo "Install it with the same toolchain this module targets:"; \
+		echo "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0"; \
+		echo "A released binary built with an older Go refuses to run here."; \
 		exit 1; }
 	golangci-lint run ./...
 

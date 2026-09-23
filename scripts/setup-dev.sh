@@ -41,7 +41,8 @@ echo "Required by make check:"
 if command -v golangci-lint >/dev/null 2>&1; then
   info "golangci-lint present"
 else
-  err "golangci-lint not found, install: https://golangci-lint.run/usage/install/"
+  err "golangci-lint not found, install it with:"
+  err "  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.5.0"
   missing=1
 fi
 
