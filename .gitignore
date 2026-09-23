@@ -57,6 +57,7 @@ devRead.md
 future_work.md
 devdocs/
 LICENSE
+CI_REPORT.md
 
 # Generated development reports belong in devdocs/ and are covered by the rule
 # above. These two patterns catch the case where one is written to the
