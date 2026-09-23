@@ -219,3 +219,107 @@ todo: ## List every outstanding TODO in the tree
 .PHONY: version
 version: ## Print build metadata
 	@echo "version=$(VERSION) commit=$(COMMIT) date=$(DATE)"
+
+##@ CI
+
+# One target per job in .github/workflows/ci.yml; `make ci` runs them all in
+# pipeline order. Pinned tools install into bin/tools, outputs go to bin/ci.
+include scripts/ci/versions.env
+
+TOOLS_DIR   := $(CURDIR)/$(BIN_DIR)/tools
+LIBBPF_DIR  := $(TOOLS_DIR)/libbpf
+BPF_HDR_DIR := $(TOOLS_DIR)/libbpf-bpf
+CI_OUT      := $(BIN_DIR)/ci
+export PATH := $(TOOLS_DIR):$(PATH)
+
+# cgo settings for the ebpf tag, against the pinned libbpf.
+EBPF_ENV := CGO_ENABLED=1 CGO_CFLAGS="-I$(LIBBPF_DIR)/include" \
+	CGO_LDFLAGS="$(LIBBPF_DIR)/lib/libbpf.a -lelf -lz"
+
+# Default-tag builds need no libbpf. Without this the exported -lbpf fallback
+# breaks every cgo link on a host with no libbpf-dev, such as the CI runners.
+# The ebpf commands set their own CGO_LDFLAGS through EBPF_ENV.
+tools ci-lint ci-static ci-build ci-unit ci-integration ci-security: CGO_LDFLAGS :=
+
+.PHONY: tools
+tools: ## Install every pinned CI tool into bin/tools
+	./scripts/ci/tools.sh
+
+.PHONY: ci
+ci: ## Run the whole CI pipeline locally (integration uses sudo)
+	$(MAKE) ci-lint
+	$(MAKE) ci-static
+	$(MAKE) ci-build
+	$(MAKE) ci-unit
+	$(MAKE) ci-integration
+	$(MAKE) ci-security
+
+.PHONY: ci-lint
+ci-lint: ## CI job: gofmt, golangci-lint, go.mod tidiness, actionlint
+	./scripts/ci/tools.sh golangci-lint actionlint shellcheck
+	$(MAKE) fmt-check lint
+	$(GO) mod tidy -diff
+	actionlint
+
+.PHONY: ci-static
+ci-static: ## CI job: go vet for both tag sets, ABI staleness, schema examples
+	./scripts/ci/tools.sh libbpf check-jsonschema
+	$(GO) vet ./...
+	$(EBPF_ENV) $(GO) vet -tags ebpf ./...
+	$(MAKE) gen-check
+	@command -v check-jsonschema >/dev/null || { echo "check-jsonschema missing"; exit 1; }
+	$(MAKE) schema-check
+
+.PHONY: ci-build
+ci-build: ## CI job: binaries, BPF object, ebpf daemon, integration test binary
+	./scripts/ci/tools.sh libbpf bpf-headers bpftool
+	$(MAKE) build
+	CPATH="$(BPF_HDR_DIR)/include" $(MAKE) bpf
+	@mkdir -p $(CI_OUT)
+	$(EBPF_ENV) $(GO) build -trimpath -tags ebpf -ldflags "$(LDFLAGS)" \
+		-o $(BIN_DIR)/allseerd-ebpf ./cmd/allseerd
+	$(EBPF_ENV) $(GO) build -tags ebpf ./...
+	$(EBPF_ENV) $(GO) test -c -tags ebpf -cover -covermode=atomic \
+		-coverpkg=./internal/telemetry/... -o $(CI_OUT)/telemetry-ebpf.test ./internal/telemetry
+
+.PHONY: ci-unit
+ci-unit: ## CI job: unit tests with race detector and coverage
+	@mkdir -p $(CI_OUT)
+	@status=0; \
+	$(GO) test -race -count=1 -covermode=atomic -coverprofile=$(CI_OUT)/coverage.out \
+		-json ./... > $(CI_OUT)/unit.json || status=$$?; \
+	$(GO) tool cover -func=$(CI_OUT)/coverage.out > $(CI_OUT)/coverage.txt || true; \
+	$(GO) tool cover -html=$(CI_OUT)/coverage.out -o $(CI_OUT)/coverage.html || true; \
+	./scripts/ci/test-summary.sh "Unit tests" $(CI_OUT)/unit.json $(CI_OUT)/coverage.txt \
+		> $(CI_OUT)/unit.md; \
+	cat $(CI_OUT)/unit.md; \
+	if [ -n "$${GITHUB_STEP_SUMMARY:-}" ]; then cat $(CI_OUT)/unit.md >> "$$GITHUB_STEP_SUMMARY"; fi; \
+	exit $$status
+
+# Runs the binary ci-build compiled, as root, from the package directory so the
+# tests find ../../bpf/allseer.bpf.o. Building as the user keeps the Go caches
+# free of root-owned files.
+.PHONY: ci-integration
+ci-integration: ## CI job: ebpf-tagged telemetry tests as root (run ci-build first)
+	@test -x $(CI_OUT)/telemetry-ebpf.test && test -f $(BPF_DIR)/allseer.bpf.o || \
+		{ echo "missing $(CI_OUT)/telemetry-ebpf.test or the BPF object: run make ci-build"; exit 1; }
+	@status=0; sudo=; [ "$$(id -u)" = 0 ] || sudo=sudo; \
+	( cd internal/telemetry && $$sudo ../../$(CI_OUT)/telemetry-ebpf.test -test.v=test2json \
+		-test.count=1 -test.coverprofile=../../$(CI_OUT)/integration-coverage.out 2>&1 ) \
+		| $(GO) tool test2json -t -p $(MODULE)/internal/telemetry > $(CI_OUT)/integration.json \
+		|| status=$$?; \
+	$$sudo chown "$$(id -u):$$(id -g)" $(CI_OUT)/integration-coverage.out 2>/dev/null || true; \
+	$(GO) tool cover -func=$(CI_OUT)/integration-coverage.out > $(CI_OUT)/integration-coverage.txt || true; \
+	./scripts/ci/test-summary.sh "Integration tests ($$(uname -m), kernel $$(uname -r))" \
+		$(CI_OUT)/integration.json $(CI_OUT)/integration-coverage.txt > $(CI_OUT)/integration.md; \
+	cat $(CI_OUT)/integration.md; \
+	if [ -n "$${GITHUB_STEP_SUMMARY:-}" ]; then cat $(CI_OUT)/integration.md >> "$$GITHUB_STEP_SUMMARY"; fi; \
+	exit $$status
+
+.PHONY: ci-security
+ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify
+	./scripts/ci/tools.sh gitleaks govulncheck libbpf
+	gitleaks git --no-banner --redact --exit-code 1 .
+	govulncheck ./...
+	$(EBPF_ENV) govulncheck -tags ebpf ./...
+	$(GO) mod verify
