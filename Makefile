@@ -136,6 +136,18 @@ test-ebpf: bpf ## Vet and test the eBPF-tagged code (Linux + libbpf; loading nee
 	@echo "  sudo -E env PATH=\$$PATH CGO_LDFLAGS=\"$(CGO_LDFLAGS)\" \\"
 	@echo "    $(GO) test -tags ebpf -count=1 ./internal/telemetry/"
 
+# The shipped binaries end to end: allseerd as root with the real object,
+# allseer-shim launching agents as nobody. Needs root, BTF and cgroup v2.
+.PHONY: test-e2e
+test-e2e: bpf ## Run the end-to-end suite as root against freshly built binaries
+	@mkdir -p $(BIN_DIR)/e2e
+	CGO_ENABLED=1 CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) build -tags ebpf -o $(BIN_DIR)/e2e/allseerd ./cmd/allseerd
+	$(GO) build -o $(BIN_DIR)/e2e/allseer-shim ./cmd/allseer-shim
+	$(GO) build -o $(BIN_DIR)/e2e/allseerctl ./cmd/allseerctl
+	$(GO) test -c -o $(BIN_DIR)/e2e/e2e.test ./test/e2e
+	cd test/e2e && sudo env ALLSEER_E2E_BIN=$(CURDIR)/$(BIN_DIR)/e2e \
+		ALLSEER_E2E_OBJECT=$(CURDIR)/$(BPF_DIR)/allseer.bpf.o $(CURDIR)/$(BIN_DIR)/e2e/e2e.test -test.v -test.count=1
+
 .PHONY: golden
 golden: ## Regenerate the committed golden decision streams, then review the diff
 	@echo "Regenerating test/testdata/golden/ from the real pipeline..."
@@ -283,6 +295,8 @@ ci-build: ## CI job: binaries, BPF object, ebpf daemon, integration test binary
 	$(EBPF_ENV) $(GO) build -tags ebpf ./...
 	$(EBPF_ENV) $(GO) test -c -tags ebpf -cover -covermode=atomic \
 		-coverpkg=./internal/telemetry/... -o $(CI_OUT)/telemetry-ebpf.test ./internal/telemetry
+	$(GO) test -c -o $(CI_OUT)/containment.test ./internal/containment
+	$(GO) test -c -o $(CI_OUT)/e2e.test ./test/e2e
 
 .PHONY: ci-unit
 ci-unit: ## CI job: unit tests with race detector and coverage
@@ -302,13 +316,26 @@ ci-unit: ## CI job: unit tests with race detector and coverage
 # tests find ../../bpf/allseer.bpf.o. Building as the user keeps the Go caches
 # free of root-owned files.
 .PHONY: ci-integration
-ci-integration: ## CI job: ebpf-tagged telemetry tests as root (run ci-build first)
-	@test -x $(CI_OUT)/telemetry-ebpf.test && test -f $(BPF_DIR)/allseer.bpf.o || \
-		{ echo "missing $(CI_OUT)/telemetry-ebpf.test or the BPF object: run make ci-build"; exit 1; }
+ci-integration: ## CI job: ebpf telemetry, containment and end-to-end tests as root (run ci-build first)
+	@for f in telemetry-ebpf.test containment.test e2e.test; do test -x $(CI_OUT)/$$f || \
+		{ echo "missing $(CI_OUT)/$$f: run make ci-build"; exit 1; }; done
+	@test -f $(BPF_DIR)/allseer.bpf.o && test -x $(BIN_DIR)/allseerd-ebpf || \
+		{ echo "missing the BPF object or allseerd-ebpf: run make ci-build"; exit 1; }
+	@mkdir -p $(BIN_DIR)/e2e
+	cp $(BIN_DIR)/allseerd-ebpf $(BIN_DIR)/e2e/allseerd
+	cp $(BIN_DIR)/allseer-shim $(BIN_DIR)/allseerctl $(BIN_DIR)/e2e/
 	@status=0; sudo=; [ "$$(id -u)" = 0 ] || sudo=sudo; \
 	( cd internal/telemetry && $$sudo ../../$(CI_OUT)/telemetry-ebpf.test -test.v=test2json \
 		-test.count=1 -test.coverprofile=../../$(CI_OUT)/integration-coverage.out 2>&1 ) \
 		| $(GO) tool test2json -t -p $(MODULE)/internal/telemetry > $(CI_OUT)/integration.json \
+		|| status=$$?; \
+	( cd internal/containment && $$sudo ../../$(CI_OUT)/containment.test -test.v=test2json -test.count=1 2>&1 ) \
+		| $(GO) tool test2json -t -p $(MODULE)/internal/containment >> $(CI_OUT)/integration.json \
+		|| status=$$?; \
+	( cd test/e2e && $$sudo env ALLSEER_E2E_BIN=$(CURDIR)/$(BIN_DIR)/e2e \
+		ALLSEER_E2E_OBJECT=$(CURDIR)/$(BPF_DIR)/allseer.bpf.o \
+		../../$(CI_OUT)/e2e.test -test.v=test2json -test.count=1 2>&1 ) \
+		| $(GO) tool test2json -t -p $(MODULE)/test/e2e >> $(CI_OUT)/integration.json \
 		|| status=$$?; \
 	$$sudo chown "$$(id -u):$$(id -g)" $(CI_OUT)/integration-coverage.out 2>/dev/null || true; \
 	$(GO) tool cover -func=$(CI_OUT)/integration-coverage.out > $(CI_OUT)/integration-coverage.txt || true; \
