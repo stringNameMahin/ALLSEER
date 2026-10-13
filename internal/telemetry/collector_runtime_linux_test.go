@@ -157,8 +157,12 @@ collect:
 			}
 		}
 	}
-	t.Logf("%d events for the session; relative opens resolved %d, unresolved %d (short-lived descriptors)",
-		len(evs), relCorrect, relMissed)
+	t.Logf("%d events for the session; relative opens resolved %d, unresolved %d", len(evs), relCorrect, relMissed)
+	// ABI v3 captures the directory in the kernel, so a short-lived process's
+	// relative opens resolve.
+	if relMissed != 0 || relCorrect != 2 {
+		t.Errorf("relative opens: %d resolved, %d unresolved; want 2 and 0", relCorrect, relMissed)
+	}
 
 	if catExec != 2 {
 		t.Errorf("saw %d execs of /bin/cat, want 2", catExec)
@@ -173,7 +177,7 @@ collect:
 		t.Errorf("saw %d exits, want at least 3", exits)
 	}
 	hostname, _ := filepath.EvalSymlinks("/etc/hostname")
-	for _, want := range []string{hostname, rel} {
+	for _, want := range []string{hostname, rel, target} {
 		if !resolved[want] {
 			t.Errorf("no resolved read of %s; resolved set: %v", want, resolved)
 		}

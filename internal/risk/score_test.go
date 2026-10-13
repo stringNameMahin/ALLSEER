@@ -612,8 +612,8 @@ func TestLevelBoundaries(t *testing.T) {
 // --- 9. clamping ------------------------------------------------------------------------------
 
 func TestScoreClamps(t *testing.T) {
-	// The unrated model's theoretical maximum is 140 — every factor at its
-	// ceiling — and it has to land on 100 rather than run off the scale a policy
+	// The unrated model's theoretical maximum is 170, every factor at its
+	// ceiling, and it has to land on 100 rather than run off the scale a policy
 	// threshold is expressed on. Asserted as an inequality rather than a number,
 	// because what this test needs is that clamping is reachable at all.
 	var ceiling float64
@@ -964,9 +964,21 @@ func TestScorersAgreeWithTheirOwnMetadata(t *testing.T) {
 		History:  history().withViolations(100),
 	}
 
+	// A path the kernel could not vouch for, which is the only shape that
+	// reaches unverifiable_path.
+	truncated := fileEvent(capability.KindFileRead, "")
+	truncated.File.Truncated = true
+	pathReq := ScoreRequest{
+		Event: truncated,
+		Validation: result(decision.VerdictIndeterminate,
+			viol(validator.ViolationUnresolvable, capability.SeverityMedium)),
+		Envelope: envelope(),
+		History:  history(),
+	}
+
 	for _, s := range NewEngine().Scorers() {
 		var fired bool
-		for _, r := range []ScoreRequest{req, netReq, privReq} {
+		for _, r := range []ScoreRequest{req, netReq, privReq, pathReq} {
 			f, err := s.Evaluate(context.Background(), r)
 			if err != nil {
 				t.Fatalf("%s: %v", s.Name(), err)

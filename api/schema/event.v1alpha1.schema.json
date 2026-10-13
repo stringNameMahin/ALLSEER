@@ -170,7 +170,24 @@
           "description": "Destination for rename and link operations.",
           "type": "string"
         },
-        "bytes_transferred": { "type": "integer" }
+        "bytes_transferred": { "type": "integer" },
+        "truncated": {
+          "description": "The path filled the kernel's buffer or could not be read, so it may be a prefix. Never resolved.",
+          "type": "boolean"
+        },
+        "dir": {
+          "description": "Absolute directory the kernel resolves a relative path against, captured at syscall entry. Present only when dir_status is complete.",
+          "type": "string"
+        },
+        "dir_source": {
+          "description": "Where dir came from for a relative path: cwd, or fd:<n> for an openat dirfd.",
+          "type": "string",
+          "pattern": "^(cwd|fd:-?[0-9]+)$"
+        },
+        "dir_status": {
+          "description": "What the kernel could establish about the directory of a relative path. Only complete may be joined to the path.",
+          "enum": ["complete", "truncated", "unavailable", "deleted"]
+        }
       }
     },
 
@@ -214,6 +231,10 @@
         "binary_hash": {
           "description": "SHA-256 of the executed file, computed lazily. Expensive; gated by configuration.",
           "type": "string"
+        },
+        "truncated": {
+          "description": "The filename filled the kernel's buffer or could not be read, so it may be a prefix. Never used as a match target.",
+          "type": "boolean"
         }
       }
     },

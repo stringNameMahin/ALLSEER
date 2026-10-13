@@ -184,6 +184,17 @@ type File struct {
 	// Bytes is the record's `bytes` field, which the header names for every
 	// file type and event.FilePayload calls BytesTransferred.
 	Bytes int64
+
+	// Dir is the absolute directory a relative Path is resolved against, as
+	// the kernel captures it. Written as a complete cwd walk unless PathFlags
+	// says otherwise.
+	Dir string
+
+	// DirFD is the openat dirfd. Zero writes AT_FDCWD when Dir is set.
+	DirFD int32
+
+	// PathFlags are extra enum allseer_path_flag bits. PATH_INFO is always set.
+	PathFlags uint32
 }
 
 // Net is struct allseer_net_payload, plus the hostname DNS correlation
@@ -251,6 +262,9 @@ type Exec struct {
 	Interpreter string
 	BinaryHash  string
 	EnvKeys     []string
+
+	// PathFlags are extra enum allseer_path_flag bits for Filename.
+	PathFlags uint32
 }
 
 // record renders a spec as one ring buffer record.
@@ -389,10 +403,46 @@ func putFile(raw []byte, f *File) error {
 	put32(raw, base+abi.OffsetFilePayloadFlags, f.Flags)
 	put32(raw, base+abi.OffsetFilePayloadMode, f.Mode)
 
+	// A probe always sets PATH_INFO. A relative path with a Dir is written the
+	// way openat_enter writes a complete cwd walk.
+	flags := f.PathFlags | uint32(abi.AllseerPathInfo)
+	dirfd := f.DirFD
+	var reversed string
+	if f.Dir != "" && f.PathFlags == 0 {
+		flags |= uint32(abi.AllseerDirCwd | abi.AllseerDirComplete)
+		if dirfd == 0 {
+			dirfd = atFDCWD
+		}
+	}
+	if f.Dir != "" {
+		reversed = reverseDir(f.Dir)
+	}
+	putI32(raw, base+abi.OffsetFilePayloadDirfd, dirfd)
+	put32(raw, base+abi.OffsetFilePayloadPathFlags, flags)
+
 	if err := putString(raw, base+abi.OffsetFilePayloadPath, abi.PathMax, f.Path, "file.path"); err != nil {
 		return err
 	}
+	if err := putString(raw, base+abi.OffsetFilePayloadDir, abi.DirMax, reversed, "file.dir"); err != nil {
+		return err
+	}
 	return putString(raw, base+abi.OffsetFilePayloadNewPath, abi.PathMax, f.NewPath, "file.new_path")
+}
+
+const atFDCWD = -100
+
+// reverseDir writes /a/b/c the way the kernel walk does: "c/b/a/".
+func reverseDir(dir string) string {
+	parts := strings.Split(strings.Trim(dir, "/"), "/")
+	var b strings.Builder
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i] == "" {
+			continue
+		}
+		b.WriteString(parts[i])
+		b.WriteByte('/')
+	}
+	return b.String()
 }
 
 func putNet(raw []byte, n *Net) error {
@@ -420,6 +470,7 @@ func putExec(raw []byte, x *Exec) error {
 	}
 
 	put32(raw, base+abi.OffsetExecPayloadArgc, uint32(len(x.Argv)))
+	put32(raw, base+abi.OffsetExecPayloadFlags, x.PathFlags|uint32(abi.AllseerPathInfo))
 	if err := putString(raw, base+abi.OffsetExecPayloadFilename, abi.PathMax, x.Filename, "exec.filename"); err != nil {
 		return err
 	}

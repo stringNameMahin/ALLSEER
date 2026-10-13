@@ -164,8 +164,11 @@ const (
 	scratchOffProc          = 16
 	scratchOffFlags         = 72
 	scratchOffMode          = 76
-	scratchOffPath          = 80
-	scratchSize             = scratchOffPath + abi.PathMax
+	scratchOffDirfd         = 80
+	scratchOffPathFlags     = 84
+	scratchOffPath          = 88
+	scratchOffDir           = scratchOffPath + abi.PathMax
+	scratchSize             = scratchOffDir + abi.DirMax
 )
 
 // scratchMap returns the loaded object's openat_scratch, and fails the test if
@@ -492,13 +495,17 @@ func TestRuntimeOpenEventReachesUserspace(t *testing.T) {
 		}
 	})
 
-	t.Run("fields the tracepoints do not carry", func(t *testing.T) {
-		// Left at zero deliberately: openat's tracepoints carry no inode, no
-		// device and no byte count, and a plausible zero in a field the probe
-		// cannot answer for would be a claim about a file it never saw.
-		if got.event.File.Inode != 0 || got.event.File.Device != 0 || got.event.File.BytesTransferred != 0 {
-			t.Errorf("inode/device/bytes = %d/%d/%d, want zeroes",
-				got.event.File.Inode, got.event.File.Device, got.event.File.BytesTransferred)
+	t.Run("identity of the opened file", func(t *testing.T) {
+		// ABI v3: a successful open carries the inode and device of the file the
+		// returned descriptor names, read from the fd table at exit. Bytes stay
+		// zero: an open transfers nothing.
+		ino, err := inodeOf(got.event.File.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.event.File.Inode != ino || got.event.File.Device == 0 || got.event.File.BytesTransferred != 0 {
+			t.Errorf("inode/device/bytes = %d/%d/%d, want %d/non-zero/0",
+				got.event.File.Inode, got.event.File.Device, got.event.File.BytesTransferred, ino)
 		}
 		if got.event.File.NewPath != "" {
 			t.Errorf("new_path = %q; the header defines it for rename only", got.event.File.NewPath)
@@ -636,6 +643,10 @@ func TestRuntimeOpenPathTruncation(t *testing.T) {
 	}
 	if got := found[0].event.File.Path; got != want {
 		t.Errorf("path = %q (%d bytes), want the first %d bytes of the argument", got, len(got), len(want))
+	}
+	// ABI v3: the prefix is flagged, so it is never resolved as a whole path.
+	if !found[0].event.File.Truncated {
+		t.Error("a truncated path arrived without Truncated set")
 	}
 	requireNoScratchEntry(t, scratchMap(t, l), scratchKey(os.Getpid(), thread.tid), "an open with a truncated path")
 }

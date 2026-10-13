@@ -15,22 +15,29 @@ import (
 	"github.com/stringNameMahin/ALLSEER/pkg/event"
 )
 
-// Path resolution strategy (M6): user space, never a guess.
+// Path resolution (ABI v3).
 //
-//   - An absolute path is resolved component by component against the host
-//     root, following symlinks the way the kernel would. /proc/self and
-//     /proc/thread-self are rewritten to the acting process, because resolving
-//     them in the daemon would name the daemon.
-//   - A relative path is resolved only for a successful open, from the opened
-//     descriptor's /proc link, and only when that link agrees with the name the
-//     process asked for. The record carries no dirfd, so a cwd join on its own
-//     would be a guess.
-//   - Anything else returns an error and leaves ResolvedPath empty, which the
-//     validator reports as unresolvable (indeterminate), never as covered.
+// The kernel decides the directory; user space follows symlinks below it.
 //
-// Known race: a rename or symlink swap between the syscall and this lookup can
-// change the answer. Resolving in the kernel would avoid it at the cost of
-// verifier-bounded dentry walks; that trade is recorded in devdocs.
+//   - An absolute path is walked from the host root. The record's directory is
+//     ignored for it.
+//   - A relative path is joined to the directory openat_enter captured from the
+//     kernel (the cwd for AT_FDCWD, otherwise the dirfd's file), and only when
+//     that walk reached the namespace root. Truncated, unavailable or deleted
+//     directories leave the path unresolved.
+//   - A path the kernel flagged as truncated or unreadable is never resolved.
+//   - The walk follows symlinks and ".." the way the kernel does, and rewrites
+//     /proc/self to the actor.
+//   - For a successful open the record carries the opened file's inode. The
+//     resolved path must still name that inode; if it does not, or a component
+//     no longer exists, the path changed after the syscall and is left
+//     unresolved. A failed open opened nothing, so a missing tail is appended
+//     lexically, except a tail containing "..", which is ambiguous.
+//
+// What remains: symlinks are still read after the syscall, so a failed open
+// through a symlink that is swapped before enrichment reports the new target;
+// and absolute paths are resolved in the daemon's mount namespace, not a chroot
+// or a different namespace of the actor.
 
 // ErrUnresolvable means enrichment could not establish a resolved path.
 var ErrUnresolvable = errors.New("telemetry: path cannot be resolved")
@@ -42,8 +49,6 @@ type PathEnricher struct {
 	// HostRoot is prefixed to every lookup. Empty means "/". Tests point it at
 	// a temporary tree.
 	HostRoot string
-	// ProcRoot is where per-process links are read. Empty means "/proc".
-	ProcRoot string
 }
 
 var _ Enricher = (*PathEnricher)(nil)
@@ -51,38 +56,133 @@ var _ Enricher = (*PathEnricher)(nil)
 // Name identifies the enricher.
 func (*PathEnricher) Name() string { return "path" }
 
-// Enrich resolves the event's file path in place.
+// Enrich resolves the event's file path in place. On error it leaves the event
+// as it found it.
 func (p *PathEnricher) Enrich(_ context.Context, e *event.Event) error {
 	if e == nil || e.File == nil || e.File.ResolvedPath != "" {
 		return nil
 	}
-	path := e.File.Path
-	if path == "" {
+	f := e.File
+	switch {
+	case f.Truncated:
+		return fmt.Errorf("%w: the kernel reported the path as truncated or unreadable", ErrUnresolvable)
+	case f.Path == "":
 		return fmt.Errorf("%w: the record carries no path", ErrUnresolvable)
 	}
 
-	var (
-		resolved string
-		err      error
-	)
-	if filepath.IsAbs(path) {
-		resolved, err = p.Resolve(path, e.Process.PID, e.Process.TID)
-	} else {
-		resolved, err = p.resolveRelative(e)
+	full := f.Path
+	if !filepath.IsAbs(full) {
+		if f.DirStatus != "complete" || !filepath.IsAbs(f.Dir) {
+			status := f.DirStatus
+			if status == "" {
+				status = "not captured"
+			}
+			return fmt.Errorf("%w: relative path %q: base directory (%s) is %s", ErrUnresolvable, f.Path, f.DirSource, status)
+		}
+		full = f.Dir + "/" + f.Path
 	}
+
+	// The kernel's directory is canonical, and these flags make it refuse a
+	// symlink as the final component, so one name inside it is exact without
+	// any lookup, even if both have since been removed.
+	if !filepath.IsAbs(f.Path) && !strings.Contains(f.Path, "/") && noFinalSymlink(f.Flags) {
+		f.ResolvedPath = filepath.Clean(full)
+		return nil
+	}
+
+	w, err := p.walk(full, e.Process.PID, e.Process.TID)
 	if err != nil {
 		return err
 	}
-	e.File.ResolvedPath = resolved
+	opened := e.Result.Succeeded && e.Result.ReturnCode >= 0 && isOpenKind(e.Capability)
+
+	if len(w.missing) > 0 {
+		for _, c := range w.missing {
+			if c == ".." {
+				return fmt.Errorf("%w: %q: \"..\" after a component that no longer exists is ambiguous", ErrUnresolvable, full)
+			}
+		}
+		if opened && !finalNameIsExact(f.Flags, w, e.Process.PID) {
+			return fmt.Errorf("%w: %q no longer exists; the path changed after the open", ErrUnresolvable, full)
+		}
+	} else if opened && f.Inode != 0 {
+		ino, err := p.inode(w.path)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrUnresolvable, w.path, err)
+		}
+		if ino != f.Inode {
+			return fmt.Errorf("%w: %s is inode %d but the open returned inode %d; the path changed after the open",
+				ErrUnresolvable, w.path, ino, f.Inode)
+		}
+	}
+	f.ResolvedPath = w.resolved()
 	return nil
+}
+
+func (p *PathEnricher) inode(path string) (uint64, error) { return inodeOf(p.host(path)) }
+
+// procLinks are /proc/<pid> entries that are or contain magic links, which
+// resolve somewhere else entirely and so cannot be named lexically.
+var procLinks = map[string]bool{"root": true, "cwd": true, "exe": true, "fd": true, "task": true, "ns": true, "map_files": true}
+
+// finalNameIsExact reports whether a successful open whose last component no
+// longer exists still named exactly that component when it ran:
+//
+//   - O_NOFOLLOW or O_CREAT|O_EXCL made the kernel refuse a symlink there, and
+//     every earlier component still exists;
+//   - /proc/<pid>/<entry> of the actor itself, which procfs resolved to the
+//     actor and which disappeared when it exited, unless the entry is a magic
+//     link.
+func noFinalSymlink(flags int32) bool {
+	return flags&oNofollow != 0 || flags&(oCreat|oExcl) == oCreat|oExcl
+}
+
+func finalNameIsExact(flags int32, w walkResult, pid int32) bool {
+	if len(w.missing) == 1 && noFinalSymlink(flags) {
+		return true
+	}
+	if pid <= 0 {
+		return false
+	}
+	self := strconv.Itoa(int(pid))
+	switch {
+	case w.path == "/proc" && len(w.missing) == 2 && w.missing[0] == self:
+		// The actor exited, taking /proc/<pid> with it.
+		return !procLinks[w.missing[1]]
+	case w.path == "/proc/"+self && len(w.missing) == 1:
+		return !procLinks[w.missing[0]]
+	}
+	return false
+}
+
+// walkResult is a path resolved as far as the filesystem allows: path exists,
+// and missing are the components after the first one that does not.
+type walkResult struct {
+	path    string
+	missing []string
+}
+
+func (w walkResult) resolved() string {
+	if len(w.missing) == 0 {
+		return w.path
+	}
+	return filepath.Clean(filepath.Join(append([]string{w.path}, w.missing...)...))
 }
 
 // Resolve follows an absolute path to the file it names, as seen from the
 // host root. A missing component ends the walk and the remainder is appended
 // lexically, since a name that does not exist cannot be a symlink.
 func (p *PathEnricher) Resolve(path string, pid, tid int32) (string, error) {
+	w, err := p.walk(path, pid, tid)
+	if err != nil {
+		return "", err
+	}
+	return w.resolved(), nil
+}
+
+func (p *PathEnricher) walk(path string, pid, tid int32) (walkResult, error) {
 	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("%w: %q is not absolute", ErrUnresolvable, path)
+		return walkResult{}, fmt.Errorf("%w: %q is not absolute", ErrUnresolvable, path)
 	}
 	resolved := "/"
 	rest := components(path)
@@ -103,9 +203,16 @@ func (p *PathEnricher) Resolve(path string, pid, tid int32) (string, error) {
 		fi, err := os.Lstat(p.host(next))
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
-				return filepath.Clean(filepath.Join(append([]string{next}, rest...)...)), nil
+				// next, not c: /proc/self has already been rewritten.
+				missing := []string{filepath.Base(next)}
+				for _, m := range rest {
+					if m != "" && m != "." {
+						missing = append(missing, m)
+					}
+				}
+				return walkResult{path: filepath.Dir(next), missing: missing}, nil
 			}
-			return "", fmt.Errorf("%w: %s: %v", ErrUnresolvable, next, err)
+			return walkResult{}, fmt.Errorf("%w: %s: %v", ErrUnresolvable, next, err)
 		}
 		if fi.Mode()&fs.ModeSymlink == 0 {
 			resolved = next
@@ -114,11 +221,11 @@ func (p *PathEnricher) Resolve(path string, pid, tid int32) (string, error) {
 
 		hops++
 		if hops > maxSymlinkHops {
-			return "", fmt.Errorf("%w: too many symlinks in %q", ErrUnresolvable, path)
+			return walkResult{}, fmt.Errorf("%w: too many symlinks in %q", ErrUnresolvable, path)
 		}
 		target, err := os.Readlink(p.host(next))
 		if err != nil {
-			return "", fmt.Errorf("%w: readlink %s: %v", ErrUnresolvable, next, err)
+			return walkResult{}, fmt.Errorf("%w: readlink %s: %v", ErrUnresolvable, next, err)
 		}
 		if !filepath.IsAbs(target) {
 			if strings.Contains(target, ":[") {
@@ -133,37 +240,7 @@ func (p *PathEnricher) Resolve(path string, pid, tid int32) (string, error) {
 		resolved = "/"
 		rest = append(components(target), rest...)
 	}
-	return resolved, nil
-}
-
-// resolveRelative handles a relative name from a successful open.
-func (p *PathEnricher) resolveRelative(e *event.Event) (string, error) {
-	if !isOpenKind(e.Capability) || !e.Result.Succeeded || e.Result.ReturnCode < 0 {
-		return "", fmt.Errorf("%w: relative path %q from a record with no open descriptor", ErrUnresolvable, e.File.Path)
-	}
-	pid := e.Process.PID
-	link, err := os.Readlink(filepath.Join(p.proc(), strconv.Itoa(int(pid)), "fd", strconv.FormatInt(e.Result.ReturnCode, 10)))
-	if err != nil {
-		return "", fmt.Errorf("%w: descriptor link: %v", ErrUnresolvable, err)
-	}
-	if !filepath.IsAbs(link) || strings.HasSuffix(link, " (deleted)") {
-		return "", fmt.Errorf("%w: descriptor link %q is not a live path", ErrUnresolvable, link)
-	}
-
-	rel := filepath.Clean(e.File.Path)
-	if rel != ".." && !strings.HasPrefix(rel, "../") && strings.HasSuffix(link, "/"+rel) {
-		return link, nil
-	}
-
-	// The name may cross a symlink or "..". Accept the link only if the
-	// process's cwd joined with the name resolves to the same file.
-	cwd, err := os.Readlink(filepath.Join(p.proc(), strconv.Itoa(int(pid)), "cwd"))
-	if err == nil && filepath.IsAbs(cwd) {
-		if cand, err := p.Resolve(filepath.Join(cwd, e.File.Path), pid, e.Process.TID); err == nil && cand == link {
-			return link, nil
-		}
-	}
-	return "", fmt.Errorf("%w: descriptor link %q does not match %q", ErrUnresolvable, link, e.File.Path)
+	return walkResult{path: resolved}, nil
 }
 
 func (p *PathEnricher) host(path string) string {
@@ -171,13 +248,6 @@ func (p *PathEnricher) host(path string) string {
 		return path
 	}
 	return filepath.Join(p.HostRoot, path)
-}
-
-func (p *PathEnricher) proc() string {
-	if p.ProcRoot == "" {
-		return "/proc"
-	}
-	return p.ProcRoot
 }
 
 func isOpenKind(k capability.Kind) bool {

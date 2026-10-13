@@ -103,6 +103,10 @@ const (
 	offFileMode    = abi.OffsetEventPayload + abi.OffsetFilePayloadMode
 	offFilePath    = abi.OffsetEventPayload + abi.OffsetFilePayloadPath
 	offFileNewPath = abi.OffsetEventPayload + abi.OffsetFilePayloadNewPath
+	offFileDirfd   = abi.OffsetEventPayload + abi.OffsetFilePayloadDirfd
+	offFilePFlags  = abi.OffsetEventPayload + abi.OffsetFilePayloadPathFlags
+	offFileDir     = abi.OffsetEventPayload + abi.OffsetFilePayloadDir
+	offExecFlags   = abi.OffsetEventPayload + abi.OffsetExecPayloadFlags
 
 	offNetSaddr    = abi.OffsetEventPayload + abi.OffsetNetPayloadSaddr
 	offNetDaddr    = abi.OffsetEventPayload + abi.OffsetNetPayloadDaddr
@@ -150,9 +154,9 @@ func TestEventSizeIsTheGeneratedRecordSize(t *testing.T) {
 	// the generator. abi has the same assertion; having it on both sides means
 	// a generator bug producing self-consistent nonsense fails here too.
 	//
-	// 856 = 8 timestamp + 4 type + 4 ret + 4 version + 4 pad + 56 proc
-	//     + 776 payload union, counting version and its pad.
-	const want = 856
+	// 1144 = 8 timestamp + 4 type + 4 ret + 4 version + 4 pad + 56 proc
+	//      + 1064 payload union (the ABI v3 file payload), counting version and its pad.
+	const want = 1144
 	if got != want {
 		t.Errorf("EventSize() = %d, want %d (8 + 4 + 4 + 4 + 4 + %d + %d)",
 			got, want, abi.SizeofProc, abi.SizeofPayload)
@@ -351,6 +355,9 @@ func TestDecodeFileEventReadsEveryField(t *testing.T) {
 	putI64(raw, offFileBytes, 2410)
 	put32(raw, offFileFlags, 0x241) // O_WRONLY|O_CREAT|O_TRUNC, carried verbatim
 	put32(raw, offFileMode, 0o644)
+	put32(raw, offFilePFlags, uint32(abi.AllseerPathInfo))
+	put32(raw, offFileDirfd, uint32(0xFFFFFF9C)) // AT_FDCWD; ignored for an absolute path
+	putStr(raw, offFileDir, "ignored/")
 	putStr(raw, offFilePath, "/home/dev/project/src/index.js")
 	// new_path is set on a type that does not define it, and must not be read:
 	// reporting a destination for an operation that has none would put a
@@ -1900,8 +1907,10 @@ func TestZeroValuedRecordDecodesToZeroValues(t *testing.T) {
 	if e.Result != (event.Result{Succeeded: true}) {
 		t.Errorf("Result = %+v; ret 0 is a success returning zero", e.Result)
 	}
-	if *e.File != (event.FilePayload{}) {
-		t.Errorf("file payload = %+v, want the zero value", *e.File)
+	// The one deliberate exception: path_flags of zero means no probe vouched
+	// for the path, so it is marked possibly truncated rather than trusted.
+	if *e.File != (event.FilePayload{Truncated: true}) {
+		t.Errorf("file payload = %+v, want the zero value with Truncated set", *e.File)
 	}
 
 	// A zeroed network record names the family and protocol it has rather than
@@ -1969,6 +1978,7 @@ func TestDecodedEventsResolveToObservations(t *testing.T) {
 	t.Run("exec", func(t *testing.T) {
 		raw := newRecord(abi.EvtProcExec)
 		put32(raw, offExecArgc, 2)
+		put32(raw, offExecFlags, uint32(abi.AllseerPathInfo))
 		putStr(raw, offExecFilename, "/usr/bin/node")
 		putStr(raw, offArgv(0), "node")
 		putStr(raw, offArgv(1), "tools/publish.js")
@@ -2054,5 +2064,68 @@ func benchmarkDecode(b *testing.B, raw []byte) {
 			b.Fatal(err)
 		}
 		_ = e
+	}
+}
+
+// ABI v3: the openat directory capture and path flags.
+func TestDecodeBaseDirectory(t *testing.T) {
+	info := uint32(abi.AllseerPathInfo)
+	cwd := uint32(abi.AllseerDirCwd)
+	fd := uint32(abi.AllseerDirFd)
+	complete := uint32(abi.AllseerDirComplete)
+
+	cases := []struct {
+		name                         string
+		path, dir                    string
+		flags                        uint32
+		dirfd                        int32
+		wantDir, wantSrc, wantStatus string
+		wantTruncated                bool
+	}{
+		{"cwd walk", "shadow", "etc/", info | cwd | complete, -100, "/etc", "cwd", "complete", false},
+		{"dirfd walk", "a/b.txt", "proj/u/home/", info | fd | complete, 7, "/home/u/proj", "fd:7", "complete", false},
+		{"root directory", "etc/passwd", "", info | cwd | complete, -100, "/", "cwd", "complete", false},
+		{"absolute ignores dir", "/etc/shadow", "x/", info | cwd | complete, -100, "", "", "", false},
+		{"dir truncated", "f", "a/", info | cwd | uint32(abi.AllseerDirTruncated), -100, "", "cwd", "truncated", false},
+		{"dir unavailable", "f", "", info | fd | uint32(abi.AllseerDirUnavailable), 99, "", "fd:99", "unavailable", false},
+		{"dir deleted wins", "f", "gone/", info | cwd | complete | uint32(abi.AllseerDirDeleted), -100, "", "cwd", "deleted", false},
+		{"no source", "f", "", info | complete, 0, "", "", "unavailable", false},
+		{"malformed walk", "f", "a//b/", info | cwd | complete, -100, "", "cwd", "unavailable", false},
+		{"dotdot in walk", "f", "../a/", info | cwd | complete, -100, "", "cwd", "unavailable", false},
+		{"path truncated", "f", "a/", info | uint32(abi.AllseerPathTruncated) | cwd | complete, -100, "/a", "cwd", "complete", true},
+		{"path unreadable", "", "", info | uint32(abi.AllseerPathUnreadable), -100, "", "", "", true},
+		{"flags never filled", "f", "a/", 0, 0, "", "", "unavailable", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw := newRecord(abi.EvtFileOpen)
+			put32(raw, offFilePFlags, c.flags)
+			put32(raw, offFileDirfd, uint32(c.dirfd))
+			putStr(raw, offFilePath, c.path)
+			putStr(raw, offFileDir, c.dir)
+			f := decode(t, raw).File
+			if f.Dir != c.wantDir || f.DirSource != c.wantSrc || f.DirStatus != c.wantStatus || f.Truncated != c.wantTruncated {
+				t.Errorf("got dir %q source %q status %q truncated %v; want %q %q %q %v",
+					f.Dir, f.DirSource, f.DirStatus, f.Truncated, c.wantDir, c.wantSrc, c.wantStatus, c.wantTruncated)
+			}
+		})
+	}
+}
+
+// A truncated exec filename is carried, flagged, and never matched on.
+func TestDecodeTruncatedExecFilename(t *testing.T) {
+	raw := newRecord(abi.EvtProcExec)
+	put32(raw, offExecFlags, uint32(abi.AllseerPathInfo|abi.AllseerPathTruncated))
+	putStr(raw, offExecFilename, "/usr/bin/a-very-long-prefix")
+	e := decode(t, raw)
+	if !e.Exec.Truncated {
+		t.Fatal("Truncated not set")
+	}
+	obs, err := resolve.Observe(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obs.Target != "" {
+		t.Fatalf("truncated filename became match target %q", obs.Target)
 	}
 }

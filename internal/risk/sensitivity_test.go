@@ -623,9 +623,9 @@ func TestACoveredEventKeepsItsZeroButNotItsSilence(t *testing.T) {
 }
 
 // Clamping still holds with the oracle-backed factors in play. The ceiling is
-// 220: the unrated engine's 140 — which already includes
-// uncorrelated_destination's 5 and privilege_change's 25, since neither scorer
-// needs an oracle — plus 25 for sensitive_path, 30 for
+// 250: the unrated engine's 170, which already includes
+// uncorrelated_destination's 5, privilege_change's 25 and unverifiable_path's
+// 30, since none of them needs an oracle, plus 25 for sensitive_path, 30 for
 // credential_access_egress, and 25 for sensitive_host, all three of which
 // arrive with an oracle. It is asserted as an exact number so that adding a
 // scorer is a deliberate act — the scale is clamped rather than rescaled
@@ -646,8 +646,8 @@ func TestSensitivityDoesNotEscapeTheScale(t *testing.T) {
 	for _, s := range e.Scorers() {
 		ceiling += s.Weight()
 	}
-	if ceiling != 220 {
-		t.Errorf("scorer ceiling = %v, want 220", ceiling)
+	if ceiling != 250 {
+		t.Errorf("scorer ceiling = %v, want 250", ceiling)
 	}
 
 	esc := viol(validator.ViolationWorkspaceEscape, capability.SeverityHigh)

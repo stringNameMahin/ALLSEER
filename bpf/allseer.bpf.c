@@ -171,6 +171,23 @@ struct {
 	__type(value, struct allseer_open_scratch);
 } openat_scratch SEC(".maps");
 
+/* Per-CPU working space for openat_enter. Not state: each is filled and consumed
+ * within one program run, which cannot migrate CPUs, so a per-CPU slot is safe
+ * here where it would not be for openat_scratch. */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct allseer_open_scratch);
+} open_staging SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct allseer_dir_buf);
+} dir_walk SEC(".maps");
+
 /* The half-built connect events, held between one thread's sys_enter_connect
  * and its sys_exit_connect.
  *
@@ -232,6 +249,21 @@ struct {
  * the helpers the probes will need — bpf_probe_read_kernel and the task
  * accessors among them — are GPL-only and refuse to verify without it. */
 char LICENSE[] SEC("license") = "GPL";
+
+/* Clears a record's payload union. ABI v3 made the union larger than clang will
+ * inline in one memset for BPF, so it is cleared in two 8-byte-aligned halves.
+ * The barrier stops LLVM merging the halves back into one call. */
+#define ALLSEER_PAYLOAD_HALF(e)  ((sizeof((e)->payload) / 2) & ~7UL)
+#define ALLSEER_CLEAR_PAYLOAD(e) do {						\
+	__builtin_memset(&(e)->payload, 0, ALLSEER_PAYLOAD_HALF(e));		\
+	asm volatile("" ::: "memory");						\
+	__builtin_memset((char *)&(e)->payload + ALLSEER_PAYLOAD_HALF(e), 0,	\
+			 sizeof((e)->payload) - ALLSEER_PAYLOAD_HALF(e));	\
+} while (0)
+
+_Static_assert(sizeof(((struct allseer_event *)0)->payload) % 8 == 0 &&
+	       sizeof(((struct allseer_event *)0)->payload) <= 2048,
+	       "the payload union outgrew ALLSEER_CLEAR_PAYLOAD's two halves");
 
 /* The record ABI version this object was compiled against.
  *
@@ -438,6 +470,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	allseer_cgroup_id_t cgroup_id;
 	__u64 pid_tgid, uid_gid;
 	__u32 filename_off;
+	long n;
 
 	/* The filter, and the first thing this probe does.
 	 *
@@ -538,7 +571,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	e->proc._pad = 0;
 	bpf_get_current_comm(&e->proc.comm, sizeof(e->proc.comm));
 
-	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+	ALLSEER_CLEAR_PAYLOAD(e);
 
 	/* __data_loc is the tracepoint ABI's variable-length encoding: the low 16
 	 * bits are the string's offset from the start of this record, the high 16
@@ -560,9 +593,14 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	 * process that performed it is known, and dropping the record would hide
 	 * a real execution because one field of it could not be read. */
 	filename_off = ctx->__data_loc_filename & 0xFFFF;
-	bpf_probe_read_kernel_str(&e->payload.exec.filename,
-				  sizeof(e->payload.exec.filename),
-				  (void *)ctx + filename_off);
+	n = bpf_probe_read_kernel_str(&e->payload.exec.filename,
+				      sizeof(e->payload.exec.filename),
+				      (void *)ctx + filename_off);
+	e->payload.exec.flags = ALLSEER_PATH_INFO;
+	if (n < 0)
+		e->payload.exec.flags |= ALLSEER_PATH_UNREADABLE;
+	else if (n >= (long)sizeof(e->payload.exec.filename))
+		e->payload.exec.flags |= ALLSEER_PATH_TRUNCATED;
 
 	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
@@ -716,7 +754,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 	 * declares no payload. The decoder ignores it today; a raw-record dump, a
 	 * recorder, or a future payload member would not, and none of those should
 	 * have to discover that exit records are not clean. */
-	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+	ALLSEER_CLEAR_PAYLOAD(e);
 
 	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
@@ -794,14 +832,147 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * audit record. proc_exec's use of the kernel variant is not a precedent for
  * this one — its string is inside the tracepoint record, which is kernel memory.
  */
+#define ALLSEER_AT_FDCWD  (-100)
+
+/* walk_dir writes the path of a directory into out, components reversed, and
+ * returns what it could establish (enum allseer_path_flag).
+ *
+ * It follows d_parent up to the root of each mount and crosses into the parent
+ * mount at its mountpoint, stopping at the namespace root (a mount that is its
+ * own parent). The result is the path in the caller's mount namespace, not
+ * relative to a chroot. Bounded by ALLSEER_DIR_DEPTH steps and ALLSEER_DIR_MAX
+ * bytes; running out of either is DIR_TRUNCATED, never a shorter path. */
+static __always_inline __u32 walk_dir(struct dentry *dentry, struct vfsmount *vfsmnt, char *out)
+{
+	struct allseer_dir_buf *buf;
+	struct dentry *mnt_root, *parent;
+	struct mount *mnt, *parent_mnt;
+	const unsigned char *name;
+	__u32 zero = 0, off = 0, flags = 0;
+	int done = 0;
+	long n;
+	int i;
+
+	buf = bpf_map_lookup_elem(&dir_walk, &zero);
+	if (!buf || !dentry || !vfsmnt)
+		return ALLSEER_DIR_UNAVAILABLE;
+
+	mnt = (struct mount *)((void *)vfsmnt - bpf_core_field_offset(struct mount, mnt));
+
+	/* d_unhashed: a removed directory keeps its old name chain. */
+	if (dentry != BPF_CORE_READ(vfsmnt, mnt_root) && !BPF_CORE_READ(dentry, d_hash.pprev))
+		flags |= ALLSEER_DIR_DELETED;
+
+	for (i = 0; i < ALLSEER_DIR_DEPTH; i++) {
+		mnt_root = BPF_CORE_READ(mnt, mnt.mnt_root);
+		if (dentry == mnt_root) {
+			parent_mnt = BPF_CORE_READ(mnt, mnt_parent);
+			if (parent_mnt == mnt || !parent_mnt) {
+				flags |= ALLSEER_DIR_COMPLETE;
+				done = 1;
+				break;
+			}
+			dentry = BPF_CORE_READ(mnt, mnt_mountpoint);
+			mnt = parent_mnt;
+			continue;
+		}
+		parent = BPF_CORE_READ(dentry, d_parent);
+		if (!parent || parent == dentry) {
+			/* A root that is not its mount's root: disconnected. */
+			flags |= ALLSEER_DIR_UNAVAILABLE;
+			done = 1;
+			break;
+		}
+		name = BPF_CORE_READ(dentry, d_name.name);
+		n = bpf_probe_read_kernel_str(&buf->b[off & (ALLSEER_DIR_MAX - 1)], ALLSEER_NAME_BOUND, name);
+		if (n <= 1) {
+			flags |= ALLSEER_DIR_UNAVAILABLE;
+			done = 1;
+			break;
+		}
+		if (off + n >= ALLSEER_DIR_MAX) {
+			flags |= ALLSEER_DIR_TRUNCATED;
+			done = 1;
+			break;
+		}
+		off += n;
+		buf->b[(off - 1) & (ALLSEER_DIR_MAX - 1)] = '/';
+		dentry = parent;
+	}
+	if (!done)
+		flags |= ALLSEER_DIR_TRUNCATED;
+
+	buf->b[off & (ALLSEER_DIR_MAX - 1)] = 0;
+	bpf_probe_read_kernel_str(out, ALLSEER_DIR_MAX, buf->b);
+	return flags;
+}
+
+/* capture_base_dir records the directory a relative openat name is resolved
+ * against: the working directory for AT_FDCWD, otherwise the file dirfd refers
+ * to. Read at syscall entry, from the calling task, so it is the directory the
+ * kernel itself is about to use. */
+static __always_inline __u32 capture_base_dir(struct task_struct *task, __s32 dfd, char *out)
+{
+	struct files_struct *files;
+	struct fdtable *fdt;
+	struct file **fda;
+	struct file *f = NULL;
+	struct path p = {};
+	unsigned int max;
+
+	if (dfd == ALLSEER_AT_FDCWD) {
+		BPF_CORE_READ_INTO(&p, task, fs, pwd);
+		return ALLSEER_DIR_CWD | walk_dir(p.dentry, p.mnt, out);
+	}
+
+	files = BPF_CORE_READ(task, files);
+	fdt = BPF_CORE_READ(files, fdt);
+	max = BPF_CORE_READ(fdt, max_fds);
+	fda = BPF_CORE_READ(fdt, fd);
+	if (dfd < 0 || (__u32)dfd >= max || !fda)
+		return ALLSEER_DIR_FD | ALLSEER_DIR_UNAVAILABLE;
+	bpf_probe_read_kernel(&f, sizeof(f), &fda[dfd]);
+	if (!f)
+		return ALLSEER_DIR_FD | ALLSEER_DIR_UNAVAILABLE;
+	BPF_CORE_READ_INTO(&p, f, f_path);
+	return ALLSEER_DIR_FD | walk_dir(p.dentry, p.mnt, out);
+}
+
+/* capture_fd_identity records the inode and superblock device of the file a
+ * descriptor refers to. Used on the descriptor openat returned, so user space
+ * can check that the path it resolved still names the file that was opened. */
+static __always_inline void capture_fd_identity(struct task_struct *task, __s32 fd,
+						struct allseer_file_payload *fp)
+{
+	struct files_struct *files;
+	struct fdtable *fdt;
+	struct file **fda;
+	struct file *f = NULL;
+	unsigned int max;
+
+	files = BPF_CORE_READ(task, files);
+	fdt = BPF_CORE_READ(files, fdt);
+	max = BPF_CORE_READ(fdt, max_fds);
+	fda = BPF_CORE_READ(fdt, fd);
+	if (fd < 0 || (__u32)fd >= max || !fda)
+		return;
+	bpf_probe_read_kernel(&f, sizeof(f), &fda[fd]);
+	if (!f)
+		return;
+	fp->inode = BPF_CORE_READ(f, f_inode, i_ino);
+	fp->device = BPF_CORE_READ(f, f_inode, i_sb, s_dev);
+}
+
 SEC("tracepoint/syscalls/sys_enter_openat")
 int openat_enter(struct trace_event_raw_sys_enter *ctx)
 {
 	struct task_struct *task;
-	struct allseer_open_scratch s;
+	struct allseer_open_scratch *s;
 	allseer_cgroup_id_t cgroup_id;
 	allseer_syscall_key_t key;
 	__u64 pid_tgid, uid_gid;
+	__u32 zero = 0;
+	long n;
 
 	/* The filter, first, and before the path is read out of user memory
 	 * rather than after. Every probe in this object carries the same
@@ -828,12 +999,15 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * and the path array below is filled by a helper that writes only as far as
 	 * the string goes, so the tail is whatever this stack slot held before —
 	 * which is another process's data, on its way into an audit record. */
-	__builtin_memset(&s, 0, sizeof(s));
+	s = bpf_map_lookup_elem(&open_staging, &zero);
+	if (!s)
+		return 0;
+	__builtin_memset(s, 0, sizeof(*s));
 
 	/* The instant the call was made. Copied into the record verbatim by the
 	 * exit side; allseer_maps.h says why it is this instant and not the one the
 	 * syscall returned at. */
-	s.timestamp = bpf_ktime_get_ns();
+	s->timestamp = bpf_ktime_get_ns();
 
 	pid_tgid = bpf_get_current_pid_tgid();
 	uid_gid = bpf_get_current_uid_gid();
@@ -842,7 +1016,7 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	/* The identity stamp, and the one field here that is not part of the
 	 * record. This is the *calling thread's* start_boottime, which is what
 	 * makes a reused TID detectable at exit. */
-	s.task_start_time = BPF_CORE_READ(task, start_boottime);
+	s->task_start_time = BPF_CORE_READ(task, start_boottime);
 
 	/* struct allseer_proc, in the units the header declares and the same ones
 	 * proc_exec and proc_exit use: pid is the thread group ID, tid the thread,
@@ -854,21 +1028,21 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * the current task is the process — exec installs a new image, exit is
 	 * filtered to the group leader. openat is called by whichever thread wants
 	 * a file, and a worker thread's start_boottime is its own, not its
-	 * process's. Pairing that with proc.pid, which is the tgid, would produce a
+	 * process's-> Pairing that with proc.pid, which is the tgid, would produce a
 	 * (PID, StartTime) that no other record in the stream carries — and
 	 * event.Process.StartTime exists precisely so that pair identifies a
 	 * process, with telemetry.ProcessTracker keyed on it. Reading the leader
 	 * gives the same value proc_exec recorded for the same process, which is
 	 * what lets a tracker find the session this open belongs to. */
-	s.proc.cgroup_id = cgroup_id;
-	s.proc.start_time = BPF_CORE_READ(task, group_leader, start_boottime);
-	s.proc.pid = (__u32)(pid_tgid >> 32);
-	s.proc.tid = (__u32)pid_tgid;
-	s.proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
-	s.proc.uid = (__u32)uid_gid;
-	s.proc.gid = (__u32)(uid_gid >> 32);
-	s.proc._pad = 0;
-	bpf_get_current_comm(&s.proc.comm, sizeof(s.proc.comm));
+	s->proc.cgroup_id = cgroup_id;
+	s->proc.start_time = BPF_CORE_READ(task, group_leader, start_boottime);
+	s->proc.pid = (__u32)(pid_tgid >> 32);
+	s->proc.tid = (__u32)pid_tgid;
+	s->proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
+	s->proc.uid = (__u32)uid_gid;
+	s->proc.gid = (__u32)(uid_gid >> 32);
+	s->proc._pad = 0;
+	bpf_get_current_comm(&s->proc.comm, sizeof(s->proc.comm));
 
 	/* The arguments, as supplied. Narrowed to __u32 because that is what
 	 * struct allseer_file_payload declares; openat's flags and mode are an int
@@ -879,8 +1053,8 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * flags permit creation, and the record reports what the process passed
 	 * rather than substituting a zero it did not pass — the decoder is where
 	 * flags decide meaning, and kindForOpenFlags already does exactly that. */
-	s.flags = (__u32)ctx->args[2];
-	s.mode = (__u32)ctx->args[3];
+	s->flags = (__u32)ctx->args[2];
+	s->mode = (__u32)ctx->args[3];
 
 	/* The pathname, out of user memory, bounded by the destination.
 	 *
@@ -899,7 +1073,20 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * made it is known, and refusing to report a real open because one field
 	 * could not be read would hide the event entirely. An empty path means the
 	 * read failed; it cannot mean a process opened nothing. */
-	bpf_probe_read_user_str(&s.path, sizeof(s.path), (const char *)ctx->args[1]);
+	n = bpf_probe_read_user_str(&s->path, sizeof(s->path), (const char *)ctx->args[1]);
+
+	/* ABI v3. The helper NUL-terminates a truncated read, so a path that filled
+	 * its array is flagged as possibly truncated rather than trusted as whole.
+	 * An absolute path never consults a directory; a relative one records the
+	 * directory the kernel will resolve it against. */
+	s->dirfd = (__s32)ctx->args[0];
+	s->path_flags = ALLSEER_PATH_INFO;
+	if (n < 0)
+		s->path_flags |= ALLSEER_PATH_UNREADABLE;
+	else if (n >= (long)sizeof(s->path))
+		s->path_flags |= ALLSEER_PATH_TRUNCATED;
+	if (n > 1 && s->path[0] != '/')
+		s->path_flags |= capture_base_dir(task, s->dirfd, s->dir);
 
 	/* BPF_ANY, so this thread's previous entry — if it has one, which means an
 	 * exit it never reached — is replaced rather than kept. That is what makes
@@ -912,7 +1099,7 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * yet, so no record has been lost and ringbuf_drops must not move: that
 	 * counter is defined as counting reservation failures and nothing else. */
 	key = pid_tgid;
-	bpf_map_update_elem(&openat_scratch, &key, &s, BPF_ANY);
+	bpf_map_update_elem(&openat_scratch, &key, s, BPF_ANY);
 	return 0;
 }
 
@@ -1006,17 +1193,19 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	 * union is cleared once rather than field by field, because the file
 	 * payload is smaller than the union and an unwritten tail is the previous
 	 * record's argv or peer address handed to a decoder. */
-	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+	ALLSEER_CLEAR_PAYLOAD(e);
 
-	/* inode, device and bytes are left at the zero the memset gave them. The
-	 * header defines them for the file payload, but openat's tracepoints carry
-	 * none of them: the inode is not chosen until the path has been resolved
-	 * inside the kernel, and there are no bytes yet on an open. Writing a
-	 * plausible zero into a field the record cannot answer for would be a claim
-	 * about a file this probe never saw. */
+	/* ABI v3: on success the returned descriptor names the opened file, so its
+	 * inode and device are read from the fd table. On failure no file was
+	 * opened and both stay zero. bytes stays zero: an open transfers nothing. */
+	if (e->ret >= 0)
+		capture_fd_identity(task, e->ret, &e->payload.file);
 	e->payload.file.flags = s->flags;
 	e->payload.file.mode = s->mode;
 	bpf_probe_read_kernel(&e->payload.file.path, sizeof(e->payload.file.path), s->path);
+	e->payload.file.dirfd = s->dirfd;
+	e->payload.file.path_flags = s->path_flags;
+	bpf_probe_read_kernel(&e->payload.file.dir, sizeof(e->payload.file.dir), s->dir);
 
 	/* Deleted before the submit, and unconditionally. Once the bytes are in the
 	 * reserved record the entry has nothing left to contribute, and this
@@ -1327,7 +1516,7 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
 	e->_pad = 0;
 	e->proc = s->proc;
 
-	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+	ALLSEER_CLEAR_PAYLOAD(e);
 
 	/* Three fields written and six left at the zero the memset gave them.
 	 * allseer_maps.h lists the six and why each is unreachable from these two
@@ -1803,7 +1992,7 @@ static __always_inline int priv_exit(struct trace_event_raw_sys_exit *ctx, __u32
 	 * again — and a record carrying 568 bytes of the previous event under a
 	 * type that declares 208 is exactly what a raw-record dump or a later
 	 * payload member would trip over. */
-	__builtin_memset(&e->payload, 0, sizeof(e->payload));
+	ALLSEER_CLEAR_PAYLOAD(e);
 
 	e->payload.priv.before = s->before;
 	e->payload.priv.operation = s->operation;

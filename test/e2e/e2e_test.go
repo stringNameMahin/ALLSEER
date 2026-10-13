@@ -491,3 +491,51 @@ func TestAgentCannotEscapeItsCgroup(t *testing.T) {
 		t.Fatal("the read after the escape attempt was not attributed to the session")
 	}
 }
+
+// The ABI v3 regression: the same denied read through a relative name, after
+// cd, is denied and contained exactly like the absolute one.
+func TestEnforceKillsRelativeCredentialRead(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	ws := workspace(t)
+	marker := filepath.Join(ws, "survived")
+	r := shim(t, d.socket, ws, "enforce", script(t, "cd /etc && cat shadow 2>/dev/null\nsleep 3\necho x > "+marker))
+	sid := r.sessionID(t)
+	if code := r.wait(t, 30*time.Second); code != 137 {
+		t.Fatalf("shim exit = %d, want 137 (killed)\n%s", code, r.stderr.String())
+	}
+	if exists(marker) {
+		t.Fatal("the agent kept running after a relative credential read")
+	}
+	if dec := find(d.decisions(t, sid), decision.VerdictExplicitlyDenied, "/etc/shadow"); dec == nil || !dec.Enforced {
+		t.Fatal("the relative read of shadow was not an enforced explicit denial on /etc/shadow")
+	}
+}
+
+// Padding a path past the kernel's buffer hides its tail. The probe flags the
+// truncation, the path is never resolved, and unverifiable_path carries it to
+// indeterminate-high-risk, which enforce mode contains.
+func TestEnforceContainsATruncatedPath(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	ws := workspace(t)
+	marker := filepath.Join(ws, "survived")
+	padded := "/etc/" + strings.Repeat("./", 140) + "shadow"
+	r := shim(t, d.socket, ws, "enforce", script(t, "cat "+padded+" 2>/dev/null\nsleep 3\necho x > "+marker))
+	sid := r.sessionID(t)
+	if code := r.wait(t, 30*time.Second); code != 137 {
+		t.Fatalf("shim exit = %d, want 137 (killed)\n%s", code, r.stderr.String())
+	}
+	if exists(marker) {
+		t.Fatal("the agent kept running after a truncated-path read")
+	}
+	var charged bool
+	for _, dec := range d.decisions(t, sid) {
+		for _, f := range dec.Risk.Factors {
+			if f.Name == "unverifiable_path" && dec.Verdict == decision.VerdictIndeterminate && dec.Enforced {
+				charged = true
+			}
+		}
+	}
+	if !charged {
+		t.Fatal("no enforced indeterminate decision carried unverifiable_path")
+	}
+}

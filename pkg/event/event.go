@@ -186,6 +186,24 @@ type FilePayload struct {
 
 	// BytesTransferred supports volume-based signals such as bulk exfiltration.
 	BytesTransferred int64 `json:"bytes_transferred,omitempty"`
+
+	// Truncated means Path filled the kernel's buffer or could not be read, so
+	// it may be a prefix. A truncated path is never resolved.
+	Truncated bool `json:"truncated,omitempty"`
+
+	// Dir is the absolute directory the kernel resolves a relative Path
+	// against, captured at syscall entry. Set only for a relative Path whose
+	// DirStatus is "complete".
+	Dir string `json:"dir,omitempty"`
+
+	// DirSource names where Dir came from for a relative Path: "cwd", or
+	// "fd:<n>" for an openat dirfd.
+	DirSource string `json:"dir_source,omitempty"`
+
+	// DirStatus is what the kernel could establish about the directory of a
+	// relative Path: "complete", "truncated", "unavailable" or "deleted". Only
+	// "complete" may be joined to Path.
+	DirStatus string `json:"dir_status,omitempty"`
 }
 
 // NetworkPayload carries network event detail.
@@ -227,6 +245,10 @@ type ExecPayload struct {
 	// BinaryHash is the SHA-256 of the executed file, computed lazily in user
 	// space. Expensive, so it is gated by configuration.
 	BinaryHash string `json:"binary_hash,omitempty"`
+
+	// Truncated means Filename filled the kernel's buffer or could not be read,
+	// so it may be a prefix and is never used as a match target.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // PrivPayload carries privilege and credential change detail.
@@ -304,15 +326,10 @@ type Filter interface {
 // once at startup drifts under suspend; re-sampling periodically is more work.
 // Until it is decided, the decoder leaves WallClock zero rather than building
 // one on an unmeasured offset: a synthesized wall time reads as observed.
-// TODO(event): carry truncation. Every string a probe reports lives in a
-// fixed-size field, and one that filled its field lost the rest — the ABI
-// header states such a value "must be treated as an enrichment failure, never
-// as a complete path". Nothing on FilePayload or ExecPayload can say so, so
-// telemetry.EventDecoder refuses those records outright rather than hand an
-// enricher a prefix that looks whole. A `Truncated bool` on both payloads, plus
-// the argument count that ExecPayload also cannot express, would let them be
-// carried as unevaluable instead of dropped. It is a wire-format change and
-// touches api/schema/event.v1alpha1.schema.json with it.
+// Done: truncation is carried. ABI v3 flags a path or exec filename that filled
+// its buffer, the decoder sets Truncated, and a truncated name is never
+// resolved or matched; risk.UnverifiablePathScorer charges it. The argument
+// count is still not carried.
 // TODO(event): specify backpressure policy. Leaning toward a bounded channel
 // with newest-wins and an explicit drop counter, since stalling the ring buffer
 // reader loses events anyway, just without counting them.

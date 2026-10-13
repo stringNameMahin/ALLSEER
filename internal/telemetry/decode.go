@@ -60,6 +60,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry/abi"
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
@@ -761,6 +762,10 @@ func filePayload(p *abi.FilePayload, withNewPath bool) (*event.FilePayload, erro
 		BytesTransferred: p.Bytes,
 	}
 
+	if err := decodeBaseDir(p, out); err != nil {
+		return nil, err
+	}
+
 	if withNewPath {
 		newPath, terminated := abi.CString(p.NewPath[:])
 		if !terminated {
@@ -776,6 +781,74 @@ func filePayload(p *abi.FilePayload, withNewPath bool) (*event.FilePayload, erro
 // The environment is not read because it is not written: the header states that
 // values "routinely hold credentials, and an audit log is the last place those
 // should land", and the struct carries no environment field at all.
+// decodeBaseDir turns ABI v3 path flags into explicit fields. A path whose
+// flags were not filled, or that filled its buffer, is marked Truncated. A
+// relative path gets a Dir only when the kernel walked its directory to the
+// namespace root; otherwise DirStatus says why not, and no Dir is invented.
+func decodeBaseDir(p *abi.FilePayload, out *event.FilePayload) error {
+	f := abi.PathFlag(p.PathFlags)
+	if f&abi.AllseerPathInfo == 0 || f&(abi.AllseerPathTruncated|abi.AllseerPathUnreadable) != 0 {
+		out.Truncated = true
+	}
+	if out.Path == "" || strings.HasPrefix(out.Path, "/") {
+		return nil
+	}
+
+	switch {
+	case f&abi.AllseerDirCwd != 0:
+		out.DirSource = "cwd"
+	case f&abi.AllseerDirFd != 0:
+		out.DirSource = fmt.Sprintf("fd:%d", p.Dirfd)
+	}
+	switch {
+	case f&abi.AllseerDirDeleted != 0:
+		out.DirStatus = "deleted"
+	case f&abi.AllseerDirUnavailable != 0 || out.DirSource == "":
+		out.DirStatus = "unavailable"
+	case f&abi.AllseerDirTruncated != 0:
+		out.DirStatus = "truncated"
+	case f&abi.AllseerDirComplete != 0:
+		out.DirStatus = "complete"
+	default:
+		out.DirStatus = "unavailable"
+	}
+	if out.DirStatus != "complete" {
+		return nil
+	}
+
+	raw, terminated := abi.CString(p.Dir[:])
+	if !terminated {
+		return fmt.Errorf("%w: file.dir", ErrTruncatedString)
+	}
+	dir, ok := reverseDir(raw)
+	if !ok {
+		out.DirStatus = "unavailable"
+		return nil
+	}
+	out.Dir = dir
+	return nil
+}
+
+// reverseDir turns the kernel's "c/b/a/" into "/a/b/c". The root is "".
+func reverseDir(raw string) (string, bool) {
+	if raw == "" {
+		return "/", true
+	}
+	if !strings.HasSuffix(raw, "/") {
+		return "", false
+	}
+	parts := strings.Split(strings.TrimSuffix(raw, "/"), "/")
+	var b strings.Builder
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i] == "" || parts[i] == "." || parts[i] == ".." {
+			return "", false
+		}
+		b.WriteByte('/')
+		b.WriteString(parts[i])
+	}
+	return b.String(), true
+}
+
 func execPayload(p *abi.ExecPayload) (*event.ExecPayload, error) {
 	filename, terminated := abi.CString(p.Filename[:])
 	if !terminated {
@@ -796,6 +869,10 @@ func execPayload(p *abi.ExecPayload) (*event.ExecPayload, error) {
 	}
 
 	out := &event.ExecPayload{Filename: filename}
+	if p.Flags&uint32(abi.AllseerPathInfo) == 0 ||
+		p.Flags&uint32(abi.AllseerPathTruncated|abi.AllseerPathUnreadable) != 0 {
+		out.Truncated = true
+	}
 	if n > 0 {
 		out.Argv = make([]string, n)
 		for i := range n {

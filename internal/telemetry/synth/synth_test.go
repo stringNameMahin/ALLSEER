@@ -182,9 +182,9 @@ func TestRecordIsTheSizeTheABIDeclares(t *testing.T) {
 	if len(raw) != abi.RecordSize {
 		t.Errorf("record is %d bytes, want abi.RecordSize (%d)", len(raw), abi.RecordSize)
 	}
-	if len(raw) != 856 {
-		t.Errorf("record is %d bytes, want 856; sizeof(struct allseer_event) is part of the "+
-			"kernel/user contract and this issue does not change it", len(raw))
+	if len(raw) != 1144 {
+		t.Errorf("record is %d bytes, want 1144; sizeof(struct allseer_event) is part of the "+
+			"kernel/user contract and changes only with ALLSEER_ABI_VERSION", len(raw))
 	}
 	if EventSize != abi.RecordSize {
 		t.Errorf("EventSize = %d, want abi.RecordSize (%d)", EventSize, abi.RecordSize)

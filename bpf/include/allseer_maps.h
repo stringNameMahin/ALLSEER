@@ -320,8 +320,28 @@ struct allseer_open_scratch {
     struct allseer_proc proc;
     __u32 flags;
     __u32 mode;
+    __s32 dirfd;
+    __u32 path_flags;
     char  path[ALLSEER_PATH_MAX];
+    char  dir[ALLSEER_DIR_MAX];
 };
+
+/* ABI v3: the entry is too large for the eBPF stack, so openat_enter builds it
+ * in a per-CPU staging slot and copies that into openat_scratch. The directory
+ * walk writes into a separate per-CPU buffer twice ALLSEER_DIR_MAX long, so an
+ * offset masked to ALLSEER_DIR_MAX - 1 plus one name of up to
+ * ALLSEER_NAME_BOUND bytes always stays inside it. */
+#define ALLSEER_NAME_BOUND  256
+#define ALLSEER_DIR_DEPTH   48
+
+struct allseer_dir_buf {
+    char b[ALLSEER_DIR_MAX * 2];
+};
+
+_Static_assert((ALLSEER_DIR_MAX & (ALLSEER_DIR_MAX - 1)) == 0,
+               "ALLSEER_DIR_MAX must be a power of two");
+_Static_assert(ALLSEER_NAME_BOUND <= ALLSEER_DIR_MAX,
+               "a name read at a masked offset must fit in the walk buffer");
 
 /* The lifecycle of an entry, stated in one place because it is spread across two
  * programs that cannot see each other:

@@ -33,7 +33,7 @@
  * size. It does not catch a layout that stayed the same size and changed
  * meaning: a field retyped, two fields swapped, a bound moved from one array to
  * another. Those records decode without complaint into confident nonsense. */
-#define ALLSEER_ABI_VERSION  2
+#define ALLSEER_ABI_VERSION  3
 
 /* Bounded because eBPF stack space is limited to 512 bytes and the verifier
  * rejects unbounded copies. These caps are a real constraint on what a probe
@@ -41,6 +41,10 @@
  * treat truncation as an enrichment failure, never as a complete path. */
 #define ALLSEER_PATH_MAX     256
 #define ALLSEER_COMM_LEN     16
+
+/* Room for the directory a relative open is resolved against. Must stay a
+ * power of two: the kernel side masks offsets into it with ALLSEER_DIR_MAX - 1. */
+#define ALLSEER_DIR_MAX      512
 #define ALLSEER_ARGV_MAX     8
 #define ALLSEER_ARG_LEN      64
 
@@ -176,6 +180,38 @@ enum allseer_priv_field {
     ALLSEER_PRIV_FIELD_NS_FLAGS       = 256,
 };
 
+/* What a probe could establish about a path, OR'd into `path_flags` of the
+ * file payload and `flags` of the exec payload. Decimal powers of two, for the
+ * reason given at allseer_priv_field.
+ *
+ *   PATH_INFO        the probe filled these flags; zero means it did not
+ *   PATH_TRUNCATED   the path filled its array, so it may be a prefix
+ *   PATH_UNREADABLE  the path could not be read from user memory
+ *   DIR_CWD          `dir` holds the caller's working directory
+ *   DIR_FD           `dir` holds the directory `dirfd` refers to
+ *   DIR_COMPLETE     the walk reached the root of the mount namespace
+ *   DIR_TRUNCATED    `dir` ran out of space or depth before the root
+ *   DIR_UNAVAILABLE  no directory could be read: bad dirfd, no fs, or a
+ *                    disconnected dentry
+ *   DIR_DELETED      the directory had been removed
+ *
+ * `dir` is only filled for a relative path. Its components are stored from the
+ * directory itself up to the root, each followed by '/': /home/u/proj is
+ * "proj/u/home/". The root directory is the empty string with DIR_COMPLETE.
+ * Only DIR_COMPLETE without DIR_TRUNCATED, DIR_UNAVAILABLE or DIR_DELETED is a
+ * directory user space may join a relative path to. */
+enum allseer_path_flag {
+    ALLSEER_PATH_INFO        = 1,
+    ALLSEER_PATH_TRUNCATED   = 2,
+    ALLSEER_PATH_UNREADABLE  = 4,
+    ALLSEER_DIR_CWD          = 8,
+    ALLSEER_DIR_FD           = 16,
+    ALLSEER_DIR_COMPLETE     = 32,
+    ALLSEER_DIR_TRUNCATED    = 64,
+    ALLSEER_DIR_UNAVAILABLE  = 128,
+    ALLSEER_DIR_DELETED      = 256,
+};
+
 /* Process identity, captured at event time. Read in the kernel because
  * consulting /proc afterwards races with process exit and returns nothing for
  * short-lived processes, which are the ones worth watching. */
@@ -197,8 +233,11 @@ struct allseer_file_payload {
     __s64 bytes;
     __u32 flags;
     __u32 mode;
+    __s32 dirfd;                       /* as passed; -100 is AT_FDCWD */
+    __u32 path_flags;                  /* enum allseer_path_flag */
     char  path[ALLSEER_PATH_MAX];
     char  new_path[ALLSEER_PATH_MAX];  /* rename/link destination */
+    char  dir[ALLSEER_DIR_MAX];        /* base of a relative path, reversed */
 };
 
 struct allseer_net_payload {
@@ -215,7 +254,7 @@ struct allseer_net_payload {
 
 struct allseer_exec_payload {
     __u32 argc;
-    __u32 _pad;
+    __u32 flags;        /* enum allseer_path_flag, for filename */
     char  filename[ALLSEER_PATH_MAX];
     char  argv[ALLSEER_ARGV_MAX][ALLSEER_ARG_LEN];
     /* Environment values are never captured. They routinely hold credentials,

@@ -180,6 +180,10 @@ func observeProcess(e *event.Event, obs capability.Observation) (capability.Obse
 			return capability.Observation{}, fmt.Errorf("%w: %s has no exec payload", ErrMissingPayload, e.Capability)
 		}
 		obs.Target = e.Exec.Filename
+		if e.Exec.Truncated {
+			// A possible prefix is not a name to match against.
+			obs.Target = ""
+		}
 
 		attrs := map[string]string{}
 		if len(e.Exec.Argv) > 0 {

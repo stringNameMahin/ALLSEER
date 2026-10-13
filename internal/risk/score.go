@@ -383,6 +383,7 @@ func NewEngine() *BaselineEngine {
 			VerdictScorer{},
 			ViolationSeverityScorer{},
 			UncorrelatedDestinationScorer{},
+			UnverifiablePathScorer{},
 			PrivilegeChangeScorer{},
 			WorkspaceEscapeScorer{},
 			NovelTargetScorer{},
@@ -445,6 +446,7 @@ func NewEngineWithOracle(o SensitivityOracle) (*BaselineEngine, error) {
 	}
 	scorers = append(scorers,
 		UncorrelatedDestinationScorer{},
+		UnverifiablePathScorer{},
 		seq,
 		PrivilegeChangeScorer{},
 		WorkspaceEscapeScorer{},
@@ -1195,8 +1197,8 @@ func (EvidenceBasisScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, error)
 // scorer set is large enough for dilution to be possible, and adding it now
 // would be a mechanism with no failure to prevent.
 //
-// Clamping rather than rescaling: the theoretical maximum is 140 for the
-// unrated scorer set and 220 with an oracle behind it, and rescaling by either
+// Clamping rather than rescaling: the theoretical maximum is 170 for the
+// unrated scorer set and 250 with an oracle behind it, and rescaling by either
 // would mean adding a scorer silently moved every existing score. A policy
 // threshold an operator set last week has to keep meaning what it meant — which
 // is exactly what adding the sequence detector, and then privilege_change,
