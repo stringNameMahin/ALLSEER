@@ -215,3 +215,26 @@ func TestNewSessionIDIsACgroupName(t *testing.T) {
 		t.Fatalf("session id %q", id)
 	}
 }
+
+// A Go build runs toolchains from the module cache and writes its telemetry
+// counters; both are part of the task, not departures.
+func TestGoToolchainIsPartOfABuild(t *testing.T) {
+	env := generate(t, "build the project and run the go tests", "go").Envelope
+	cases := []struct {
+		kind   capability.Kind
+		target string
+	}{
+		{capability.KindProcessExec, "/home/dev/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.linux-amd64/pkg/tool/linux_amd64/compile"},
+		{capability.KindProcessExit, "/home/dev/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.5.linux-amd64/bin/go"},
+		{capability.KindFileCreate, "/home/dev/.config/go/telemetry/local/upload.token"},
+	}
+	for _, c := range cases {
+		if got := verdict(t, env, c.kind, c.target); got != decision.VerdictWithinEnvelope {
+			t.Errorf("%s %s = %s", c.kind, c.target, got)
+		}
+	}
+	// Other configuration under ~/.config stays outside a build.
+	if got := verdict(t, env, capability.KindFileRead, "/home/dev/.config/gh/hosts.yml"); got == decision.VerdictWithinEnvelope {
+		t.Errorf("gh credentials readable by a build: %s", got)
+	}
+}

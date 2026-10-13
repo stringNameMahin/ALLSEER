@@ -219,11 +219,17 @@ func (b *builder) base() {
 func (b *builder) task(an *intent.Analysis) {
 	switch an.Record.TaskType {
 	case intent.TaskTypeBuild, intent.TaskTypeTest, intent.TaskTypeDependencyInstall:
-		caches := b.homePaths("go/**", ".npm/**", ".cargo/**", ".rustup/**", ".local/lib/**", ".m2/**", ".gradle/**")
+		caches := b.homePaths("go/**", ".npm/**", ".cargo/**", ".rustup/**", ".local/lib/**", ".m2/**", ".gradle/**",
+			".config/go/**")
 		if len(caches) > 0 {
 			b.add(capability.KindFileRead, paths(caches...), "Language toolchains read their module and package caches.")
 			b.add(capability.KindFileWrite, paths(caches...), "Language toolchains populate their module and package caches.")
 			b.add(capability.KindFileCreate, paths(caches...), "Language toolchains populate their module and package caches.")
+		}
+		if tools := b.homePaths("go/pkg/mod/golang.org/toolchain@*/**", ".rustup/toolchains/**"); len(tools) > 0 {
+			sel := capability.Selector{Executables: tools}
+			b.add(capability.KindProcessExec, sel, "Toolchains the language's version manager downloaded into its cache.")
+			b.add(capability.KindProcessExit, sel, "Exit of the same toolchain binaries.")
 		}
 	case intent.TaskTypeGitOperation:
 		if an.RequiresNetwork {
