@@ -572,6 +572,16 @@ func (s *MemoryState) SessionDurationSeconds() float64 {
 // --- reporting ---------------------------------------------------------------
 
 // BlockedCount reports how many operations were actually prevented.
+// MarkEnforced records containment applied after the decision was recorded.
+// The enforcer acts once the pipeline has committed, so a block it carries out
+// would otherwise never be counted. Owner goroutine only.
+func (s *MemoryState) MarkEnforced(d *decision.Decision) {
+	if s == nil || d == nil || !d.Enforced || d.Action != ece.ActionBlock {
+		return
+	}
+	s.blocked.Add(1)
+}
+
 func (s *MemoryState) BlockedCount() int {
 	if s == nil {
 		return 0

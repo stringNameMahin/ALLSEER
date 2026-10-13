@@ -96,15 +96,22 @@ func (t *ProcTracker) Observe(sessionID string, pid int32, startTime uint64, ppi
 		return e.depth
 	}
 	depth := 1
+	exe := ""
 	if sid, ok := t.roots[pid]; ok && sid == sessionID {
 		depth = 0
 		delete(t.roots, pid)
 	} else if pk, ok := t.live[ppid]; ok {
 		if pe, ok := t.procs[pk]; ok && pe.session == sessionID {
-			depth = pe.depth + 1
+			// A forked child runs its parent's image until it execs.
+			depth, exe = pe.depth+1, pe.executable
 		}
 	}
 	_ = t.trackLocked(sessionID, k, depth)
+	if exe != "" {
+		e := t.procs[k]
+		e.executable = exe
+		t.procs[k] = e
+	}
 	return depth
 }
 

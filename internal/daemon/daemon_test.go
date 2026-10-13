@@ -1,0 +1,480 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stringNameMahin/ALLSEER/internal/config"
+	"github.com/stringNameMahin/ALLSEER/internal/containment"
+	"github.com/stringNameMahin/ALLSEER/internal/ipc"
+	"github.com/stringNameMahin/ALLSEER/internal/policy"
+	"github.com/stringNameMahin/ALLSEER/internal/risk"
+	"github.com/stringNameMahin/ALLSEER/internal/session"
+	"github.com/stringNameMahin/ALLSEER/internal/telemetry"
+	"github.com/stringNameMahin/ALLSEER/internal/telemetry/abi"
+	"github.com/stringNameMahin/ALLSEER/internal/telemetry/synth"
+	"github.com/stringNameMahin/ALLSEER/pkg/capability"
+	"github.com/stringNameMahin/ALLSEER/pkg/decision"
+	"github.com/stringNameMahin/ALLSEER/pkg/ece"
+	"github.com/stringNameMahin/ALLSEER/pkg/event"
+)
+
+// --- fakes -------------------------------------------------------------------
+
+type fakeTel struct {
+	mu       sync.Mutex
+	ch       chan event.Event
+	attached map[string]uint64
+	observe  []capability.Kind
+}
+
+func newFakeTel() *fakeTel {
+	return &fakeTel{ch: make(chan event.Event, 256), attached: map[string]uint64{}, observe: []capability.Kind{
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate,
+		capability.KindProcessExec, capability.KindProcessExit, capability.KindNetConnect,
+	}}
+}
+
+func (f *fakeTel) Events() <-chan event.Event               { return f.ch }
+func (f *fakeTel) Start(context.Context) error              { return nil }
+func (f *fakeTel) Close() error                             { return nil }
+func (f *fakeTel) Stats() event.SourceStats                 { return event.SourceStats{} }
+func (f *fakeTel) CollectorStats() telemetry.CollectorStats { return telemetry.CollectorStats{} }
+func (f *fakeTel) Coverage() telemetry.Coverage {
+	return telemetry.Coverage{FloorIntact: true, Observable: f.observe}
+}
+func (f *fakeTel) AttachCgroup(_ context.Context, sid string, id uint64, _ int32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attached[sid] = id
+	return nil
+}
+func (f *fakeTel) DetachSession(_ context.Context, sid string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.attached, sid)
+	return nil
+}
+
+type fakeGroup struct {
+	mu                      sync.Mutex
+	id                      uint64
+	adopted                 []int
+	frozen, killed, removed bool
+	populated               bool
+}
+
+func (g *fakeGroup) CgroupID() uint64 { return g.id }
+func (g *fakeGroup) Adopt(pid int) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.adopted = append(g.adopted, pid)
+	g.populated = true
+	return nil
+}
+func (g *fakeGroup) Freeze(context.Context) error {
+	g.mu.Lock()
+	g.frozen = true
+	g.mu.Unlock()
+	return nil
+}
+func (g *fakeGroup) Thaw(context.Context) error {
+	g.mu.Lock()
+	g.frozen = false
+	g.mu.Unlock()
+	return nil
+}
+func (g *fakeGroup) Kill(context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.killed, g.populated = true, false
+	return nil
+}
+func (g *fakeGroup) Populated() (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.populated, nil
+}
+func (g *fakeGroup) Remove() error { g.mu.Lock(); g.removed = true; g.mu.Unlock(); return nil }
+func (g *fakeGroup) state() (frozen, killed bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.frozen, g.killed
+}
+
+type fakeGroups struct {
+	mu     sync.Mutex
+	groups map[string]*fakeGroup
+}
+
+func (f *fakeGroups) Create(sid string) (SessionGroup, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.groups[sid]; ok {
+		return nil, containment.ErrExists
+	}
+	g := &fakeGroup{id: uint64(1000 + len(f.groups))}
+	f.groups[sid] = g
+	return g, nil
+}
+func (f *fakeGroups) Capabilities() containment.Capabilities {
+	return containment.Capabilities{Freeze: true, Kill: true}
+}
+func (f *fakeGroups) get(sid string) *fakeGroup {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.groups[sid]
+}
+
+type fakeHost struct{ ppid int32 }
+
+func (h fakeHost) Process(int32) (int32, uint32, error) { return h.ppid, uint32(os.Getuid()), nil }
+func (fakeHost) Home(uint32) string                     { return "/home/dev" }
+func (fakeHost) UserName(uint32) string                 { return "dev" }
+
+type memSink struct {
+	mu  sync.Mutex
+	got []decision.Decision
+}
+
+func (s *memSink) Emit(_ context.Context, d decision.Decision) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.got = append(s.got, d)
+	return nil
+}
+func (s *memSink) Flush(context.Context) error { return nil }
+func (s *memSink) all() []decision.Decision {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]decision.Decision(nil), s.got...)
+}
+
+// --- harness -----------------------------------------------------------------
+
+type rig struct {
+	d      *Daemon
+	tel    *fakeTel
+	groups *fakeGroups
+	audit  *memSink
+	client *ipc.SocketClient
+	ws     string
+}
+
+func newRig(t *testing.T, mode policy.Mode, timeout time.Duration) *rig {
+	t.Helper()
+	rs, err := policy.NewLoader().Load(context.Background(), "../../configs/rules.default.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pe, err := policy.NewEngine(rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle, err := risk.LoadResourceOracle("../../configs/sensitivity.default.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re, err := risk.NewEngineWithOracle(oracle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Defaults()
+	cfg.Policy.DefaultMode = mode
+	cfg.Policy.ApprovalTimeout = timeout
+
+	r := &rig{tel: newFakeTel(), groups: &fakeGroups{groups: map[string]*fakeGroup{}}, audit: &memSink{}}
+	r.d, err = New(Options{
+		Config: cfg, Telemetry: r.tel, Groups: r.groups, Host: fakeHost{ppid: int32(os.Getpid())},
+		Policy: pe, Risk: re, Audit: r.audit, Resolvers: []string{"127.0.0.53"},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		EndSettle: 20 * time.Millisecond, OrphanGrace: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = r.d.Run(ctx) }()
+	srv := &ipc.SocketServer{Path: filepath.Join(t.TempDir(), "d.sock"), Mode: 0o600, Handler: r.d}
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); _ = srv.Shutdown(context.Background()) })
+	r.client = &ipc.SocketClient{Path: srv.Path}
+	r.ws = t.TempDir()
+	return r
+}
+
+func (r *rig) start(t *testing.T, prompt string) string {
+	t.Helper()
+	ctx := context.Background()
+	resp, err := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: prompt, WorkspaceRoot: r.ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.RequiresApproval || !resp.Envelope.Sealed || resp.Envelope.Digest == "" {
+		t.Fatalf("new session: approval %v sealed %v digest %q", resp.RequiresApproval, resp.Envelope.Sealed, resp.Envelope.Digest)
+	}
+	if err := r.client.StartSession(ctx, resp.SessionID, 4242); err == nil {
+		t.Fatal("an unapproved session started")
+	}
+	if err := r.client.ApproveEnvelope(ctx, ipc.ApproveEnvelopeRequest{SessionID: resp.SessionID, Approved: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.client.StartSession(ctx, resp.SessionID, 4242); err != nil {
+		t.Fatal(err)
+	}
+	return resp.SessionID
+}
+
+func (r *rig) feed(t *testing.T, sid string, specs ...synth.Spec) {
+	t.Helper()
+	g, err := synth.New(synth.Config{SessionID: sid, Process: synth.Proc{PID: 4242, TID: 4242, Comm: "agent", CgroupID: 1000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs, err := g.Generate(specs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		r.tel.ch <- e
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func read(path string) synth.Spec {
+	return synth.Spec{Type: abi.EvtFileOpen, Ret: 3, File: &synth.File{Path: path, ResolvedPath: path}}
+}
+
+// --- tests -------------------------------------------------------------------
+
+func TestSessionLifecycleOverTheSocket(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	ctx := context.Background()
+	sid := r.start(t, "run the go tests")
+
+	if r.tel.attached[sid] == 0 || len(r.groups.get(sid).adopted) != 1 {
+		t.Fatal("start did not adopt the root into a cgroup and attach telemetry")
+	}
+
+	stream, err := r.client.StreamDecisions(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.feed(t, sid, read(filepath.Join(r.ws, "main.go")), read("/home/dev/.ssh/id_rsa"))
+
+	var got []decision.Decision
+	for len(got) < 2 {
+		select {
+		case d := <-stream:
+			got = append(got, d)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("stream delivered %d decisions", len(got))
+		}
+	}
+	if got[0].Verdict != decision.VerdictWithinEnvelope || got[1].Verdict != decision.VerdictExplicitlyDenied {
+		t.Fatalf("verdicts = %s, %s", got[0].Verdict, got[1].Verdict)
+	}
+	if got[1].Action != ece.ActionBlock || got[1].Enforced {
+		t.Fatalf("monitor mode: action %s enforced %v, want block recorded and not applied", got[1].Action, got[1].Enforced)
+	}
+	if frozen, killed := r.groups.get(sid).state(); frozen || killed {
+		t.Fatal("monitor mode applied containment")
+	}
+
+	s, err := r.client.EndSession(ctx, sid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != session.StateCompleted || s.Summary.EventsObserved != 2 || s.Outcome.ViolationCount == 0 {
+		t.Fatalf("ended session: state %s summary %+v outcome %+v", s.State, s.Summary, s.Outcome)
+	}
+	if !r.groups.get(sid).removed {
+		t.Fatal("the session cgroup was not removed")
+	}
+	if len(r.audit.all()) != 2 {
+		t.Fatalf("audit has %d records, want 2", len(r.audit.all()))
+	}
+	if again, err := r.client.EndSession(ctx, sid, 0); err != nil || again.State != session.StateCompleted {
+		t.Fatalf("EndSession is not idempotent: %v %v", again, err)
+	}
+}
+
+func TestEnforceModeKillsOnBlock(t *testing.T) {
+	r := newRig(t, policy.ModeEnforce, time.Minute)
+	sid := r.start(t, "run the go tests")
+	r.feed(t, sid, read("/home/dev/.aws/credentials"))
+
+	waitFor(t, "the kill", func() bool { _, k := r.groups.get(sid).state(); return k })
+	waitFor(t, "termination", func() bool {
+		s, _ := r.client.GetSession(context.Background(), sid)
+		return s != nil && s.State == session.StateTerminated
+	})
+	recs := r.audit.all()
+	if len(recs) != 1 || !recs[0].Enforced || recs[0].Action != ece.ActionBlock {
+		t.Fatalf("audit = %+v", recs)
+	}
+	if s, _ := r.client.GetSession(context.Background(), sid); s.Outcome.BlockedCount != 1 {
+		t.Fatalf("BlockedCount = %d, want 1", s.Outcome.BlockedCount)
+	}
+}
+
+func TestInteractiveFreezeThenApproveOrDeny(t *testing.T) {
+	r := newRig(t, policy.ModeInteractive, time.Minute)
+	ctx := context.Background()
+
+	// Unexpected egress asks for approval; approving thaws.
+	sid := r.start(t, "run the go tests")
+	r.feed(t, sid, synth.Spec{Type: abi.EvtNetConnect, Ret: 0, Net: &synth.Net{Family: 2, DestAddr: netip.MustParseAddr("203.0.113.9"), DestPort: 443}})
+	waitFor(t, "freeze", func() bool { f, _ := r.groups.get(sid).state(); return f })
+	pend, err := r.client.PendingApprovals(ctx)
+	if err != nil || len(pend) != 1 || pend[0].SessionID != sid || !pend[0].Decision.Enforced {
+		t.Fatalf("pending = %+v, %v", pend, err)
+	}
+	if s, _ := r.client.GetSession(ctx, sid); s.State != session.StateSuspended {
+		t.Fatalf("state while frozen = %s", s.State)
+	}
+	if err := r.client.RespondApproval(ctx, decision.ApprovalResponse{RequestID: pend[0].ID, Approved: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "thaw", func() bool { f, _ := r.groups.get(sid).state(); return !f })
+	if s, _ := r.client.GetSession(ctx, sid); s.State != session.StateActive {
+		t.Fatalf("state after approval = %s", s.State)
+	}
+
+	// Denying kills.
+	r.feed(t, sid, synth.Spec{Type: abi.EvtNetConnect, Ret: 0, Net: &synth.Net{Family: 2, DestAddr: netip.MustParseAddr("198.51.100.7"), DestPort: 443}})
+	waitFor(t, "second request", func() bool { p, _ := r.client.PendingApprovals(ctx); return len(p) == 1 })
+	pend, _ = r.client.PendingApprovals(ctx)
+	if err := r.client.RespondApproval(ctx, decision.ApprovalResponse{RequestID: pend[0].ID, Approved: false}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "kill after denial", func() bool { _, k := r.groups.get(sid).state(); return k })
+	waitFor(t, "termination", func() bool {
+		s, _ := r.client.GetSession(ctx, sid)
+		return s.State == session.StateTerminated
+	})
+}
+
+func TestApprovalTimeoutDenies(t *testing.T) {
+	r := newRig(t, policy.ModeInteractive, 100*time.Millisecond)
+	sid := r.start(t, "run the go tests")
+	r.feed(t, sid, synth.Spec{Type: abi.EvtNetConnect, Ret: 0, Net: &synth.Net{Family: 2, DestAddr: netip.MustParseAddr("203.0.113.9"), DestPort: 443}})
+	waitFor(t, "kill on timeout", func() bool { _, k := r.groups.get(sid).state(); return k })
+}
+
+func TestStartRefusesAProcessThatIsNotTheCallersChild(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	r.d.host = fakeHost{ppid: 1}
+	ctx := context.Background()
+	resp, err := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: "run the go tests", WorkspaceRoot: r.ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.client.ApproveEnvelope(ctx, ipc.ApproveEnvelopeRequest{SessionID: resp.SessionID, Approved: true})
+	err = r.client.StartSession(ctx, resp.SessionID, 1)
+	var e *ipc.Error
+	if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {
+		t.Fatalf("StartSession with a foreign pid = %v", err)
+	}
+}
+
+func TestTamperedEnvelopeIsNotEnforced(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	ctx := context.Background()
+	resp, _ := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: "run the go tests", WorkspaceRoot: r.ws})
+	_ = r.client.ApproveEnvelope(ctx, ipc.ApproveEnvelopeRequest{SessionID: resp.SessionID, Approved: true})
+	s, _ := r.d.manager.Get(ctx, resp.SessionID)
+	s.Envelope.Grants[0].Selector.PathPatterns = append(s.Envelope.Grants[0].Selector.PathPatterns, "/**")
+	if err := r.client.StartSession(ctx, resp.SessionID, 4242); err == nil {
+		t.Fatal("a widened envelope was started")
+	}
+}
+
+func TestRejectedEnvelopeEndsTheSession(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	ctx := context.Background()
+	resp, _ := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: "run the go tests", WorkspaceRoot: r.ws})
+	if err := r.client.ApproveEnvelope(ctx, ipc.ApproveEnvelopeRequest{SessionID: resp.SessionID, Approved: false}); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := r.client.GetSession(ctx, resp.SessionID)
+	if s.State != session.StateTerminated {
+		t.Fatalf("rejected session state = %s", s.State)
+	}
+}
+
+func TestModeRequestCannotWeaken(t *testing.T) {
+	r := newRig(t, policy.ModeEnforce, time.Minute)
+	resp, err := r.client.CreateSession(context.Background(), ipc.CreateSessionRequest{
+		Prompt: "run the go tests", WorkspaceRoot: r.ws, Mode: policy.ModeMonitor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := r.client.GetSession(context.Background(), resp.SessionID)
+	if s.Mode != policy.ModeEnforce {
+		t.Fatalf("mode = %s, want enforce", s.Mode)
+	}
+}
+
+func TestDropsFailTheSessionClosed(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	sid := r.start(t, "run the go tests")
+	g, _ := synth.New(synth.Config{SessionID: sid, Process: synth.Proc{PID: 4242, TID: 4242}})
+	evs, _ := g.Generate(synth.Spec{Type: abi.EvtFileOpen, Ret: 3, Dropped: 5, File: &synth.File{Path: "/x", ResolvedPath: "/x"}})
+	r.tel.ch <- evs[0]
+	waitFor(t, "fail-closed", func() bool {
+		s, _ := r.client.GetSession(context.Background(), sid)
+		return s.State == session.StateFailed && !s.Outcome.TelemetryComplete
+	})
+	if _, k := r.groups.get(sid).state(); !k {
+		t.Fatal("a session with a telemetry gap kept running")
+	}
+}
+
+func TestOrphanedSessionIsReaped(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	sid := r.start(t, "run the go tests")
+	g := r.groups.get(sid)
+	g.mu.Lock()
+	g.populated = false
+	g.mu.Unlock()
+	waitFor(t, "reaping", func() bool {
+		s, _ := r.client.GetSession(context.Background(), sid)
+		return session.IsTerminal(s.State)
+	})
+}
+
+func TestOtherUsersCannotTouchASession(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	sid := r.start(t, "run the go tests")
+	stranger := ipc.Peer{UID: uint32(os.Getuid()) + 1, PID: 1}
+	if _, err := r.d.Call(context.Background(), stranger, ipc.MethodGetSession, []byte(`{"session_id":"`+sid+`"}`)); err == nil {
+		t.Fatal("another user read the session")
+	}
+	list, _ := r.d.Call(context.Background(), stranger, ipc.MethodListSessions, nil)
+	if l := list.([]*session.Session); len(l) != 0 {
+		t.Fatalf("another user listed %d sessions", len(l))
+	}
+}

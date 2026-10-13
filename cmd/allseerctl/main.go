@@ -20,8 +20,8 @@
 //	allseerctl config validate <file>    check configuration
 //	allseerctl replay <file>             replay recorded telemetry
 //
-// Implemented so far: replay, policy dry-run, capabilities, version. Everything
-// else needs the control socket, which arrives with the daemon in Phase 2.
+// Implemented: status, sessions, session, envelope, watch, approvals, approve,
+// deny, replay, policy dry-run, capabilities, version.
 //
 // Dispatch uses the standard library flag package with subcommands. A CLI
 // framework is a dependency this project does not need.
@@ -35,7 +35,7 @@ import (
 	"github.com/stringNameMahin/ALLSEER/internal/buildinfo"
 )
 
-// TODO(allseerctl): implement the control socket client.
+// Done: the control socket client is ipc.SocketClient; daemon.go uses it.
 // TODO(allseerctl): render envelopes and decisions for humans. This is the main
 // usability surface: an approval prompt nobody can understand in a few seconds
 // gets approved reflexively, which is worse than not asking.
@@ -62,6 +62,14 @@ type command struct {
 
 func commands() []command {
 	return []command{
+		{"status", "Daemon health, probe coverage and enforcer capabilities", runStatus},
+		{"sessions", "List governed sessions", runSessions},
+		{"session", "Show one session and its outcome", runSession},
+		{"envelope", "Show the envelope governing a session", runEnvelope},
+		{"watch", "Stream live decisions", runWatch},
+		{"approvals", "List pending runtime approvals", runApprovals},
+		{"approve", "Approve a pending request and resume the agent", answer(true)},
+		{"deny", "Deny a pending request and kill the agent", answer(false)},
 		{"replay", "Replay a recorded telemetry stream", runReplay},
 		{"policy", "Inspect policy rule sets; dry-run one against a recording", runPolicy},
 		{"capabilities", "List the capability catalog this build knows", runCapabilities},

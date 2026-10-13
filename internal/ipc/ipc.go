@@ -22,6 +22,10 @@ package ipc
 import (
 	"context"
 
+	"github.com/stringNameMahin/ALLSEER/internal/containment"
+	"github.com/stringNameMahin/ALLSEER/internal/intent"
+	"github.com/stringNameMahin/ALLSEER/internal/telemetry"
+
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
 	"github.com/stringNameMahin/ALLSEER/internal/session"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
@@ -49,8 +53,9 @@ type Client interface {
 	// unobserved.
 	StartSession(ctx context.Context, sessionID string, rootPID int32) error
 
-	// EndSession finalizes a session and returns its summary.
-	EndSession(ctx context.Context, sessionID string, exitCode int) (*session.Summary, error)
+	// EndSession finalizes a session and returns it with its outcome and
+	// summary.
+	EndSession(ctx context.Context, sessionID string, exitCode int) (*session.Session, error)
 
 	// --- Inspection ---------------------------------------------------------
 
@@ -109,6 +114,10 @@ type CreateSessionRequest struct {
 
 	// Profile requests a specific envelope profile.
 	Profile string `json:"profile,omitempty"`
+
+	// Workspace is the structural context the shim gathered: languages, build
+	// systems, top-level names. Never file contents.
+	Workspace intent.WorkspaceContext `json:"workspace"`
 }
 
 // CreateSessionResponse returns the prepared session.
@@ -167,6 +176,38 @@ type StatusResponse struct {
 
 	// DroppedEvents is the cumulative telemetry loss count.
 	DroppedEvents uint64 `json:"dropped_events"`
+
+	// Coverage is what the attached probes can and cannot observe.
+	Coverage telemetry.Coverage `json:"coverage"`
+
+	// Collector is the live collector's loss and attribution accounting.
+	Collector telemetry.CollectorStats `json:"collector"`
+
+	// Dispatch is the routing accounting, including events no session owned.
+	Dispatch session.DispatchStats `json:"dispatch"`
+
+	// Containment reports which whole-tree actions the host supports.
+	Containment containment.Capabilities `json:"containment"`
+
+	// Enforcer is what the active enforcer can actually do.
+	Enforcer decision.EnforcerCapabilities `json:"enforcer"`
+}
+
+// StartSessionRequest binds a launched process tree to a ready session.
+type StartSessionRequest struct {
+	SessionID string `json:"session_id"`
+	RootPID   int32  `json:"root_pid"`
+}
+
+// EndSessionRequest finalizes a session.
+type EndSessionRequest struct {
+	SessionID string `json:"session_id"`
+	ExitCode  int    `json:"exit_code"`
+}
+
+// SessionRequest names one session.
+type SessionRequest struct {
+	SessionID string `json:"session_id"`
 }
 
 // Error is a structured protocol error.

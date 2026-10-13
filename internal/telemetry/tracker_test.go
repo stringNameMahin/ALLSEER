@@ -76,3 +76,15 @@ func TestTrackerForgetSession(t *testing.T) {
 		t.Fatalf("a forgotten pending root leaked into another session: depth %d", d)
 	}
 }
+
+// A child that forked without exec runs its parent's image.
+func TestTrackerForkInheritsExecutable(t *testing.T) {
+	tr := NewProcTracker()
+	tr.TrackRoot("s", 10)
+	tr.Observe("s", 10, 1, 1)
+	tr.SetExecutable(10, 1, "/usr/bin/bash")
+	tr.Observe("s", 11, 2, 10)
+	if got := tr.Executable(11, 2); got != "/usr/bin/bash" {
+		t.Fatalf("forked child executable = %q, want the parent's", got)
+	}
+}

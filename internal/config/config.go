@@ -134,6 +134,10 @@ type RiskConfig struct {
 
 	// EnableBaseline turns on behavioral baseline learning.
 	EnableBaseline bool `json:"enable_baseline" yaml:"enable_baseline"`
+
+	// SensitivityPath is the resource sensitivity list the risk engine loads,
+	// in the format of configs/sensitivity.default.yaml.
+	SensitivityPath string `json:"sensitivity_path" yaml:"sensitivity_path"`
 }
 
 // PolicyConfig configures the policy engine.
