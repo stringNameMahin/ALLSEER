@@ -40,8 +40,10 @@ BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) -I$(BPF_DIR)/include -W
 # link failure without it. pkg-config is the source of truth so a libbpf
 # installed somewhere other than /usr/lib still resolves; the literal is a
 # fallback for a host with the library but no .pc file.
+#
+# Not exported: only the ebpf commands pass it, so default targets never link
+# against a libbpf the host may not have.
 CGO_LDFLAGS ?= $(shell pkg-config --libs libbpf 2>/dev/null || echo -lbpf)
-export CGO_LDFLAGS
 
 ##@ General
 
@@ -65,9 +67,9 @@ build-%: ## Build a single binary, e.g. make build-allseerd
 .PHONY: build-ebpf
 build-ebpf: bpf ## Build binaries with the eBPF collector linked in (Linux only)
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=1 $(GO) build -trimpath -tags "ebpf" -ldflags "$(LDFLAGS)" \
-		-o $(BIN_DIR)/allseerd ./cmd/allseerd
-	CGO_ENABLED=1 $(GO) build -tags "ebpf" ./...
+	CGO_ENABLED=1 CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) build -trimpath -tags "ebpf" \
+		-ldflags "$(LDFLAGS)" -o $(BIN_DIR)/allseerd ./cmd/allseerd
+	CGO_ENABLED=1 CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) build -tags "ebpf" ./...
 
 .PHONY: bpf
 bpf: ## Compile eBPF C sources to CO-RE objects (needs clang + bpftool)
@@ -127,8 +129,8 @@ test: ## Run unit tests
 # split the build tag makes: the portable layer must stay testable everywhere.
 .PHONY: test-ebpf
 test-ebpf: bpf ## Vet and test the eBPF-tagged code (Linux + libbpf; loading needs root)
-	CGO_ENABLED=1 $(GO) vet -tags "ebpf" ./...
-	CGO_ENABLED=1 $(GO) test -tags "ebpf" -count=1 ./...
+	CGO_ENABLED=1 CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) vet -tags "ebpf" ./...
+	CGO_ENABLED=1 CGO_LDFLAGS="$(CGO_LDFLAGS)" $(GO) test -tags "ebpf" -count=1 ./...
 	@echo ""
 	@echo "Tests that load BPF skip unless run as root. For the full run:"
 	@echo "  sudo -E env PATH=\$$PATH CGO_LDFLAGS=\"$(CGO_LDFLAGS)\" \\"
@@ -236,8 +238,8 @@ export PATH := $(TOOLS_DIR):$(PATH)
 EBPF_ENV := CGO_ENABLED=1 CGO_CFLAGS="-I$(LIBBPF_DIR)/include" \
 	CGO_LDFLAGS="$(LIBBPF_DIR)/lib/libbpf.a -lelf -lz"
 
-# Default-tag builds need no libbpf. Without this the exported -lbpf fallback
-# breaks every cgo link on a host with no libbpf-dev, such as the CI runners.
+# Default-tag builds need no libbpf. This keeps a CGO_LDFLAGS inherited from the
+# caller's environment out of the CI jobs, so they link the same on any host.
 # The ebpf commands set their own CGO_LDFLAGS through EBPF_ENV.
 tools ci-lint ci-static ci-build ci-unit ci-integration ci-security: CGO_LDFLAGS :=
 

@@ -138,7 +138,7 @@ fi
 [[ -d "$GOMODCACHE" ]] || die "GOMODCACHE $GOMODCACHE does not exist; pre-warm it as the normal user with 'go build ./...'"
 
 # The arm runner is `-tags ebpf`, so it links against libbpf through cgo. The
-# Makefile exports CGO_LDFLAGS for the commands it runs; this script is not one
+# Makefile passes CGO_LDFLAGS to its ebpf commands; this script is not one
 # of them, and sudo does not carry it either, so without this every run in the
 # session fails at the link step with an undefined reference to libbpf and the
 # session records nothing. Derived the same way the Makefile derives it.
