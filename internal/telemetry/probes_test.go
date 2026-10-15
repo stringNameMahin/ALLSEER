@@ -295,6 +295,64 @@ func TestFileOpenKeepsOpensObservableWhenTheOpenatPairIsIncomplete(t *testing.T)
 	}
 }
 
+// The other half of what an incomplete pair costs, and the one that matters: the
+// hook still records successful opens, so the kinds stay observable, but a
+// refused open reaches nothing. Coverage must report that as a reduction to
+// successes only, and as a loss a full build would not have, not as health.
+func TestLosingThePairReducesOpensToSuccessesOnly(t *testing.T) {
+	cov := ComputeCoverage(withDetached(allAttached(), ProgOpenatExit))
+
+	read := gapFor(cov, capability.KindFileRead)
+	if read == nil {
+		t.Fatal("fs.read reports no entry-point gap with the pair incomplete")
+	}
+	for _, entry := range []string{"open", "openat", "openat2", "creat"} {
+		if !containsEntry(read.SuccessOnly, entry) {
+			t.Errorf("fs.read does not report %s as successes only: %+v", entry, read)
+		}
+	}
+
+	var lost *EntryPointGap
+	for _, g := range cov.DegradedEntryPoints() {
+		if g.Kind == capability.KindFileRead {
+			g := g
+			lost = &g
+		}
+	}
+	if lost == nil || !containsEntry(lost.SuccessOnly, "openat") {
+		t.Fatalf("the reduction is not reported as a loss: %+v", lost)
+	}
+	// io_uring is successes-only in a full build too, so it is not a loss.
+	if containsEntry(lost.SuccessOnly, "io_uring") {
+		t.Errorf("io_uring is reported as lost although no build records its refusals: %+v", lost)
+	}
+}
+
+// The standing io_uring gap, named. With everything attached, opens through the
+// four syscalls are watched with their outcomes, and io_uring is watched for
+// successes only: a refused IORING_OP_OPENAT reaches neither hook.
+func TestIoUringRefusalsAreReportedUnwatched(t *testing.T) {
+	cov := ComputeCoverage(allAttached())
+	for _, k := range []capability.Kind{
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate} {
+		gap := gapFor(cov, k)
+		if gap == nil {
+			t.Fatalf("%s reports no entry-point gap", k)
+		}
+		if !containsEntry(gap.SuccessOnly, "io_uring") {
+			t.Errorf("%s does not report io_uring as successes only: %+v", k, gap)
+		}
+		for _, entry := range []string{"open", "openat", "openat2", "creat"} {
+			if containsEntry(gap.SuccessOnly, entry) || containsEntry(gap.Missing, entry) {
+				t.Errorf("%s does not report %s watched with outcomes: %+v", k, entry, gap)
+			}
+		}
+	}
+	if lost := cov.DegradedEntryPoints(); len(lost) != 0 {
+		t.Errorf("a full build reports its by-design io_uring gap as a loss: %+v", lost)
+	}
+}
+
 // With everything attached, an open is watched at every entry point the catalog
 // declares for it. The read and mmap entry points of fs.read stay unwatched and
 // are reported so: ALLSEER observes the open that reached a file, not each
@@ -337,9 +395,10 @@ func TestOptionalProgramsIsTheFentryHookOnly(t *testing.T) {
 }
 
 // The degradation the hook is optional for: a kernel that cannot load it keeps
-// the openat pair, so opens stay observable through openat and the entry points
-// only the hook reaches are reported unwatched rather than quietly lost.
-func TestWithoutTheHookOnlyOpenatIsWatched(t *testing.T) {
+// the openat pair, so opens through the four syscalls stay observable with
+// their outcomes, and the entry points only the hook reaches are reported
+// unwatched rather than quietly lost.
+func TestWithoutTheHookOnlyTheSyscallEntryPointsAreWatched(t *testing.T) {
 	cov := ComputeCoverage(withDetached(allAttached(), ProgFileOpen))
 
 	for _, k := range []capability.Kind{
@@ -351,13 +410,13 @@ func TestWithoutTheHookOnlyOpenatIsWatched(t *testing.T) {
 		if gap == nil {
 			t.Fatalf("%s reports no entry-point gap without the hook", k)
 		}
-		if !containsEntry(gap.Observed, "openat") {
-			t.Errorf("%s does not report openat watched: %+v", k, gap)
-		}
-		for _, entry := range []string{"openat2", "io_uring"} {
-			if !containsEntry(gap.Missing, entry) {
-				t.Errorf("%s does not report %s unwatched without the hook: %+v", k, entry, gap)
+		for _, entry := range []string{"open", "openat", "openat2", "creat"} {
+			if !containsEntry(gap.Observed, entry) || containsEntry(gap.SuccessOnly, entry) {
+				t.Errorf("%s does not report %s watched with outcomes: %+v", k, entry, gap)
 			}
+		}
+		if !containsEntry(gap.Missing, "io_uring") {
+			t.Errorf("%s does not report io_uring unwatched without the hook: %+v", k, gap)
 		}
 	}
 }
@@ -382,10 +441,8 @@ func TestDegradedEntryPointsSeparatesFixableFromByDesign(t *testing.T) {
 	if read == nil {
 		t.Fatalf("fs.read reports no lost entry points without the hook: %+v", lost)
 	}
-	for _, entry := range []string{"openat2", "io_uring"} {
-		if !containsEntry(read.Missing, entry) {
-			t.Errorf("fs.read does not report %s lost: %+v", read, entry)
-		}
+	if !containsEntry(read.Missing, "io_uring") {
+		t.Errorf("fs.read does not report io_uring lost: %+v", read)
 	}
 	// Watched at no attachment, so not a loss: it is how this build works.
 	for _, entry := range []string{"read", "mmap"} {
@@ -597,13 +654,16 @@ func TestAttachPointsAreUniqueAndNamed(t *testing.T) {
 		switch {
 		case d.AttachPoint == "":
 			t.Errorf("%s has no attach point", d.Name)
-		case d.Type != probeTypeTracepoint && d.Type != probeTypeFentry:
-			t.Errorf("%s has type %q, want tracepoint or fentry", d.Name, d.Type)
+		case d.Type != probeTypeTracepoint && d.Type != probeTypeFentry && d.Type != probeTypeFexit:
+			t.Errorf("%s has type %q, want tracepoint, fentry or fexit", d.Name, d.Type)
 		}
-		if other, dup := seen[d.AttachPoint]; dup {
-			t.Errorf("%s and %s share attach point %q", other, d.Name, d.AttachPoint)
+		// fentry and fexit on one function are two hooks, so the pair is
+		// unique by type and attach point together.
+		hook := d.Type + " " + d.AttachPoint
+		if other, dup := seen[hook]; dup {
+			t.Errorf("%s and %s share hook %q", other, d.Name, hook)
 		}
-		seen[d.AttachPoint] = d.Name
+		seen[hook] = d.Name
 	}
 }
 

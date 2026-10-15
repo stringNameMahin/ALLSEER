@@ -26,11 +26,11 @@
  *
  * At this point the file declares six maps and twenty-nine programs:
  * sched_process_exec and sched_process_exit, which each produce a record on
- * their own; two syscall pairs — sys_enter_openat / sys_exit_openat and
- * sys_enter_connect / sys_exit_connect — which each produce one record between
+ * their own; an fentry/fexit pair on do_sys_openat2 and a syscall pair on
+ * sys_enter_connect / sys_exit_connect, which each produce one record between
  * them; and eleven more syscall pairs for the credential syscalls, which
  * between them produce every ALLSEER_EVT_PRIV_CHANGE. The maps are what the
- * probes emit into, are filtered by, and — for the thirteen syscall pairs —
+ * probes emit into, are filtered by, and - for the thirteen enter/exit pairs -
  * hold half-built events in between.
  *
  * The twenty-ninth is the fentry program on security_file_open, which stands
@@ -150,8 +150,8 @@ struct {
 	__type(value, allseer_drop_count_t);
 } ringbuf_drops SEC(".maps");
 
-/* The half-built openat events, held between one thread's sys_enter_openat and
- * its sys_exit_openat.
+/* The half-built open events, held between one thread's openat_enter and its
+ * openat_exit.
  *
  * Nothing in user space reads or writes it during operation, unlike the three
  * maps above: it is kernel-internal state, and telemetry.MapOpenatScratch exists
@@ -768,11 +768,30 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 
 /* --- The openat pair ---------------------------------------------------------
  *
- * Two programs, one event. sys_enter_openat has the arguments and no return;
- * sys_exit_openat has the return and no arguments; struct allseer_event needs
- * both, so neither tracepoint can produce a record on its own and the pair is
- * joined through `openat_scratch`. The protocol — the key, the identity stamp,
- * the map type, the lifecycle, every failure path — is written down once in
+ * Two programs, one event. The entry side has the arguments and no return; the
+ * exit side has the return and no arguments; struct allseer_event needs both,
+ * so neither can produce a record on its own and the pair is joined through
+ * `openat_scratch`.
+ *
+ * The pair is attached to do_sys_openat2 with fentry and fexit, not to the
+ * openat syscall tracepoints it was first written for. Two findings forced
+ * that. A kernel update (Ubuntu 7.0.0-38) stopped sys_enter_openat from
+ * firing for the processes being governed while sys_exit_openat still fired,
+ * so an entry side that never ran left an exit side with nothing to complete,
+ * every probe reported attached, and a denied credential read went
+ * unrecorded. And a tracepoint on openat sees openat only: open, creat and
+ * openat2 each have their own. do_sys_openat2 is the function all four
+ * syscalls reach, and a function hook does not depend on per-task syscall
+ * tracing state. The names below still say openat because the scratch
+ * protocol was written for it; the entry points they cover are the four.
+ *
+ * Not io_uring. An IORING_OP_OPENAT reaches the filesystem without passing
+ * through do_sys_openat2, so its successful opens are reported by the
+ * security_file_open hook further down and its refused ones by nothing at all.
+ * Coverage reports that as an entry point observed for successes only.
+ *
+ * The protocol - the key, the identity stamp,
+ * the map type, the lifecycle, every failure path - is written down once in
  * allseer_maps.h, because sys_enter_connect will use the same one.
  *
  * The three rules those two programs implement, restated here because they are
@@ -800,7 +819,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * because it is a copy of it rather than a second reading.
  */
 
-/* sys_enter_openat: a thread is asking to open a path.
+/* openat_enter, fentry on do_sys_openat2: a thread is asking to open a path.
  *
  * Emits nothing. That is the point of it: the record it would emit has a `ret`
  * field the header defines as "syscall return; negative is -errno", and at this
@@ -812,13 +831,16 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * An event emitted here would say the opposite of that, for every open that
  * failed. So this side captures and stores, and openat_exit below emits.
  *
- * The tracepoint's arguments, from its format file, arrive in the generic
- * syscall context's args array:
+ * do_sys_openat2's arguments, as its BTF prototype names them:
  *
- *   args[0]  dfd        the directory fd a relative path is resolved against
- *   args[1]  filename   a pointer into *user* memory
- *   args[2]  flags      O_RDONLY/O_WRONLY/O_CREAT/...
- *   args[3]  mode       the creation mode
+ *   dfd       the directory fd a relative path is resolved against
+ *   filename  a pointer into *user* memory; the kernel copies it after this
+ *   how       struct open_how, already in kernel memory: open and openat build
+ *             it from their flags and mode, openat2 copies it from the caller
+ *
+ * fentry runs in a context that cannot take a page fault on any kernel, so a
+ * filename in a page the process has not touched yet fails here and is read
+ * again at fexit, after the kernel's own copy faulted it in (reread_path).
  *
  * Since ABI v3 dfd is carried, and for a relative name the directory it
  * resolves against is captured here (capture_base_dir below).
@@ -831,6 +853,9 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * this one — its string is inside the tracepoint record, which is kernel memory.
  */
 #define ALLSEER_AT_FDCWD  (-100)
+
+/* RESOLVE_IN_ROOT, from include/uapi/linux/openat2.h. */
+#define ALLSEER_RESOLVE_IN_ROOT  0x10
 
 /* __FMODE_EXEC, as fs/exec.c sets it in open_exec_flags. The kernel opens the
  * program it is about to run through the same path as any other open, so this
@@ -966,8 +991,8 @@ static __always_inline void capture_fd_identity(struct task_struct *task, __s32 
 	fp->device = BPF_CORE_READ(f, f_inode, i_sb, s_dev);
 }
 
-SEC("tracepoint/syscalls/sys_enter_openat")
-int openat_enter(struct trace_event_raw_sys_enter *ctx)
+SEC("fentry/do_sys_openat2")
+int BPF_PROG(openat_enter, int dfd, const char *filename, struct open_how *how)
 {
 	struct task_struct *task;
 	struct allseer_open_scratch *s;
@@ -994,6 +1019,16 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * signal". */
 	cgroup_id = bpf_get_current_cgroup_id();
 	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
+
+	/* openat2 with RESOLVE_IN_ROOT resolves the name with dfd as the root, so
+	 * "/etc/shadow" can name a file nowhere near /etc/shadow, and a user-space
+	 * resolver joining it to the host root would name the wrong file. No entry
+	 * is stored, which leaves the open to security_file_open: a successful one
+	 * is reported there under the kernel's own name for the file it opened. A
+	 * refused one is not reported by anything, and that is recorded as a gap
+	 * rather than resolved against the wrong root. */
+	if (BPF_CORE_READ(how, resolve) & ALLSEER_RESOLVE_IN_ROOT)
 		return 0;
 
 	/* Zeroed in full before anything is written into it. Two reasons, and both
@@ -1048,16 +1083,17 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	bpf_get_current_comm(&s->proc.comm, sizeof(s->proc.comm));
 
 	/* The arguments, as supplied. Narrowed to __u32 because that is what
-	 * struct allseer_file_payload declares; openat's flags and mode are an int
-	 * and a mode_t, both 32-bit on every target this ABI supports, so the
-	 * narrowing from the context's unsigned long discards only sign extension.
+	 * struct allseer_file_payload declares. open_how carries both as __u64 for
+	 * every entry point, but open and openat build it from an int and a mode_t,
+	 * and openat2 refuses any flag bit beyond the valid 32 with EINVAL, so the
+	 * narrowing is exact for every open that can succeed.
 	 *
 	 * mode is stored whatever the flags say. It is meaningful only when the
 	 * flags permit creation, and the record reports what the process passed
 	 * rather than substituting a zero it did not pass — the decoder is where
 	 * flags decide meaning, and kindForOpenFlags already does exactly that. */
-	s->flags = (__u32)ctx->args[2];
-	s->mode = (__u32)ctx->args[3];
+	s->flags = (__u32)BPF_CORE_READ(how, flags);
+	s->mode = (__u32)BPF_CORE_READ(how, mode);
 
 	/* The pathname, out of user memory, bounded by the destination.
 	 *
@@ -1068,17 +1104,17 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * fails for a page the process has not touched yet, even though the
 	 * kernel will copy the name a moment later. The entry is stored anyway
 	 * with the pointer, and openat_exit reads the name again. */
-	n = bpf_probe_read_user_str(&s->path, sizeof(s->path), (const char *)ctx->args[1]);
+	n = bpf_probe_read_user_str(&s->path, sizeof(s->path), filename);
 
 	/* ABI v3. The helper NUL-terminates a truncated read, so a path that filled
 	 * its array is flagged as possibly truncated rather than trusted as whole.
 	 * An absolute path never consults a directory; a relative one records the
 	 * directory the kernel will resolve it against. */
-	s->dirfd = (__s32)ctx->args[0];
+	s->dirfd = dfd;
 	s->path_flags = ALLSEER_PATH_INFO;
 	if (n < 0) {
 		s->path_flags |= ALLSEER_PATH_UNREADABLE;
-		s->path_ptr = ctx->args[1];
+		s->path_ptr = (__u64)filename;
 	} else if (n >= (long)sizeof(s->path))
 		s->path_flags |= ALLSEER_PATH_TRUNCATED;
 	if (n > 1 && s->path[0] != '/')
@@ -1099,7 +1135,8 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	return 0;
 }
 
-/* sys_exit_openat: the open has returned, and the record can be completed.
+/* openat_exit, fexit on do_sys_openat2: the open has returned, and the
+ * record can be completed.
  *
  * This is the side that emits, and the only thing it contributes to the record
  * is `ret`. Everything else — the timestamp, the identity, the cgroup, the path,
@@ -1136,8 +1173,8 @@ static __always_inline void reread_path(struct task_struct *task, struct allseer
 		s->path_flags |= capture_base_dir(task, s->dirfd, s->dir);
 }
 
-SEC("tracepoint/syscalls/sys_exit_openat")
-int openat_exit(struct trace_event_raw_sys_exit *ctx)
+SEC("fexit/do_sys_openat2")
+int BPF_PROG(openat_exit, int dfd, const char *filename, struct open_how *how, long ret)
 {
 	struct allseer_open_scratch *s;
 	struct task_struct *task;
@@ -1189,16 +1226,15 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	e->timestamp = s->timestamp;
 	e->type = ALLSEER_EVT_FILE_OPEN;
 
-	/* The one field this side owns. The tracepoint's `ret` is a long because
-	 * every syscall's return goes through this context; openat's is an int — a
-	 * file descriptor or a negative errno — so narrowing to the __s32 the header
-	 * declares is exact for every value openat can produce.
+	/* The one field this side owns. do_sys_openat2 returns a long, and every
+	 * value an open produces - a file descriptor or a negative errno - fits an
+	 * int, so narrowing to the __s32 the header declares is exact.
 	 *
 	 * Written as it is, negative and all. internal/telemetry/decode.go turns
 	 * that into event.Result: "ret >= 0" is Succeeded, and a negative value is
 	 * rendered as an errno name. A failed open is a governance signal, not an
 	 * absence of one. */
-	e->ret = (__s32)ctx->ret;
+	e->ret = (__s32)ret;
 	e->version = ALLSEER_ABI_VERSION;
 	e->flags = 0;
 
@@ -1975,7 +2011,7 @@ static __always_inline __u32 capture_priv_state(struct task_struct *task,
 
 /* priv_enter: a thread is asking to change its credentials.
  *
- * Emits nothing, for the reason sys_enter_openat emits nothing: the record has a
+ * Emits nothing, for the reason openat_enter emits nothing: the record has a
  * `ret` field the header defines as the syscall return, and at this instant
  * there is no return. What it does that openat's entry side does not is capture
  * the `before` snapshot, and that is the whole reason the pairing is mandatory

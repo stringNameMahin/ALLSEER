@@ -211,6 +211,13 @@ func (d *Daemon) activeCount() int {
 }
 
 func (d *Daemon) createSession(ctx context.Context, peer ipc.Peer, req ipc.CreateSessionRequest) (*ipc.CreateSessionResponse, error) {
+	// Nothing is governed on telemetry that has not been shown to report. A
+	// session started now would read as governed while the probe it depends on
+	// most could be silent.
+	if st, ok := d.selfTestPassed(); !ok {
+		return nil, ipc.Errorf(ipc.ErrCodeTelemetryFailed,
+			"refusing to govern: the telemetry self-test has not passed (%s)", st.Detail)
+	}
 	if req.Prompt == "" {
 		return nil, ipc.Errorf(ipc.ErrCodeInvalidRequest, "a prompt is required: the envelope is derived from it")
 	}
@@ -274,9 +281,16 @@ func (d *Daemon) createSession(ctx context.Context, peer ipc.Peer, req ipc.Creat
 		// produces no record while fs.read still reads as observable. Naming
 		// the entry points is what keeps that from passing as full coverage.
 		for _, g := range cov.DegradedEntryPoints() {
-			warnings = append(warnings, fmt.Sprintf(
-				"%s is not observed through %s on this host; those operations produce no records",
-				g.Kind, strings.Join(g.Missing, ", ")))
+			if len(g.Missing) > 0 {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s is not observed through %s on this host; those operations produce no records",
+					g.Kind, strings.Join(g.Missing, ", ")))
+			}
+			if len(g.SuccessOnly) > 0 {
+				warnings = append(warnings, fmt.Sprintf(
+					"%s through %s is observed only when the kernel permits it on this host; refused attempts produce no records",
+					g.Kind, strings.Join(g.SuccessOnly, ", ")))
+			}
 		}
 	}
 	d.log.Info("session created", "session", sid, "owner", peer.UID, "task", an.Record.TaskType, "mode", mode)
@@ -402,13 +416,15 @@ func (d *Daemon) status() *ipc.StatusResponse {
 			attached++
 		}
 	}
+	selfTest, passed := d.selfTestPassed()
 	return &ipc.StatusResponse{
+		SelfTest:          selfTest,
 		Version:           d.version,
 		ProtocolVersion:   ipc.ProtocolVersion,
 		Uptime:            d.now().Sub(d.started).Seconds(),
 		ActiveSessions:    d.activeCount(),
 		Mode:              d.cfg.Policy.DefaultMode,
-		TelemetryHealthy:  cov.FloorIntact,
+		TelemetryHealthy:  cov.FloorIntact && passed,
 		ProbesAttached:    attached,
 		EnforcerMechanism: MechanismCgroup,
 		DroppedEvents:     cs.DroppedEvents,

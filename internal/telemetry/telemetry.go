@@ -60,7 +60,8 @@ type ProbeInfo struct {
 	// Type is the eBPF program type: "tracepoint", "kprobe", "fentry", "lsm".
 	Type string `json:"type"`
 
-	// AttachPoint is the kernel hook, e.g. "syscalls/sys_enter_openat".
+	// AttachPoint is the kernel hook, e.g. "syscalls/sys_enter_connect" or
+	// "do_sys_openat2".
 	AttachPoint string `json:"attach_point"`
 
 	// Capabilities lists the kinds this probe can observe, which is what lets
@@ -439,8 +440,8 @@ type Config struct {
 // record-layout change.
 // Done, for the third of the four, and for the mechanism the fourth will reuse:
 // openat is implemented in bpf/allseer.bpf.c as a *pair* of programs,
-// `openat_enter` under SEC("tracepoint/syscalls/sys_enter_openat") and
-// `openat_exit` under SEC("tracepoint/syscalls/sys_exit_openat"), emitting one
+// `openat_enter` under SEC("fentry/do_sys_openat2") and `openat_exit` under
+// SEC("fexit/do_sys_openat2"), emitting one
 // ALLSEER_EVT_FILE_OPEN between them. A syscall's arguments and its return are
 // on opposite sides of the call: the entry has the path, the flags and the mode
 // and no outcome; the exit has the outcome and no arguments. struct
@@ -667,8 +668,8 @@ type Config struct {
 // Three constraints on that work, none of them optional:
 //
 //  1. The unit of degradation is the probe family, never the program. Thirteen
-//     of the twenty-nine programs are syscall enter/exit pairs sharing a
-//     scratch map, so dropping sys_exit_openat while keeping sys_enter_openat
+//     of the twenty-nine programs are enter/exit pairs sharing a scratch
+//     map, so dropping openat_exit while keeping openat_enter
 //     would leak openat_scratch and emit nothing, which is worse than dropping
 //     both. That is sixteen degradation units - two sched singletons,
 //     thirteen pairs and the fentry hook - and never twenty-nine.

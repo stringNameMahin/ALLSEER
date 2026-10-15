@@ -86,6 +86,22 @@ func rawOpenat(path string, flags int, mode uint32) int {
 	return int(fd)
 }
 
+// kernelFlags is what the probe reports for flags an openat call passed. The
+// probe reads them from struct open_how inside do_sys_openat2, after the kernel
+// has added O_LARGEFILE for open and openat on a 64-bit target, so that bit is
+// the one difference from what the process passed.
+//
+// It is the kernel's value of the bit, not syscall.O_LARGEFILE: Go defines the
+// userspace one, which is 0 on 64-bit targets because the kernel forces the
+// flag there. The kernel's differs by architecture, as O_NOFOLLOW does.
+func kernelFlags(passed int) int32 {
+	largefile := 0x8000 // asm-generic, which amd64 uses
+	if runtime.GOARCH == "arm64" {
+		largefile = 0x20000
+	}
+	return int32(passed | largefile)
+}
+
 // --- a thread whose TID the test knows ----------------------------------------
 
 // lockedThread runs closures on one dedicated OS thread.
@@ -474,8 +490,8 @@ func TestRuntimeOpenEventReachesUserspace(t *testing.T) {
 	})
 
 	t.Run("flags and mode", func(t *testing.T) {
-		if got.event.File.Flags != syscall.O_RDONLY {
-			t.Errorf("flags = %#x, want %#x", got.event.File.Flags, syscall.O_RDONLY)
+		if got.event.File.Flags != kernelFlags(syscall.O_RDONLY) {
+			t.Errorf("flags = %#x, want %#x", got.event.File.Flags, kernelFlags(syscall.O_RDONLY))
 		}
 		if got.event.File.Mode != 0 {
 			t.Errorf("mode = %#o, want the 0 this call passed", got.event.File.Mode)
@@ -580,8 +596,8 @@ func TestRuntimeOpenCarriesFlagsModeAndReturn(t *testing.T) {
 			}
 			got := found[0].event
 
-			if got.File.Flags != int32(tc.flags) {
-				t.Errorf("flags = %#x, want %#x", got.File.Flags, tc.flags)
+			if got.File.Flags != kernelFlags(tc.flags) {
+				t.Errorf("flags = %#x, want %#x", got.File.Flags, kernelFlags(tc.flags))
 			}
 			if got.File.Mode != tc.mode {
 				t.Errorf("mode = %#o, want %#o", got.File.Mode, tc.mode)

@@ -21,6 +21,7 @@ package ipc
 
 import (
 	"context"
+	"time"
 
 	"github.com/stringNameMahin/ALLSEER/internal/containment"
 	"github.com/stringNameMahin/ALLSEER/internal/intent"
@@ -150,6 +151,32 @@ type ApproveEnvelopeRequest struct {
 }
 
 // StatusResponse reports daemon health.
+// SelfTestResult is what the daemon's startup self-test established about the
+// probe a governed session depends on most.
+//
+// Attached is not the same as working. A kernel update once left every probe
+// in this object attached while the open probe's entry side stopped running,
+// so a denied credential read produced no record and status still read as
+// healthy. The self-test closes that by performing an open the critical probe
+// alone can report and waiting for its record.
+type SelfTestResult struct {
+	// Passed is true only when the expected record arrived, from the expected
+	// probe, with the expected outcome, inside the deadline.
+	Passed bool `json:"passed"`
+
+	// Probe names the program family the check proves, e.g. "openat".
+	Probe string `json:"probe"`
+
+	// Detail says what was checked, or why the check failed.
+	Detail string `json:"detail"`
+
+	// Latency is how long the record took to arrive.
+	Latency time.Duration `json:"latency_ns"`
+
+	// At is when the check completed.
+	At time.Time `json:"at"`
+}
+
 type StatusResponse struct {
 	Version         string `json:"version"`
 	ProtocolVersion string `json:"protocol_version"`
@@ -163,7 +190,11 @@ type StatusResponse struct {
 	// Mode is the configured default enforcement mode.
 	Mode policy.Mode `json:"mode"`
 
-	// TelemetryHealthy reports whether probes are attached and events flowing.
+	// SelfTest is the startup check that the critical probe actually reports.
+	SelfTest SelfTestResult `json:"self_test"`
+
+	// TelemetryHealthy reports whether the attribution floor is attached and
+	// the startup self-test passed. Probes merely being attached is not enough.
 	// False means the daemon is running but governing nothing, the most
 	// dangerous state the system can be in because it looks fine.
 	TelemetryHealthy bool `json:"telemetry_healthy"`

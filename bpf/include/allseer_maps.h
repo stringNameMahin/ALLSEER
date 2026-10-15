@@ -147,8 +147,8 @@ typedef __u64 allseer_drop_count_t;
  *
  * The two probes written before this one hook the scheduler, where one
  * tracepoint carries everything a record needs. A syscall does not work that
- * way: sys_enter_openat carries the arguments and no return, sys_exit_openat
- * carries the return and no arguments, and struct allseer_event demands both —
+ * way: the entry side carries the arguments and no return, the exit side
+ * carries the return and no arguments, and struct allseer_event demands both -
  * the header defines `ret` as "syscall return; negative is -errno", and
  * internal/telemetry/decode.go reads `ret >= 0` as Succeeded. A record emitted
  * at entry would have to write *something* into that field, and every available
@@ -184,7 +184,7 @@ typedef __u64 allseer_drop_count_t;
  *
  * A thread ID is reused after the thread dies, and a scratch entry can outlive
  * the thread that wrote it — a task killed inside openat never reaches
- * sys_exit_openat. So the key can be matched by a thread that never wrote it.
+ * openat_exit. So the key can be matched by a thread that never wrote it.
  *
  * That is not hypothetical and it is not harmless. The dangerous shape is: a
  * tracked thread enters openat and is killed; its TID is later reused by a
@@ -248,8 +248,8 @@ typedef __u64 allseer_syscall_key_t;
 
 /* Capacity of `openat_scratch`, in entries.
  *
- * An entry exists only between one thread's sys_enter_openat and its
- * sys_exit_openat, so the live population is the number of tracked threads
+ * An entry exists only between one thread's openat_enter and its
+ * openat_exit, so the live population is the number of tracked threads
  * blocked in openat at one instant — normally a handful, since openat on a warm
  * page cache returns in microseconds. The number is not sized for that. It is
  * sized for the orphans: entries from threads killed inside the syscall, which
@@ -301,8 +301,11 @@ typedef __u64 allseer_syscall_key_t;
  *                    for the same process. A worker thread's own start time
  *                    paired with its process's PID would name nothing a
  *                    ProcessTracker keyed on that pair could find.
- *   flags            openat's third argument, as supplied.
- *   mode             openat's fourth argument, as supplied. Meaningful only when
+ *   flags            the open flags as do_sys_openat2 received them in struct
+ *                    open_how. For open, creat and openat the kernel has
+ *                    already added O_LARGEFILE on a 64-bit target; otherwise
+ *                    they are what the process passed.
+ *   mode             the creation mode from struct open_how, as supplied. Meaningful only when
  *                    flags permit creation; otherwise it is whatever the caller
  *                    happened to pass, and the record reports that rather than
  *                    inventing a zero.
@@ -347,14 +350,14 @@ _Static_assert(ALLSEER_NAME_BOUND <= ALLSEER_DIR_MAX,
 /* The lifecycle of an entry, stated in one place because it is spread across two
  * programs that cannot see each other:
  *
- *   created   sys_enter_openat, after tracked_cgroups admits the caller and
+ *   created   openat_enter, after tracked_cgroups admits the caller and
  *             never before it. An untracked caller writes nothing at all, so an
  *             untracked cgroup cannot leave state for an exit to find.
  *   updated   BPF_ANY, so a thread's next openat replaces its own previous
  *             entry. That is what makes an orphan self-healing for any thread
  *             that is still alive: the stale entry is gone the next time that
  *             thread opens anything.
- *   deleted   sys_exit_openat, on every path that found an entry — the identity
+ *   deleted   openat_exit, on every path that found an entry - the identity
  *             check failing, the ring buffer reservation failing, and the record
  *             being submitted alike. The exit side owns deletion and is the only
  *             side that deletes.

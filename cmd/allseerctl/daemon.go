@@ -74,11 +74,24 @@ func runStatus(args []string) int {
 	fmt.Fprintf(w, "default mode\t%s\n", st.Mode)
 	fmt.Fprintf(w, "sessions\t%d live\n", st.ActiveSessions)
 	health := "healthy"
-	if !st.TelemetryHealthy {
+	switch {
+	case !st.SelfTest.Passed:
+		health = "UNHEALTHY: the startup self-test did not pass"
+	case !st.TelemetryHealthy:
 		health = "UNHEALTHY: attribution floor missing"
 	}
 	fmt.Fprintf(w, "telemetry\t%s, %d probes attached, %d events, %d dropped\n", health, st.ProbesAttached,
 		st.Collector.EventsReceived, st.DroppedEvents)
+	if st.SelfTest.Passed {
+		fmt.Fprintf(w, "self-test\t%s probe reported a failed open in %s\n", st.SelfTest.Probe, st.SelfTest.Latency.Round(time.Millisecond))
+	} else {
+		fmt.Fprintf(w, "self-test\tFAILED (%s probe): %s\n", st.SelfTest.Probe, st.SelfTest.Detail)
+	}
+	for _, g := range st.Coverage.EntryPoints {
+		if len(g.SuccessOnly) > 0 {
+			fmt.Fprintf(w, "successes only\t%s through %v: refused attempts produce no record\n", g.Kind, g.SuccessOnly)
+		}
+	}
 	if st.Coverage.Degraded {
 		fmt.Fprintf(w, "coverage\tDEGRADED; unobservable: %v\n", st.Coverage.Unobservable)
 	}

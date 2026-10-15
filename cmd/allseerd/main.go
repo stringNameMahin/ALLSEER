@@ -29,7 +29,12 @@ import (
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry"
 )
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == selfTestArg {
+		os.Exit(selfTestChild(os.Args[2:]))
+	}
+	os.Exit(run(os.Args[1:]))
+}
 
 func run(args []string) int {
 	fs := flag.NewFlagSet("allseerd", flag.ContinueOnError)
@@ -148,9 +153,16 @@ func run(args []string) int {
 		Resolvers: daemon.Resolvers("/etc/resolv.conf"),
 		Logger:    log,
 		Version:   buildinfo.String(),
+		Prober:    selfTestProber,
 	})
 	if err != nil {
 		log.Error("building daemon", "err", err)
+		return 1
+	}
+
+	// Before the control socket exists, so no session can be created on
+	// telemetry that has not been shown to report. SelfTest logs the detail.
+	if _, err := d.SelfTest(ctx); err != nil {
 		return 1
 	}
 

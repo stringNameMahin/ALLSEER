@@ -598,3 +598,69 @@ func TestEnforceContainsATruncatedPath(t *testing.T) {
 		t.Fatal("no enforced indeterminate decision charged unverifiable_path on the padded path")
 	}
 }
+
+// The startup self-test on the real kernel: the daemon performs a failed open
+// before it serves, and status reports that the openat probe recorded it.
+func TestDaemonSelfTestProvesTheOpenProbe(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	st, err := d.client().Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.SelfTest.Passed || st.SelfTest.Probe != "openat" || !st.TelemetryHealthy {
+		t.Fatalf("self-test %+v, telemetry healthy %v", st.SelfTest, st.TelemetryHealthy)
+	}
+	if !strings.Contains(d.log.String(), "telemetry self-test passed") {
+		t.Errorf("the daemon did not log the self-test:\n%s", filterLibbpf(d.log.String()))
+	}
+	if left, _ := filepath.Glob("/sys/fs/cgroup/allseer/selftest-*"); len(left) != 0 {
+		t.Errorf("the self-test left cgroups behind: %v", left)
+	}
+}
+
+// The failure the self-test exists for. With the openat pair not attached and
+// the kernel-side hook attached, every probe the daemon loaded reports as
+// attached and successful opens are still recorded - and a refused credential
+// read would not be. The daemon must refuse to govern rather than start.
+func TestDaemonRefusesToGovernWhenTheOpenProbeIsMissing(t *testing.T) {
+	need(t)
+	cfg := filepath.Join(e.dir, fmt.Sprintf("no-openat-%d.yaml", time.Now().UnixNano()))
+	if err := os.WriteFile(cfg, []byte("telemetry:\n  enabled_probes: [connect, file_open]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(e.dir, fmt.Sprintf("refuse-%d.sock", time.Now().UnixNano()))
+	cmd := exec.Command(filepath.Join(e.bin, "allseerd"),
+		"--config", cfg, "--socket", socket, "--object", e.object, "--mode", "enforce",
+		"--audit", filepath.Join(e.dir, fmt.Sprintf("refuse-%d.jsonl", time.Now().UnixNano())),
+		"--rules", filepath.Join(e.repo, "configs/rules.default.yaml"),
+		"--sensitivity", filepath.Join(e.repo, "configs/sensitivity.default.yaml"))
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("allseerd exited 0 without the openat probe:\n%s", filterLibbpf(out.String()))
+		}
+	case <-time.After(30 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("allseerd kept running without the openat probe:\n%s", filterLibbpf(out.String()))
+	}
+	log := filterLibbpf(out.String())
+	if !strings.Contains(log, "telemetry self-test failed; refusing to govern") || !strings.Contains(log, "no record") {
+		t.Errorf("the refusal does not say why:\n%s", log)
+	}
+	if strings.Contains(log, "allseerd ready") {
+		t.Errorf("allseerd reported ready before refusing:\n%s", log)
+	}
+	if _, err := os.Stat(socket); err == nil {
+		t.Error("the control socket was created although the daemon refused to govern")
+	}
+	if left, _ := filepath.Glob("/sys/fs/cgroup/allseer/selftest-*"); len(left) != 0 {
+		t.Errorf("the failed self-test left cgroups behind: %v", left)
+	}
+}

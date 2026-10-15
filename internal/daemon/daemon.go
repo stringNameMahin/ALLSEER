@@ -88,6 +88,14 @@ type Options struct {
 	// OrphanGrace is how long an emptied session waits for its shim.
 	OrphanGrace time.Duration
 	Version     string
+
+	// Prober starts the process the startup self-test opens a file from. Nil
+	// makes SelfTest fail, and sessions are refused until it passes.
+	Prober Prober
+
+	// SelfTestTimeout bounds the self-test's wait for its record. Zero uses
+	// DefaultSelfTestTimeout.
+	SelfTestTimeout time.Duration
 }
 
 type sessionInfo struct {
@@ -123,10 +131,17 @@ type Daemon struct {
 	control chan func()
 	started time.Time
 
+	prober          Prober
+	selfTestTimeout time.Duration
+
 	mu       sync.Mutex
 	sessions map[string]*sessionInfo
 
 	sinkErrors uint64
+
+	// selfTestResult is the startup self-test's outcome. Sessions are refused
+	// until it records a pass. Guarded by mu.
+	selfTestResult ipc.SelfTestResult
 }
 
 // New validates options and builds a daemon. Telemetry must already be
@@ -165,6 +180,10 @@ func New(o Options) (*Daemon, error) {
 	if orphan <= 0 {
 		orphan = 5 * time.Second
 	}
+	selfTestTimeout := o.SelfTestTimeout
+	if selfTestTimeout <= 0 {
+		selfTestTimeout = DefaultSelfTestTimeout
+	}
 
 	d := &Daemon{
 		cfg:       o.Config,
@@ -178,6 +197,13 @@ func New(o Options) (*Daemon, error) {
 		orphan:    orphan,
 		version:   o.Version,
 		resolvers: o.Resolvers,
+
+		prober:          o.Prober,
+		selfTestTimeout: selfTestTimeout,
+		selfTestResult: ipc.SelfTestResult{
+			Probe:  SelfTestProbe,
+			Detail: "the startup self-test has not run",
+		},
 		analyzer:  intent.NewRuleAnalyzer(),
 		generator: envelope.RuleGenerator{Limits: envelope.Limits{MaxGrants: o.Config.Envelope.MaxGrants}},
 		hub:       newHub(),

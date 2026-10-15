@@ -26,26 +26,30 @@ const (
 	// telemetry.ProcessTracker.Untrack has no signal for until both are on.
 	ProgProcExit = "proc_exit"
 
-	// ProgOpenatEnter is the sys_enter_openat program. It emits nothing.
+	// ProgOpenatEnter is the fentry program on do_sys_openat2. It emits
+	// nothing.
 	//
-	// Named as a probe anyway because it is one: it performs the cgroup filter
-	// decision for every open this object reports, and it is what captures the
-	// path, the flags and the mode. What it does with them is store them, in
-	// openat_scratch, for ProgOpenatExit to complete — the entry has the
-	// arguments and no return, and struct allseer_event has a `ret` field the
-	// header defines as a syscall return.
+	// It performs the cgroup filter decision for every open the pair reports
+	// and captures the path, the flags, the mode and the base directory, then
+	// stores them in openat_scratch for ProgOpenatExit to complete. do_sys_openat2
+	// is the function open, creat, openat and openat2 all reach, which is why
+	// the pair is attached there and not to a syscall tracepoint: on one kernel
+	// update sys_enter_openat stopped firing for governed processes while every
+	// probe still reported attached, and a tracepoint on openat never saw the
+	// other three entry points anyway. The name still says openat because the
+	// scratch protocol was written for it.
 	ProgOpenatEnter = "openat_enter"
 
-	// ProgOpenatExit is the sys_exit_openat program, emitting
-	// ALLSEER_EVT_FILE_OPEN.
+	// ProgOpenatExit is the fexit program on do_sys_openat2, emitting
+	// ALLSEER_EVT_FILE_OPEN with the return value, so a refused or failed open
+	// is reported with its errno.
 	//
-	// A pair in a stronger sense than ProgProcExec and ProgProcExit are, which
-	// are two probes reporting two different things. These two are one probe
-	// split across two hooks by the shape of a syscall, and attaching either
-	// alone yields no events at all rather than half of them: the entry side
-	// never emits, and the exit side emits only what it finds a scratch entry
-	// for. A caller that attaches one and not the other has a blind spot that
-	// looks exactly like a quiet host.
+	// Useless apart from ProgOpenatEnter: the entry side never emits, and the
+	// exit side emits only what it finds a scratch entry for. A caller that
+	// attaches one and not the other has a blind spot that looks exactly like a
+	// quiet host - which is the failure the daemon's startup self-test exists
+	// to catch, because it is also what a kernel that stops calling one of the
+	// two hooks looks like.
 	ProgOpenatExit = "openat_exit"
 
 	// ProgConnectEnter is the sys_enter_connect program. It emits nothing.
@@ -172,12 +176,13 @@ func ProgPrivPairs() []string {
 const (
 	probeTypeTracepoint = "tracepoint"
 	probeTypeFentry     = "fentry"
+	probeTypeFexit      = "fexit"
 )
 
 // Probe families, the unit that loads, attaches and degrades together.
 //
 // Sixteen units rather than twenty-nine programs: two sched singletons,
-// thirteen syscall enter/exit pairs and one fentry singleton. A pair shares a
+// thirteen enter/exit pairs and one fentry singleton. A pair shares a
 // scratch map, so dropping one half leaks the scratch entry and emits nothing
 // at all, which is worse than dropping both.
 const (
@@ -261,6 +266,15 @@ type ProbeDescriptor struct {
 	// is what says the entry points went with it.
 	Optional bool
 
+	// SuccessOnly marks a program that observes an operation only once the
+	// kernel has permitted it. security_file_open is the case: it runs after
+	// path resolution and the permission check, so an open that was refused or
+	// named nothing never reaches it. An entry point watched by such programs
+	// alone is reported as watched for successes only, because a refused
+	// attempt through it leaves no record - and a refused attempt on a
+	// credential file is exactly what a denial exists to catch.
+	SuccessOnly bool
+
 	// Syscalls names the kernel entry points this program observes, in the
 	// spelling pkg/capability's descriptors use.
 	//
@@ -299,18 +313,18 @@ func AllProbes() []ProbeDescriptor {
 		{
 			Name:        ProgOpenatEnter,
 			Family:      FamilyOpenat,
-			Type:        probeTypeTracepoint,
-			AttachPoint: "syscalls/sys_enter_openat",
+			Type:        probeTypeFentry,
+			AttachPoint: "do_sys_openat2",
 			Emits:       abi.EvtUnknown,
-			Syscalls:    []string{"openat"},
+			Syscalls:    []string{"open", "openat", "openat2", "creat"},
 		},
 		{
 			Name:        ProgOpenatExit,
 			Family:      FamilyOpenat,
-			Type:        probeTypeTracepoint,
-			AttachPoint: "syscalls/sys_exit_openat",
+			Type:        probeTypeFexit,
+			AttachPoint: "do_sys_openat2",
 			Emits:       abi.EvtFileOpen,
-			Syscalls:    []string{"openat"},
+			Syscalls:    []string{"open", "openat", "openat2", "creat"},
 		},
 		{
 			Name:        ProgConnectEnter,
@@ -335,6 +349,7 @@ func AllProbes() []ProbeDescriptor {
 			AttachPoint: "security_file_open",
 			Emits:       abi.EvtFileOpen,
 			Optional:    true,
+			SuccessOnly: true,
 			// Every entry point that reaches do_dentry_open. open and creat do
 			// not exist on arm64, where glibc calls openat for both; listing
 			// them costs nothing there and is the truth on amd64.
@@ -389,6 +404,10 @@ type ProbeFamily struct {
 
 	// Syscalls is every kernel entry point the family's programs observe.
 	Syscalls []string
+
+	// SuccessOnly reports that every emitting program in the family sees an
+	// operation only once the kernel permitted it.
+	SuccessOnly bool
 }
 
 // AllProbeFamilies returns the sixteen degradation units, in declaration order.
@@ -415,6 +434,7 @@ func AllProbeFamilies() []ProbeFamily {
 			Floor:        name == FamilyProcExec || name == FamilyProcExit,
 			Capabilities: capabilitiesFor(descs),
 			Syscalls:     syscallsOf(descs),
+			SuccessOnly:  successOnly(descs),
 		})
 	}
 	return out
@@ -473,6 +493,23 @@ func OptionalPrograms() []string {
 	return out
 }
 
+// successOnly reports whether every emitting program in descs observes only
+// permitted operations. An entry-side program emits nothing and says nothing
+// about outcomes, so it does not count either way.
+func successOnly(descs []ProbeDescriptor) bool {
+	emitting := 0
+	for _, d := range descs {
+		if d.Emits == abi.EvtUnknown {
+			continue
+		}
+		emitting++
+		if !d.SuccessOnly {
+			return false
+		}
+	}
+	return emitting > 0
+}
+
 // syscallsOf is the union of what a family's programs observe, first-seen
 // order. An entry program and its exit program name the same syscall, so a
 // family's list is shorter than the sum of its parts.
@@ -513,6 +550,14 @@ type EntryPointGap struct {
 	// the kind, both in declaration order.
 	Observed []string `json:"observed,omitempty"`
 	Missing  []string `json:"missing,omitempty"`
+
+	// SuccessOnly is the part of Observed watched only for operations the
+	// kernel permitted. A refused or failed attempt through one of these
+	// produces no record, so "observed" there means "a successful use is
+	// recorded", not "an attempt is". io_uring is the standing case for file
+	// opens: its successes reach security_file_open and nothing reaches its
+	// refusals.
+	SuccessOnly []string `json:"success_only,omitempty"`
 }
 
 // Coverage is what an attached probe set can actually observe.
@@ -593,27 +638,43 @@ type FamilyCoverage struct {
 // leave the fixable case indistinguishable from the permanent one.
 func (c Coverage) DegradedEntryPoints() []EntryPointGap {
 	watchable := make(map[capability.Kind]map[string]bool)
+	fullyWatchable := make(map[capability.Kind]map[string]bool)
 	for _, f := range AllProbeFamilies() {
 		for _, k := range f.Capabilities {
 			if watchable[k] == nil {
 				watchable[k] = make(map[string]bool)
+				fullyWatchable[k] = make(map[string]bool)
 			}
 			for _, sc := range f.Syscalls {
 				watchable[k][sc] = true
+				if !f.SuccessOnly {
+					fullyWatchable[k][sc] = true
+				}
 			}
 		}
 	}
 
+	// Two kinds of loss. An entry point no attached program watches, where a
+	// full build would; and one watched only for successes, where a full build
+	// would also record refused attempts. The second is what an openat family
+	// that failed to attach leaves behind: the hook still reports successful
+	// opens, so the kind stays observable, and a refused read of a credential
+	// file goes unrecorded.
 	var out []EntryPointGap
 	for _, g := range c.EntryPoints {
-		var lost []string
+		var lost, weakened []string
 		for _, sc := range g.Missing {
 			if watchable[g.Kind][sc] {
 				lost = append(lost, sc)
 			}
 		}
-		if len(lost) > 0 {
-			out = append(out, EntryPointGap{Kind: g.Kind, Observed: g.Observed, Missing: lost})
+		for _, sc := range g.SuccessOnly {
+			if fullyWatchable[g.Kind][sc] {
+				weakened = append(weakened, sc)
+			}
+		}
+		if len(lost) > 0 || len(weakened) > 0 {
+			out = append(out, EntryPointGap{Kind: g.Kind, Observed: g.Observed, Missing: lost, SuccessOnly: weakened})
 		}
 	}
 	return out
@@ -634,8 +695,10 @@ func ComputeCoverage(probes []ProbeInfo) Coverage {
 	observable := make(map[capability.Kind]bool)
 	emitted := make(map[capability.Kind]bool)
 	watched := make(map[capability.Kind]map[string]bool)
+	fully := make(map[capability.Kind]map[string]bool)
 	for _, k := range capability.AllKinds() {
 		watched[k] = make(map[string]bool)
+		fully[k] = make(map[string]bool)
 	}
 
 	for _, f := range AllProbeFamilies() {
@@ -659,6 +722,9 @@ func ComputeCoverage(probes []ProbeInfo) Coverage {
 				observable[k] = true
 				for _, sc := range f.Syscalls {
 					watched[k][sc] = true
+					if !f.SuccessOnly {
+						fully[k][sc] = true
+					}
 				}
 			}
 		}
@@ -695,13 +761,17 @@ func ComputeCoverage(probes []ProbeInfo) Coverage {
 		}
 		gap := EntryPointGap{Kind: k}
 		for _, sc := range d.Syscalls {
-			if watched[k][sc] {
-				gap.Observed = append(gap.Observed, sc)
-			} else {
+			switch {
+			case !watched[k][sc]:
 				gap.Missing = append(gap.Missing, sc)
+			case !fully[k][sc]:
+				gap.Observed = append(gap.Observed, sc)
+				gap.SuccessOnly = append(gap.SuccessOnly, sc)
+			default:
+				gap.Observed = append(gap.Observed, sc)
 			}
 		}
-		if len(gap.Missing) > 0 {
+		if len(gap.Missing) > 0 || len(gap.SuccessOnly) > 0 {
 			cov.EntryPoints = append(cov.EntryPoints, gap)
 		}
 	}
@@ -813,8 +883,8 @@ func (c Coverage) BugReport() string {
 	if len(c.EntryPoints) > 0 {
 		b.WriteString("\nObservable capabilities with unwatched entry points:\n")
 		for _, g := range c.EntryPoints {
-			fmt.Fprintf(&b, "  %-18s watched %s; unwatched %s\n",
-				g.Kind, joinOrNone(g.Observed), joinOrNone(g.Missing))
+			fmt.Fprintf(&b, "  %-18s watched %s; successes only %s; unwatched %s\n",
+				g.Kind, joinOrNone(g.Observed), joinOrNone(g.SuccessOnly), joinOrNone(g.Missing))
 		}
 	}
 
@@ -823,7 +893,8 @@ func (c Coverage) BugReport() string {
 	if lost := c.DegradedEntryPoints(); len(lost) > 0 {
 		b.WriteString("\nEntry points this load lost that this build can watch:\n")
 		for _, g := range lost {
-			fmt.Fprintf(&b, "  %-18s %s\n", g.Kind, strings.Join(g.Missing, ", "))
+			fmt.Fprintf(&b, "  %-18s unwatched %s; reduced to successes only %s\n",
+				g.Kind, joinOrNone(g.Missing), joinOrNone(g.SuccessOnly))
 		}
 	}
 

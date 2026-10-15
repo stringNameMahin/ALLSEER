@@ -47,6 +47,10 @@ type openHow struct {
 }
 
 func (lt *lockedThread) openat2(path string, flags uint64) int {
+	return lt.openat2At(fdcwd(), path, flags, 0)
+}
+
+func (lt *lockedThread) openat2At(dirfd int, path string, flags, resolve uint64) int {
 	var ret int
 	lt.do(func() {
 		p, err := syscall.BytePtrFromString(path)
@@ -54,8 +58,8 @@ func (lt *lockedThread) openat2(path string, flags uint64) int {
 			ret = -int(syscall.EINVAL)
 			return
 		}
-		how := openHow{Flags: flags}
-		fd, _, errno := syscall.Syscall6(sysOpenat2, uintptr(fdcwd()),
+		how := openHow{Flags: flags, Resolve: resolve}
+		fd, _, errno := syscall.Syscall6(sysOpenat2, uintptr(dirfd),
 			uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&how)),
 			unsafe.Sizeof(how), 0, 0)
 		runtime.KeepAlive(p)
@@ -252,7 +256,8 @@ func assertKernelOpen(t *testing.T, e *event.Event, want string) {
 	}
 }
 
-// openat2 has no probe of its own and never will: the hook is what covers it.
+// The hook alone still sees an openat2 that succeeded. With the openat pair
+// attached the pair owns it instead; see TestRuntimeOpenPairReportsEveryOpenSyscall.
 func TestRuntimeOpenat2IsObservedByTheKernelHook(t *testing.T) {
 	target := existingFile(t, "by-openat2.txt")
 	l, records := loadAndAttachPrograms(t, ProgFileOpen)
@@ -458,5 +463,113 @@ func TestRuntimeHookIgnoresTheOpenThatExecsAProgram(t *testing.T) {
 	}
 	if execs == 0 {
 		t.Error("the exec probe did not report the exec, so this test proves nothing")
+	}
+}
+
+// legacyOpen calls the open syscall where the architecture has one.
+func (lt *lockedThread) legacyOpen(path string) int {
+	var ret int
+	lt.do(func() {
+		p, err := syscall.BytePtrFromString(path)
+		if err != nil {
+			ret = -int(syscall.EINVAL)
+			return
+		}
+		const sysOpen = 2
+		fd, _, errno := syscall.Syscall(sysOpen, uintptr(unsafe.Pointer(p)), uintptr(syscall.O_RDONLY), 0)
+		runtime.KeepAlive(p)
+		if errno != 0 {
+			ret = -int(errno)
+			return
+		}
+		ret = int(fd)
+		syscall.Close(ret)
+	})
+	return ret
+}
+
+// The pair on do_sys_openat2 reports every open syscall, and reports a failed
+// one with its errno - the case the kernel-side hook never sees, and the one a
+// denied credential read depends on. Each open here names a file that does not
+// exist, so a record can only have come from the pair.
+func TestRuntimeOpenPairReportsEveryOpenSyscallWithItsOutcome(t *testing.T) {
+	l, records := loadAndAttachPrograms(t, ProgOpenatEnter, ProgOpenatExit)
+	trackThisCgroup(t, l)
+	thread := newLockedThread(t)
+	dir := realDir(t)
+
+	opens := map[string]func(path string) int{
+		"openat":  func(p string) int { return thread.openAt(fdcwd(), p, syscall.O_RDONLY, 0) },
+		"openat2": func(p string) int { return thread.openat2(p, syscall.O_RDONLY) },
+	}
+	if runtime.GOARCH == "amd64" {
+		opens["open"] = thread.legacyOpen
+	}
+	for name, open := range opens {
+		path := filepath.Join(dir, "absent-via-"+name)
+		if ret := open(path); ret != -int(syscall.ENOENT) {
+			if ret == -int(syscall.ENOSYS) {
+				t.Logf("%s is not available on this kernel", name)
+				continue
+			}
+			t.Fatalf("%s = %d, want ENOENT", name, ret)
+		}
+		e := one(t, records, path)
+		if e.File.KernelPath || e.Result.OutcomeUnobserved {
+			t.Errorf("%s: the record is the hook's, not the pair's: %+v %+v", name, e.File, e.Result)
+		}
+		if e.Result.Succeeded || e.Result.Errno != "ENOENT" {
+			t.Errorf("%s: result %+v, want ENOENT", name, e.Result)
+		}
+	}
+}
+
+// openat2 with RESOLVE_IN_ROOT resolves the name with the dirfd as its root, so
+// "/etc/marker" names <dir>/etc/marker. The pair leaves such an open to the
+// hook, which reports the file the kernel actually opened; the pair would have
+// reported a host path that names a different file.
+func TestRuntimeResolveInRootIsReportedByTheKernelsName(t *testing.T) {
+	dir := realDir(t)
+	if err := os.MkdirAll(filepath.Join(dir, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(dir, "etc", "marker")
+	if err := os.WriteFile(inside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fd := dirFD(t, dir)
+
+	l, records := loadAndAttachPrograms(t, ProgOpenatEnter, ProgOpenatExit, ProgFileOpen)
+	trackThisCgroup(t, l)
+	thread := newLockedThread(t)
+
+	const resolveInRoot = 0x10
+	if ret := thread.openat2At(fd, "/etc/marker", syscall.O_RDONLY, resolveInRoot); ret < 0 {
+		if ret == -int(syscall.ENOSYS) {
+			t.Skip("openat2 is not available on this kernel")
+		}
+		t.Fatalf("openat2 RESOLVE_IN_ROOT: %d", ret)
+	}
+
+	var byName, byKernel int
+	collectUntil(t, records, 3*time.Second, func(d decoded) bool {
+		if d.event.File == nil || int(d.event.Process.TID) != thread.tid {
+			return false
+		}
+		switch d.event.File.Path {
+		case "/etc/marker":
+			byName++
+		case inside:
+			if d.event.File.KernelPath {
+				byKernel++
+			}
+		}
+		return false
+	})
+	if byName != 0 {
+		t.Errorf("%d records name /etc/marker, which on the host is a different file", byName)
+	}
+	if byKernel != 1 {
+		t.Errorf("got %d kernel-named records for %s, want 1", byKernel, inside)
 	}
 }
