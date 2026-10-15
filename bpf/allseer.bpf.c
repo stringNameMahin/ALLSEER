@@ -814,16 +814,8 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  *   args[2]  flags      O_RDONLY/O_WRONLY/O_CREAT/...
  *   args[3]  mode       the creation mode
  *
- * dfd is captured nowhere, and that is a decision rather than an oversight. It
- * is only meaningful joined to the path, and joining them is path resolution —
- * which the repository has already placed in M6 and which
- * internal/telemetry/resolve is built around refusing to guess at: it "refuses
- * to fall back from ResolvedPath to Path precisely so that a pre-resolution path
- * can never reach selector matching". Carrying a dfd in a record that has no
- * field for one, or resolving it here against the verifier's loop limits, are
- * both ways of doing that job badly inside an issue that is not about it. An
- * open of a relative name therefore arrives unevaluable, which is the
- * fail-closed direction and is exactly what M6 exists to close.
+ * Since ABI v3 dfd is carried, and for a relative name the directory it
+ * resolves against is captured here (capture_base_dir below).
  *
  * The path is read with bpf_probe_read_user_str and not the kernel variant. The
  * pointer is a user-space address: reading it as a kernel address either faults
@@ -1059,20 +1051,12 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	/* The pathname, out of user memory, bounded by the destination.
 	 *
 	 * bpf_probe_read_user_str NUL-terminates within the destination even when
-	 * it truncates, so a path longer than ALLSEER_PATH_MAX arrives as a
-	 * terminated prefix and abi.CString reports it as whole. That is the same
-	 * behaviour proc_exec's filename has and the same gap: the decoder's
-	 * ErrTruncatedString detects an array with no NUL in it, which this helper
-	 * never produces. Carrying truncation on the wire is the open TODO(event)
-	 * in internal/telemetry/decode.go and is a record-layout change, not a
-	 * probe change.
+	 * it truncates, so a path that filled the array is flagged below.
 	 *
-	 * The return is deliberately not checked. On failure — an unmapped or
-	 * paged-out user address — the field keeps the zero the memset left, and
-	 * the entry is stored regardless: the syscall happened, the process that
-	 * made it is known, and refusing to report a real open because one field
-	 * could not be read would hide the event entirely. An empty path means the
-	 * read failed; it cannot mean a process opened nothing. */
+	 * On kernels whose syscall tracepoints cannot take page faults, the read
+	 * fails for a page the process has not touched yet, even though the
+	 * kernel will copy the name a moment later. The entry is stored anyway
+	 * with the pointer, and openat_exit reads the name again. */
 	n = bpf_probe_read_user_str(&s->path, sizeof(s->path), (const char *)ctx->args[1]);
 
 	/* ABI v3. The helper NUL-terminates a truncated read, so a path that filled
@@ -1081,9 +1065,10 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
 	 * directory the kernel will resolve it against. */
 	s->dirfd = (__s32)ctx->args[0];
 	s->path_flags = ALLSEER_PATH_INFO;
-	if (n < 0)
+	if (n < 0) {
 		s->path_flags |= ALLSEER_PATH_UNREADABLE;
-	else if (n >= (long)sizeof(s->path))
+		s->path_ptr = ctx->args[1];
+	} else if (n >= (long)sizeof(s->path))
 		s->path_flags |= ALLSEER_PATH_TRUNCATED;
 	if (n > 1 && s->path[0] != '/')
 		s->path_flags |= capture_base_dir(task, s->dirfd, s->dir);
@@ -1119,6 +1104,27 @@ int openat_enter(struct trace_event_raw_sys_enter *ctx)
  * nothing, so there is no entry here to find, and the lookup below is what
  * enforces the filter on this side.
  */
+/* reread_path retries a filename the entry side could not read. By syscall
+ * exit the kernel has copied the name, which faulted its page in. The result
+ * is flagged PATH_LATE: another thread could have rewritten the buffer after
+ * the kernel read it, so for a successful open user space confirms it against
+ * the opened inode.
+ * A second failure leaves PATH_UNREADABLE in place. */
+static __always_inline void reread_path(struct task_struct *task, struct allseer_open_scratch *s)
+{
+	long n;
+
+	n = bpf_probe_read_user_str(&s->path, sizeof(s->path), (const char *)s->path_ptr);
+	if (n <= 0)
+		return;
+	s->path_flags &= ~ALLSEER_PATH_UNREADABLE;
+	s->path_flags |= ALLSEER_PATH_LATE;
+	if (n >= (long)sizeof(s->path))
+		s->path_flags |= ALLSEER_PATH_TRUNCATED;
+	if (n > 1 && s->path[0] != '/')
+		s->path_flags |= capture_base_dir(task, s->dirfd, s->dir);
+}
+
 SEC("tracepoint/syscalls/sys_exit_openat")
 int openat_exit(struct trace_event_raw_sys_exit *ctx)
 {
@@ -1150,8 +1156,11 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 		return 0;
 	}
 
+	if ((s->path_flags & ALLSEER_PATH_UNREADABLE) && s->path_ptr)
+		reread_path(task, s);
+
 	/* Reserved and filled in place, as everywhere in this object: the record is
-	 * 856 bytes and the eBPF stack is 512.
+	 * larger than the 512-byte eBPF stack.
 	 *
 	 * A failed reservation deletes the entry before returning. The scratch
 	 * entry has served its purpose the moment this program has looked at it,

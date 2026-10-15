@@ -187,6 +187,10 @@
         "dir_status": {
           "description": "What the kernel could establish about the directory of a relative path. Only complete may be joined to the path.",
           "enum": ["complete", "truncated", "unavailable", "deleted"]
+        },
+        "path_late": {
+          "description": "The path could not be read at syscall entry and was read at exit. For a successful open it is trusted only when the opened inode confirms it.",
+          "type": "boolean"
         }
       }
     },

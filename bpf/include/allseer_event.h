@@ -33,7 +33,7 @@
  * size. It does not catch a layout that stayed the same size and changed
  * meaning: a field retyped, two fields swapped, a bound moved from one array to
  * another. Those records decode without complaint into confident nonsense. */
-#define ALLSEER_ABI_VERSION  3
+#define ALLSEER_ABI_VERSION  4
 
 /* Bounded because eBPF stack space is limited to 512 bytes and the verifier
  * rejects unbounded copies. These caps are a real constraint on what a probe
@@ -194,6 +194,10 @@ enum allseer_priv_field {
  *   DIR_UNAVAILABLE  no directory could be read: bad dirfd, no fs, or a
  *                    disconnected dentry
  *   DIR_DELETED      the directory had been removed
+ *   PATH_LATE        the entry read faulted, so path (and dir) were read at
+ *                    syscall exit instead. Another thread may have changed the
+ *                    buffer after the kernel read it, so for a successful open
+ *                    user space trusts it only when the opened inode confirms it
  *
  * `dir` is only filled for a relative path. Its components are stored from the
  * directory itself up to the root, each followed by '/': /home/u/proj is
@@ -210,6 +214,7 @@ enum allseer_path_flag {
     ALLSEER_DIR_TRUNCATED    = 64,
     ALLSEER_DIR_UNAVAILABLE  = 128,
     ALLSEER_DIR_DELETED      = 256,
+    ALLSEER_PATH_LATE        = 512,
 };
 
 /* Process identity, captured at event time. Read in the kernel because

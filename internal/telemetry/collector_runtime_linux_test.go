@@ -133,7 +133,7 @@ collect:
 			exits++
 		case capability.KindFileRead:
 			if filepath.IsAbs(e.File.Path) && e.File.ResolvedPath == "" {
-				t.Errorf("absolute open of %q left unresolved", e.File.Path)
+				t.Errorf("absolute open of %q left unresolved: %s", e.File.Path, describeOpen(e))
 			}
 			if !filepath.IsAbs(e.File.Path) {
 				// Resolved from the descriptor or not at all; never wrong.
@@ -141,6 +141,7 @@ collect:
 				switch e.File.ResolvedPath {
 				case "":
 					relMissed++
+					t.Logf("unresolved open: %s", describeOpen(e))
 				case want:
 					relCorrect++
 				default:
@@ -189,4 +190,13 @@ collect:
 	if err := c.DetachSession(ctx, sid); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// describeOpen renders everything the record carried about an open, so a
+// failure on a host that cannot be reproduced locally explains itself.
+func describeOpen(e event.Event) string {
+	f := e.File
+	return fmt.Sprintf("pid %d tid %d comm %q exe %q path %q truncated %v dir %q dir_source %q dir_status %q flags %#x ret %d errno %q inode %d",
+		e.Process.PID, e.Process.TID, e.Process.Comm, e.Process.Executable, f.Path, f.Truncated,
+		f.Dir, f.DirSource, f.DirStatus, f.Flags, e.Result.ReturnCode, e.Result.Errno, f.Inode)
 }

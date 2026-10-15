@@ -166,7 +166,8 @@ const (
 	scratchOffMode          = 76
 	scratchOffDirfd         = 80
 	scratchOffPathFlags     = 84
-	scratchOffPath          = 88
+	scratchOffPathPtr       = 88
+	scratchOffPath          = 96
 	scratchOffDir           = scratchOffPath + abi.PathMax
 	scratchSize             = scratchOffDir + abi.DirMax
 )

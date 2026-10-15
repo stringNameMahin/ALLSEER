@@ -191,9 +191,16 @@ type FilePayload struct {
 	// it may be a prefix. A truncated path is never resolved.
 	Truncated bool `json:"truncated,omitempty"`
 
+	// PathLate means the probe could not read Path at syscall entry and read
+	// it at exit instead, together with Dir. Another thread may have changed
+	// the buffer in between, so for a successful open it is trusted only when
+	// the opened inode confirms it. A failed open's late name is treated like
+	// an entry-time one.
+	PathLate bool `json:"path_late,omitempty"`
+
 	// Dir is the absolute directory the kernel resolves a relative Path
-	// against, captured at syscall entry. Set only for a relative Path whose
-	// DirStatus is "complete".
+	// against, captured at syscall entry, or at exit when PathLate is set. Set
+	// only for a relative Path whose DirStatus is "complete".
 	Dir string `json:"dir,omitempty"`
 
 	// DirSource names where Dir came from for a relative Path: "cwd", or

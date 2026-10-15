@@ -333,3 +333,66 @@ func TestSingleNameInARemovedKernelDirectory(t *testing.T) {
 		t.Fatalf("multi-component name: %q, %v", e.File.ResolvedPath, err)
 	}
 }
+
+// A path read at syscall exit may have been rewritten after the kernel read
+// it. For a successful open only the inode the open returned can confirm it,
+// so every shortcut that trusts the name alone is closed to it. A failed open
+// opened nothing, so its late name is treated like an entry-time one.
+func TestLatePathIsTrustedOnlyWhenTheOpenedInodeConfirmsIt(t *testing.T) {
+	root := tree(t)
+	p := &PathEnricher{HostRoot: root}
+	mainIno := inodeAt(t, filepath.Join(root, "work/src/main.go"))
+	keyIno := inodeAt(t, filepath.Join(root, "home/u/.ssh/id_rsa"))
+	late := func(e *event.Event) *event.Event { e.File.PathLate = true; return e }
+
+	ok := late(openEvent("/work/code/main.go", 1, 3, true))
+	ok.File.Inode = mainIno
+	if err := p.Enrich(context.Background(), ok); err != nil || ok.File.ResolvedPath != "/work/src/main.go" {
+		t.Fatalf("confirmed late path: %q, %v", ok.File.ResolvedPath, err)
+	}
+
+	refused := map[string]*event.Event{
+		// The name was swapped to a harmless file after the kernel opened the key.
+		"different inode":    late(openEvent("/work/src/main.go", 1, 3, true)),
+		"no inode":           late(openEvent("/work/src/main.go", 1, 3, true)),
+		"missing on success": late(openEvent("/work/src/gone.go", 1, 3, true)),
+		// One name in the kernel directory with O_NOFOLLOW skips the lookup for
+		// an entry-time path; a late one must still be confirmed.
+		"single name nofollow": late(relative("main.go", "/work/src", true)),
+		// Ambiguous for an entry-time name too.
+		"failed dotdot after missing": late(openEvent("/work/gone/../src/x", 1, -2, false)),
+	}
+	refused["different inode"].File.Inode = keyIno
+	refused["missing on success"].File.Inode = mainIno
+	refused["single name nofollow"].File.Flags = int32(oNofollow)
+	refused["single name nofollow"].File.Inode = keyIno
+	for name, e := range refused {
+		if err := p.Enrich(context.Background(), e); !errors.Is(err, ErrUnresolvable) || e.File.ResolvedPath != "" {
+			t.Errorf("%s: resolved to %q, err %v; want unresolved", name, e.File.ResolvedPath, err)
+		}
+	}
+
+	nf := late(relative("main.go", "/work/src", true))
+	nf.File.Flags = int32(oNofollow)
+	nf.File.Inode = mainIno
+	if err := p.Enrich(context.Background(), nf); err != nil || nf.File.ResolvedPath != "/work/src/main.go" {
+		t.Fatalf("confirmed late single name: %q, %v", nf.File.ResolvedPath, err)
+	}
+
+	// bash probing /dev/tty without a terminal on a kernel whose tracepoints
+	// cannot fault: the open fails, and the name resolves as it would have
+	// at entry.
+	failed := map[string]struct {
+		e    *event.Event
+		want string
+	}{
+		"absolute":       {late(openEvent("/work/src/absent.go", 1, -6, false)), "/work/src/absent.go"},
+		"through a link": {late(openEvent("/work/keys/id_rsa", 1, -13, false)), "/home/u/.ssh/id_rsa"},
+		"relative":       {late(relative("id_rsa", "/home/u/.ssh", false)), "/home/u/.ssh/id_rsa"},
+	}
+	for name, c := range failed {
+		if err := p.Enrich(context.Background(), c.e); err != nil || c.e.File.ResolvedPath != c.want {
+			t.Errorf("failed open, %s: %q, %v; want %q", name, c.e.File.ResolvedPath, err, c.want)
+		}
+	}
+}

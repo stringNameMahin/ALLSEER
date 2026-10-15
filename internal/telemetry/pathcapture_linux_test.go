@@ -237,3 +237,150 @@ func TestRuntimeRelativeOpenAfterCdInShortLivedChild(t *testing.T) {
 		t.Fatalf("source %q resolved %q", e.File.DirSource, e.File.ResolvedPath)
 	}
 }
+
+// coldName returns name in a private file mapping whose page table entries
+// have been zapped, so the first read of it from this process faults. Kernels
+// whose syscall tracepoints cannot take page faults fail the probe's entry
+// read of such a filename even when the open itself succeeds.
+func coldName(t *testing.T, name string) []byte {
+	t.Helper()
+	src := filepath.Join(t.TempDir(), "name")
+	if err := os.WriteFile(src, append([]byte(name), 0), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	m, err := syscall.Mmap(int(f.Fd()), 0, 4096, syscall.PROT_READ, syscall.MAP_PRIVATE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Munmap(m) })
+	if err := syscall.Madvise(m, syscall.MADV_DONTNEED); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func (lt *lockedThread) openAtPtr(name []byte, flags int) int {
+	var ret int
+	fdcwd := -100
+	lt.do(func() {
+		fd, _, errno := syscall.Syscall6(syscall.SYS_OPENAT, uintptr(fdcwd),
+			uintptr(unsafe.Pointer(&name[0])), uintptr(flags), 0, 0, 0)
+		runtime.KeepAlive(name)
+		if errno != 0 {
+			ret = -int(errno)
+			return
+		}
+		ret = int(fd)
+		syscall.Close(ret)
+	})
+	return ret
+}
+
+// fromThread returns the single open event the thread produced.
+func fromThread(t *testing.T, records <-chan []byte, tid int) *event.Event {
+	t.Helper()
+	var found []*event.Event
+	collectUntil(t, records, 3*time.Second, func(d decoded) bool {
+		if d.event.File != nil && int(d.event.Process.TID) == tid {
+			found = append(found, d.event)
+		}
+		return len(found) > 1
+	})
+	if len(found) != 1 {
+		t.Fatalf("got %d open events from thread %d, want 1", len(found), tid)
+	}
+	return found[0]
+}
+
+func captureMode(f *event.FilePayload) string {
+	switch {
+	case f.PathLate:
+		return "read at syscall exit"
+	case f.Path != "":
+		return "read at syscall entry"
+	}
+	return "unreadable"
+}
+
+// The CI failure on 6.17: a successful open whose filename page was not yet
+// mapped arrived with an empty, unreadable path and was charged as evasion.
+// The name must be captured, at entry or at exit, and confirmed by the inode.
+func TestRuntimeColdFilenamePageIsCaptured(t *testing.T) {
+	l, records := loadAndAttachPrograms(t, ProgOpenatEnter, ProgOpenatExit)
+	trackThisCgroup(t, l)
+	thread := newLockedThread(t)
+
+	target := filepath.Join(realDir(t), "cold-target.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := coldName(t, target)
+	if ret := thread.openAtPtr(name, syscall.O_RDONLY); ret < 0 {
+		t.Fatalf("openat: %d", ret)
+	}
+	e := fromThread(t, records, thread.tid)
+	f := e.File
+	t.Logf("filename %s", captureMode(f))
+	if f.Path != target || f.Truncated || f.Inode == 0 {
+		t.Fatalf("path %q truncated %v inode %d; want %q captured whole", f.Path, f.Truncated, f.Inode, target)
+	}
+	if err := (&PathEnricher{}).Enrich(context.Background(), e); err != nil || f.ResolvedPath != target {
+		t.Fatalf("ResolvedPath %q, %v; want %q confirmed by its inode", f.ResolvedPath, err, target)
+	}
+}
+
+// The same cold page on an open that fails before the kernel reads the name:
+// O_TMPFILE without write access is refused by build_open_flags. Nothing
+// faults the page in, so a probe that cannot fault reports the path
+// unreadable, and no kernel may report a late path that resolves.
+func TestRuntimeColdFilenamePageOnEarlyFailure(t *testing.T) {
+	l, records := loadAndAttachPrograms(t, ProgOpenatEnter, ProgOpenatExit)
+	trackThisCgroup(t, l)
+	thread := newLockedThread(t)
+
+	target := filepath.Join(realDir(t), "never-read.txt")
+	name := coldName(t, target)
+	const oTmpfileRead = 0x410000 // __O_TMPFILE | O_DIRECTORY, read-only: EINVAL
+	if ret := thread.openAtPtr(name, oTmpfileRead); ret != -int(syscall.EINVAL) {
+		t.Fatalf("openat = %d, want EINVAL", ret)
+	}
+	e := fromThread(t, records, thread.tid)
+	f := e.File
+	t.Logf("filename %s", captureMode(f))
+	switch {
+	case f.Path == target && !f.PathLate && !f.Truncated:
+	case f.Path == "" && f.Truncated:
+	default:
+		t.Fatalf("path %q late %v truncated %v; want the entry-time name or an unreadable path", f.Path, f.PathLate, f.Truncated)
+	}
+}
+
+// The CI failure after the exit re-read: bash opens /dev/tty with no
+// controlling terminal and gets ENXIO. The kernel read the name, so a probe
+// that could not read it at entry reads it at exit, and the failed open
+// resolves like an entry-time one instead of being charged as evasion.
+func TestRuntimeColdFilenamePageOnFailedOpen(t *testing.T) {
+	l, records := loadAndAttachPrograms(t, ProgOpenatEnter, ProgOpenatExit)
+	trackThisCgroup(t, l)
+	thread := newLockedThread(t)
+
+	target := filepath.Join(realDir(t), "absent.txt")
+	name := coldName(t, target)
+	if ret := thread.openAtPtr(name, syscall.O_RDONLY); ret != -int(syscall.ENOENT) {
+		t.Fatalf("openat = %d, want ENOENT", ret)
+	}
+	e := fromThread(t, records, thread.tid)
+	f := e.File
+	t.Logf("filename %s", captureMode(f))
+	if f.Path != target || f.Truncated {
+		t.Fatalf("path %q truncated %v; want %q captured whole", f.Path, f.Truncated, target)
+	}
+	if err := (&PathEnricher{}).Enrich(context.Background(), e); err != nil || f.ResolvedPath != target {
+		t.Fatalf("ResolvedPath %q, %v; want %q", f.ResolvedPath, err, target)
+	}
+}

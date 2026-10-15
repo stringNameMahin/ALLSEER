@@ -2112,6 +2112,39 @@ func TestDecodeBaseDirectory(t *testing.T) {
 	}
 }
 
+// ABI v4: a path read at syscall exit is carried as late, not as truncated,
+// and a relative one keeps the directory captured with it.
+func TestDecodePathLate(t *testing.T) {
+	info := uint32(abi.AllseerPathInfo)
+	late := uint32(abi.AllseerPathLate)
+	cwdDone := uint32(abi.AllseerDirCwd | abi.AllseerDirComplete)
+
+	raw := newRecord(abi.EvtFileOpen)
+	put32(raw, offFilePFlags, info|late)
+	putStr(raw, offFilePath, "/usr/lib/locale/locale-archive")
+	f := decode(t, raw).File
+	if !f.PathLate || f.Truncated || f.Path != "/usr/lib/locale/locale-archive" {
+		t.Errorf("absolute: late %v truncated %v path %q", f.PathLate, f.Truncated, f.Path)
+	}
+
+	raw = newRecord(abi.EvtFileOpen)
+	put32(raw, offFilePFlags, info|late|cwdDone)
+	put32(raw, offFileDirfd, uint32(0xffffff9c))
+	putStr(raw, offFilePath, "shadow")
+	putStr(raw, offFileDir, "etc/")
+	f = decode(t, raw).File
+	if !f.PathLate || f.Dir != "/etc" || f.DirStatus != "complete" {
+		t.Errorf("relative: late %v dir %q status %q", f.PathLate, f.Dir, f.DirStatus)
+	}
+
+	raw = newRecord(abi.EvtFileOpen)
+	put32(raw, offFilePFlags, info)
+	putStr(raw, offFilePath, "/etc/hostname")
+	if f := decode(t, raw).File; f.PathLate {
+		t.Error("an entry-time path decoded as late")
+	}
+}
+
 // A truncated exec filename is carried, flagged, and never matched on.
 func TestDecodeTruncatedExecFilename(t *testing.T) {
 	raw := newRecord(abi.EvtProcExec)

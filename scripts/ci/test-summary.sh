@@ -30,6 +30,13 @@ jq -R 'fromjson? // empty' "$json" | jq -rs --arg title "$title" --arg total "$t
                      | map(select(length > 0 and (startswith("=== ") | not) and (startswith("--- ") | not)))
                      | last // "")})
       | from_entries) as $why
+  | ($ev | map(select(.Test != null and .Action == "output"))
+      | group_by([.Package, .Test])
+      | map({key: "\(.[0].Package) \(.[0].Test)",
+             value: (map(.Output | sub("\\s+$"; ""))
+                     | map(select(length > 0 and (startswith("libbpf:") | not)))
+                     | .[-60:] | join("\n"))})
+      | from_entries) as $log
   | ([$ev[] | select(.Test == null and .Action == "output") | . as $e
        | (.Output | capture("coverage: (?<c>[0-9.]+)% of statements"))
        | {key: $e.Package, value: "\(.c)%"}] | from_entries) as $cov
@@ -55,7 +62,10 @@ jq -R 'fromjson? // empty' "$json" | jq -rs --arg title "$title" --arg total "$t
       "| Package | Test |",
       "|---|---|",
       ($tests | map(select(.Action == "fail")) | sort_by(.Package, .Test)[]
-        | "| \(.Package | short) | \(.Test | esc) |")
+        | "| \(.Package | short) | \(.Test | esc) |"),
+      "\n#### Failure output (last 60 lines each)\n",
+      ($tests | map(select(.Action == "fail")) | sort_by(.Package, .Test) | .[:20][]
+        | "<details><summary>\(.Package | short) \(.Test | esc)</summary>\n\n```\n\($log["\(.Package) \(.Test)"] // "")\n```\n</details>\n")
     else empty end),
     (if $ns > 0 then
       "\n#### Skipped tests\n",

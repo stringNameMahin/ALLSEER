@@ -790,6 +790,7 @@ func decodeBaseDir(p *abi.FilePayload, out *event.FilePayload) error {
 	if f&abi.AllseerPathInfo == 0 || f&(abi.AllseerPathTruncated|abi.AllseerPathUnreadable) != 0 {
 		out.Truncated = true
 	}
+	out.PathLate = f&abi.AllseerPathLate != 0
 	if out.Path == "" || strings.HasPrefix(out.Path, "/") {
 		return nil
 	}

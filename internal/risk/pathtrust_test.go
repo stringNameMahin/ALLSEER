@@ -22,18 +22,27 @@ func indeterminateReq(e *event.Event) ScoreRequest {
 
 func TestUnverifiablePathChargesWhatTheKernelCouldNotVouchFor(t *testing.T) {
 	cases := map[string]func(*event.Event){
-		"truncated path": func(e *event.Event) { e.File.Truncated = true },
-		"dir truncated":  func(e *event.Event) { e.File.Path, e.File.DirStatus = "x", "truncated" },
-		"dir deleted":    func(e *event.Event) { e.File.Path, e.File.DirStatus = "x", "deleted" },
-		"dir unavail":    func(e *event.Event) { e.File.Path, e.File.DirStatus = "x", "unavailable" },
+		"truncated path":   func(e *event.Event) { e.File.Truncated = true },
+		"dir truncated":    func(e *event.Event) { e.File.Path, e.File.DirStatus = "x", "truncated" },
+		"dir deleted":      func(e *event.Event) { e.File.Path, e.File.DirStatus = "x", "deleted" },
+		"dir unavail":      func(e *event.Event) { e.File.Path, e.File.DirStatus = "x", "unavailable" },
+		"late unconfirmed": func(e *event.Event) { e.File.Path, e.File.PathLate = "/etc/x", true },
 	}
 	for name, mod := range cases {
 		e := fileEvent(capability.KindFileRead, "")
 		e.File.ResolvedPath = ""
+		e.Process.Comm = "cat"
 		mod(e)
 		f, err := UnverifiablePathScorer{}.Evaluate(context.Background(), indeterminateReq(e))
 		if err != nil || f == nil || f.Weight != UnverifiablePathPoints || f.Evidence[EvidencePathProblem] == "" {
 			t.Errorf("%s: factor %+v, err %v", name, f, err)
+			continue
+		}
+		if raw, ok := f.Evidence[EvidenceRawPath]; !ok || raw != e.File.Path {
+			t.Errorf("%s: raw_path evidence %q (present %v), want %q", name, raw, ok, e.File.Path)
+		}
+		if f.Evidence[EvidenceResult] == "" || f.Evidence[EvidenceProcess] != "cat" {
+			t.Errorf("%s: result %q process %q, want both", name, f.Evidence[EvidenceResult], f.Evidence[EvidenceProcess])
 		}
 	}
 
@@ -51,6 +60,12 @@ func TestUnverifiablePathIgnoresOrdinaryUnresolved(t *testing.T) {
 	if f, _ := (UnverifiablePathScorer{}).Evaluate(context.Background(), indeterminateReq(e)); f != nil {
 		t.Errorf("charged an ordinary unresolved path: %+v", f)
 	}
+	// A late path the opened inode confirmed is resolved and not charged.
+	e = fileEvent(capability.KindFileRead, "/etc/x")
+	e.File.PathLate = true
+	if f, _ := (UnverifiablePathScorer{}).Evaluate(context.Background(), indeterminateReq(e)); f != nil {
+		t.Errorf("charged a confirmed late path: %+v", f)
+	}
 	// An absolute path ignores DirStatus.
 	e = fileEvent(capability.KindFileRead, "/etc/x")
 	e.File.DirStatus = "deleted"
@@ -66,9 +81,15 @@ func TestUnverifiablePathCrossesTheIndeterminateBoundary(t *testing.T) {
 	padded := fileEvent(capability.KindFileRead, "")
 	padded.File.Truncated = true
 
+	late := fileEvent(capability.KindFileRead, "")
+	late.File.Path, late.File.PathLate = "/etc/x", true
+
 	low := score(t, indeterminateReq(plain))
 	high := score(t, indeterminateReq(padded))
 	if low.Score >= 50 || high.Score < 50 {
 		t.Fatalf("scores = %v (ordinary) and %v (truncated); want below and at or above 50", low.Score, high.Score)
+	}
+	if s := score(t, indeterminateReq(late)); s.Score < 50 {
+		t.Fatalf("unconfirmed late path scored %v; want at or above 50", s.Score)
 	}
 }

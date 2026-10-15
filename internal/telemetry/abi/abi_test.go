@@ -179,10 +179,11 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 // the distinction is load-bearing: a reader who takes ABIVersion for a bound has
 // misread the contract as badly as one who takes PathMax for a version.
 func TestABIVersionIsAValueNotABound(t *testing.T) {
-	if ABIVersion != 3 {
-		t.Errorf("ABIVersion = %d, want 3; version 1 was the first numbered layout, version 2 "+
+	if ABIVersion != 4 {
+		t.Errorf("ABIVersion = %d, want 4; version 1 was the first numbered layout, version 2 "+
 			"reshaped struct allseer_priv_payload, version 3 added the openat directory capture, "+
-			"and the number changes only when the bytes on the wire change", ABIVersion)
+			"version 4 added PATH_LATE, which a version 3 reader would take for an entry-time path, "+
+			"and the number changes only when the bytes on the wire change or change meaning", ABIVersion)
 	}
 
 	// Where the field sits is the whole point of it. A version a reader has to

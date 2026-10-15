@@ -16,19 +16,25 @@ const FactorUnverifiablePath = "unverifiable_path"
 // between indeterminate-low-risk and indeterminate-high-risk.
 const UnverifiablePathPoints = 30
 
-// Evidence keys for unverifiable_path.
+// Evidence keys for unverifiable_path. EvidenceRawPath is the name as the
+// probe captured it, which may be relative, a prefix, or empty.
 const (
 	EvidencePathProblem = "problem"
 	EvidenceDirStatus   = "dir_status"
 	EvidenceDirSource   = "dir_source"
+	EvidenceRawPath     = "raw_path"
+	EvidenceResult      = "result"
+	EvidenceProcess     = "process"
 )
 
 // UnverifiablePathScorer separates two kinds of unresolved path. A file that
 // was opened and then removed before enrichment is ordinary and is not
-// charged. A path the probe reported as truncated or unreadable, or a relative
-// path whose directory walk was truncated, deleted or unavailable, is what an
-// agent produces when it pads a path past the kernel buffer or opens through a
-// removed directory to evade a denial, and is charged.
+// charged. A path the probe reported as truncated or unreadable, a relative
+// path whose directory walk was truncated, deleted or unavailable, or a path
+// read only at syscall exit that the opened inode did not confirm, is what an
+// agent produces when it pads a path past the kernel buffer, opens through a
+// removed directory or rewrites the name under the kernel to evade a denial,
+// and is charged.
 type UnverifiablePathScorer struct{}
 
 var (
@@ -57,18 +63,39 @@ func (UnverifiablePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, err
 		return decision.Factor{}, false, nil
 	}
 	ev := map[string]string{}
+	raw := ""
 	switch {
 	case e.Exec != nil && e.Exec.Truncated:
 		ev[EvidencePathProblem] = "exec filename truncated or unreadable in the kernel"
+		raw = e.Exec.Filename
 	case e.File != nil && e.File.Truncated:
 		ev[EvidencePathProblem] = "path truncated or unreadable in the kernel"
+		raw = e.File.Path
+	case e.File != nil && e.File.PathLate && e.File.ResolvedPath == "":
+		ev[EvidencePathProblem] = "path read after the syscall and not confirmed by the opened inode"
+		raw = e.File.Path
 	case e.File != nil && e.File.Path != "" && !filepath.IsAbs(e.File.Path) &&
 		(e.File.DirStatus == "truncated" || e.File.DirStatus == "deleted" || e.File.DirStatus == "unavailable"):
 		ev[EvidencePathProblem] = "base directory of a relative path could not be established"
 		ev[EvidenceDirStatus] = e.File.DirStatus
 		ev[EvidenceDirSource] = e.File.DirSource
+		raw = e.File.Path
 	default:
 		return decision.Factor{}, false, nil
+	}
+	ev[EvidenceRawPath] = raw
+	switch {
+	case e.Result.Succeeded:
+		ev[EvidenceResult] = "succeeded"
+	case e.Result.Errno != "":
+		ev[EvidenceResult] = e.Result.Errno
+	default:
+		ev[EvidenceResult] = "failed"
+	}
+	if proc := e.Process.Executable; proc != "" {
+		ev[EvidenceProcess] = proc
+	} else if e.Process.Comm != "" {
+		ev[EvidenceProcess] = e.Process.Comm
 	}
 	return decision.Factor{
 		Name:        FactorUnverifiablePath,

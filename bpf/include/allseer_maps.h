@@ -322,6 +322,7 @@ struct allseer_open_scratch {
     __u32 mode;
     __s32 dirfd;
     __u32 path_flags;
+    __u64 path_ptr;     /* openat's filename pointer, kept for the exit re-read */
     char  path[ALLSEER_PATH_MAX];
     char  dir[ALLSEER_DIR_MAX];
 };

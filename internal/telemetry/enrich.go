@@ -15,7 +15,7 @@ import (
 	"github.com/stringNameMahin/ALLSEER/pkg/event"
 )
 
-// Path resolution (ABI v3).
+// Path resolution (ABI v3; late reads since v4).
 //
 // The kernel decides the directory; user space follows symlinks below it.
 //
@@ -33,6 +33,11 @@ import (
 //     no longer exists, the path changed after the syscall and is left
 //     unresolved. A failed open opened nothing, so a missing tail is appended
 //     lexically, except a tail containing "..", which is ambiguous.
+//   - A path the probe could only read at syscall exit (PathLate) may have been
+//     rewritten after the kernel read it. For a successful open it is resolved
+//     only when the resolved file is the opened inode. A failed open opened
+//     nothing, and its late name is treated like an entry-time one: both are
+//     user-memory reads that a racing thread could falsify.
 //
 // What remains: symlinks are still read after the syscall, so a failed open
 // through a symlink that is swapped before enrichment reports the new target;
@@ -82,6 +87,11 @@ func (p *PathEnricher) Enrich(_ context.Context, e *event.Event) error {
 		full = f.Dir + "/" + f.Path
 	}
 
+	opened := e.Result.Succeeded && e.Result.ReturnCode >= 0 && isOpenKind(e.Capability)
+	if f.PathLate && opened {
+		return p.enrichLate(e, full)
+	}
+
 	// The kernel's directory is canonical, and these flags make it refuse a
 	// symlink as the final component, so one name inside it is exact without
 	// any lookup, even if both have since been removed.
@@ -94,7 +104,6 @@ func (p *PathEnricher) Enrich(_ context.Context, e *event.Event) error {
 	if err != nil {
 		return err
 	}
-	opened := e.Result.Succeeded && e.Result.ReturnCode >= 0 && isOpenKind(e.Capability)
 
 	if len(w.missing) > 0 {
 		for _, c := range w.missing {
@@ -116,6 +125,33 @@ func (p *PathEnricher) Enrich(_ context.Context, e *event.Event) error {
 		}
 	}
 	f.ResolvedPath = w.resolved()
+	return nil
+}
+
+// enrichLate resolves a path a successful open had read at syscall exit. Only
+// the inode the kernel opened can confirm it, so a missing inode, a missing
+// component or a different inode leaves it unresolved.
+func (p *PathEnricher) enrichLate(e *event.Event, full string) error {
+	f := e.File
+	if f.Inode == 0 {
+		return fmt.Errorf("%w: %q was read after the syscall and no opened inode confirms it", ErrUnresolvable, f.Path)
+	}
+	w, err := p.walk(full, e.Process.PID, e.Process.TID)
+	if err != nil {
+		return err
+	}
+	if len(w.missing) > 0 {
+		return fmt.Errorf("%w: %q was read after the syscall and no longer exists", ErrUnresolvable, full)
+	}
+	ino, err := p.inode(w.path)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrUnresolvable, w.path, err)
+	}
+	if ino != f.Inode {
+		return fmt.Errorf("%w: %q was read after the syscall and names inode %d, not the opened inode %d",
+			ErrUnresolvable, full, ino, f.Inode)
+	}
+	f.ResolvedPath = w.path
 	return nil
 }
 

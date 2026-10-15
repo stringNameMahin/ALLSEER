@@ -31,6 +31,8 @@ import (
 	"github.com/stringNameMahin/ALLSEER/internal/ipc"
 	"github.com/stringNameMahin/ALLSEER/internal/session"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
+	"github.com/stringNameMahin/ALLSEER/pkg/ece"
+	"github.com/stringNameMahin/ALLSEER/pkg/event"
 )
 
 const agentUID = 65534 // nobody
@@ -122,6 +124,10 @@ func startDaemon(t *testing.T, mode string) *daemon {
 	}
 	go func() { d.done <- d.cmd.Wait() }()
 	t.Cleanup(func() {
+		var pending []decision.ApprovalRequest
+		if t.Failed() {
+			pending, _ = d.client().PendingApprovals(context.Background())
+		}
 		_ = d.cmd.Process.Signal(syscall.SIGTERM)
 		select {
 		case <-d.done:
@@ -130,6 +136,10 @@ func startDaemon(t *testing.T, mode string) *daemon {
 		}
 		if t.Failed() {
 			t.Logf("daemon log:\n%s", filterLibbpf(d.log.String()))
+			for _, r := range pending {
+				t.Logf("pending approval %s: %s", r.ID, describeEvent(r.Event))
+			}
+			t.Logf("decisions other than allow:\n%s", d.explain())
 		}
 	})
 	deadline := time.Now().Add(30 * time.Second)
@@ -182,6 +192,43 @@ func (d *daemon) decisions(t *testing.T, sid string) []decision.Decision {
 		}
 	}
 	return out
+}
+
+// explain renders every decision that was not a plain allow, with the factors
+// and evidence behind it, so a failure on a CI host explains itself.
+func (d *daemon) explain() string {
+	f, err := os.Open(d.audit)
+	if err != nil {
+		return err.Error()
+	}
+	defer f.Close()
+	var b strings.Builder
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<22)
+	for n := 0; sc.Scan() && n < 60; {
+		var dec decision.Decision
+		if json.Unmarshal(sc.Bytes(), &dec) != nil || dec.Action == ece.ActionAllow {
+			continue
+		}
+		n++
+		fmt.Fprintf(&b, "  %s %s %s rule=%s target=%q risk=%.0f enforced=%v\n",
+			dec.SessionID, dec.Verdict, dec.Action, dec.MatchedRule, target(dec), dec.Risk.Score, dec.Enforced)
+		for _, fac := range dec.Risk.Factors {
+			if fac.Weight != 0 {
+				fmt.Fprintf(&b, "    %s=%.0f %v\n", fac.Name, fac.Weight, fac.Evidence)
+			}
+		}
+	}
+	return b.String()
+}
+
+func describeEvent(e event.Event) string {
+	s := fmt.Sprintf("%s pid %d comm %q exe %q", e.Capability, e.Process.PID, e.Process.Comm, e.Process.Executable)
+	if f := e.File; f != nil {
+		s += fmt.Sprintf(" path %q resolved %q truncated %v dir %q dir_source %q dir_status %q flags %#x ret %d",
+			f.Path, f.ResolvedPath, f.Truncated, f.Dir, f.DirSource, f.DirStatus, f.Flags, e.Result.ReturnCode)
+	}
+	return s
 }
 
 // target is the observation the validator resolved for a decision.
@@ -409,13 +456,22 @@ func TestInteractiveApproveResumesAndDenyKills(t *testing.T) {
 			"(exec 3<>/dev/tcp/127.0.0.1/9) 2>/dev/null\nsleep 1\necho x > "+marker))
 		sid := r.sessionID(t)
 
+		// The connect is the only thing this agent does that needs approval;
+		// any other request is a false positive and fails the test.
 		var req decision.ApprovalRequest
 		deadline := time.Now().Add(15 * time.Second)
+	wait:
 		for {
 			list, _ := d.client().PendingApprovals(ctx)
-			if len(list) > 0 && list[0].SessionID == sid {
-				req = list[0]
-				break
+			for _, p := range list {
+				if p.SessionID != sid {
+					continue
+				}
+				if !strings.Contains(target(p.Decision), "127.0.0.1:9") {
+					t.Fatalf("unexpected approval request: %s", p.Summary)
+				}
+				req = p
+				break wait
 			}
 			if time.Now().After(deadline) {
 				t.Fatalf("no approval request\n%s", r.stderr.String())
@@ -527,15 +583,18 @@ func TestEnforceContainsATruncatedPath(t *testing.T) {
 	if exists(marker) {
 		t.Fatal("the agent kept running after a truncated-path read")
 	}
+	// The charge must be for the padded read itself, not for some other
+	// unverifiable open that happened to come first.
 	var charged bool
 	for _, dec := range d.decisions(t, sid) {
 		for _, f := range dec.Risk.Factors {
-			if f.Name == "unverifiable_path" && dec.Verdict == decision.VerdictIndeterminate && dec.Enforced {
+			if f.Name == "unverifiable_path" && dec.Verdict == decision.VerdictIndeterminate && dec.Enforced &&
+				strings.HasPrefix(f.Evidence["raw_path"], "/etc/./") {
 				charged = true
 			}
 		}
 	}
 	if !charged {
-		t.Fatal("no enforced indeterminate decision carried unverifiable_path")
+		t.Fatal("no enforced indeterminate decision charged unverifiable_path on the padded path")
 	}
 }
