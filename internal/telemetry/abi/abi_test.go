@@ -121,7 +121,7 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 			{"Event.Type", OffsetEventType, 8},
 			{"Event.Ret", OffsetEventRet, 12},
 			{"Event.Version", OffsetEventVersion, 16},
-			{"Event.Pad", OffsetEventPad, 20},
+			{"Event.Flags", OffsetEventFlags, 20},
 			{"Event.Proc", OffsetEventProc, 24},
 			{"Event.Payload", OffsetEventPayload, 80},
 
@@ -179,10 +179,12 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 // the distinction is load-bearing: a reader who takes ABIVersion for a bound has
 // misread the contract as badly as one who takes PathMax for a version.
 func TestABIVersionIsAValueNotABound(t *testing.T) {
-	if ABIVersion != 4 {
-		t.Errorf("ABIVersion = %d, want 4; version 1 was the first numbered layout, version 2 "+
+	if ABIVersion != 5 {
+		t.Errorf("ABIVersion = %d, want 5; version 1 was the first numbered layout, version 2 "+
 			"reshaped struct allseer_priv_payload, version 3 added the openat directory capture, "+
 			"version 4 added PATH_LATE, which a version 3 reader would take for an entry-time path, "+
+			"version 5 turned the header's padding into `flags` and added PATH_KERNEL, so a version "+
+			"4 reader would take an open with no outcome for one that returned fd 0, "+
 			"and the number changes only when the bytes on the wire change or change meaning", ABIVersion)
 	}
 
@@ -200,9 +202,9 @@ func TestABIVersionIsAValueNotABound(t *testing.T) {
 	// The pad is named rather than implicit so the C compiler and the generated
 	// decoder account for the same four bytes instead of each deciding
 	// separately. It exists either way: proc is 8-aligned and version ends at 20.
-	if OffsetEventPad != OffsetEventVersion+4 || OffsetEventProc != OffsetEventPad+4 {
+	if OffsetEventFlags != OffsetEventVersion+4 || OffsetEventProc != OffsetEventFlags+4 {
 		t.Errorf("version/pad/proc = %d/%d/%d, want the pad to name exactly the gap between "+
-			"version and the 8-aligned proc", OffsetEventVersion, OffsetEventPad, OffsetEventProc)
+			"version and the 8-aligned proc", OffsetEventVersion, OffsetEventFlags, OffsetEventProc)
 	}
 }
 
@@ -301,7 +303,7 @@ func TestDecodeRecordReadsEveryHeaderField(t *testing.T) {
 	put32(raw, OffsetEventType, uint32(EvtFileOpen))
 	putI32(raw, OffsetEventRet, -13) // -EACCES, as the probe would report it
 	put32(raw, OffsetEventVersion, ABIVersion)
-	put32(raw, OffsetEventPad, 0)
+	put32(raw, OffsetEventFlags, 0)
 
 	p := OffsetEventProc
 	put64(raw, p+OffsetProcCgroupID, 0xCAFEBABE)

@@ -24,7 +24,7 @@
  * proc_exec and proc_exit are not a family but a floor, because everything else
  * attributes through them.
  *
- * At this point the file declares six maps and twenty-eight programs:
+ * At this point the file declares six maps and twenty-nine programs:
  * sched_process_exec and sched_process_exit, which each produce a record on
  * their own; two syscall pairs — sys_enter_openat / sys_exit_openat and
  * sys_enter_connect / sys_exit_connect — which each produce one record between
@@ -32,6 +32,11 @@
  * between them produce every ALLSEER_EVT_PRIV_CHANGE. The maps are what the
  * probes emit into, are filtered by, and — for the thirteen syscall pairs —
  * hold half-built events in between.
+ *
+ * The twenty-ninth is the fentry program on security_file_open, which stands
+ * apart from the rest: it is attached to a kernel function rather than to a
+ * syscall, it produces a record on its own, and it is the only way an open
+ * reached through io_uring is seen at all.
  *
  * allseer_event.h is included for a reason that outlives the absence of probes:
  * it is the record ABI, internal/telemetry/abigen derives the Go decoder by
@@ -62,6 +67,7 @@
  * alternative reading costs. */
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 #include "allseer_event.h"
 #include "allseer_maps.h"
@@ -546,7 +552,7 @@ int proc_exec(struct trace_event_raw_sched_process_exec *ctx)
 	e->type = ALLSEER_EVT_PROC_EXEC;
 	e->ret = 0;
 	e->version = ALLSEER_ABI_VERSION;
-	e->_pad = 0;
+	e->flags = 0;
 
 	pid_tgid = bpf_get_current_pid_tgid();
 	uid_gid = bpf_get_current_uid_gid();
@@ -718,7 +724,7 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
 	e->type = ALLSEER_EVT_PROC_EXIT;
 	e->ret = 0;
 	e->version = ALLSEER_ABI_VERSION;
-	e->_pad = 0;
+	e->flags = 0;
 
 	uid_gid = bpf_get_current_uid_gid();
 	task = (struct task_struct *)bpf_get_current_task();
@@ -825,6 +831,11 @@ int proc_exit(struct trace_event_raw_sched_process_exit *ctx)
  * this one — its string is inside the tracepoint record, which is kernel memory.
  */
 #define ALLSEER_AT_FDCWD  (-100)
+
+/* __FMODE_EXEC, as fs/exec.c sets it in open_exec_flags. The kernel opens the
+ * program it is about to run through the same path as any other open, so this
+ * is what separates "a process read a file" from "a process was executed". */
+#define ALLSEER_FMODE_EXEC  0x20
 
 /* walk_dir writes the path of a directory into out, components reversed, and
  * returns what it could establish (enum allseer_path_flag).
@@ -1189,7 +1200,7 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	 * absence of one. */
 	e->ret = (__s32)ctx->ret;
 	e->version = ALLSEER_ABI_VERSION;
-	e->_pad = 0;
+	e->flags = 0;
 
 	/* Identity as it was when the call was made, copied rather than re-read.
 	 * Re-reading it here would mostly agree — it is the same task — and
@@ -1221,6 +1232,155 @@ int openat_exit(struct trace_event_raw_sys_exit *ctx)
 	 * ordering means the only statement to make about the map afterwards is the
 	 * simple one: after an exit that found an entry, there is no entry. */
 	bpf_map_delete_elem(&openat_scratch, &key);
+
+	bpf_ringbuf_submit(e, allseer_submit_flags());
+	return 0;
+}
+
+/* --- The kernel-side open hook ----------------------------------------------
+ *
+ * Every probe above is attached to a syscall, and that is a bound on what they
+ * can see rather than a detail of how they see it: a file can be opened by
+ * open, creat, openat, openat2, open_by_handle_at or an io_uring request, and a
+ * tracepoint on one of those says nothing about the others. io_uring is the
+ * case that cannot be closed by adding more tracepoints, because an
+ * IORING_OP_OPENAT carries no syscall of its own at all - it is a ring entry
+ * the kernel executes, sometimes on a worker thread the submitting process
+ * never names.
+ *
+ * security_file_open is where they converge. The kernel calls it from
+ * do_dentry_open once a path has been resolved and the open permitted,
+ * whichever entry point asked, and hands it the struct file it is about to
+ * return. Three properties follow, and each closes something the syscall
+ * probes could not:
+ *
+ *   1. One hook covers every entry point, including the ones with no syscall.
+ *   2. The path comes from the file's own dentry through bpf_d_path, so it is
+ *      the kernel's name for the file it actually opened: absolute, fully
+ *      resolved, with no user memory read, no racing thread able to rewrite it
+ *      and no dependence on a page being faulted in. That is what
+ *      ALLSEER_PATH_KERNEL tells user space, and why such a path is used as it
+ *      stands instead of being walked again.
+ *   3. It fires for an open the device driver then refuses, which a return
+ *      value alone reports as a failure that never touched the file.
+ *
+ * What it cannot do is report an outcome, and the record says so rather than
+ * implying one: this runs before the syscall returns, so `ret` is not a return
+ * value and the header carries ALLSEER_EVT_F_OUTCOME_UNKNOWN. It also never
+ * fires for an open that failed during path resolution - no file was opened, so
+ * there is nothing to pass it. A denied or absent path is therefore still the
+ * openat pair's to report, which is the other half of why both exist.
+ */
+SEC("fentry/security_file_open")
+int BPF_PROG(file_open, struct file *file)
+{
+	struct allseer_event *e;
+	allseer_cgroup_id_t cgroup_id;
+	allseer_syscall_key_t key;
+	struct task_struct *task;
+	__u64 pid_tgid, uid_gid;
+	long n;
+
+	/* The same filter every program in this object performs, and for the same
+	 * reason. Here it also runs before anything is reserved or read, on a hook
+	 * that fires for every open on the host. */
+	cgroup_id = bpf_get_current_cgroup_id();
+	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
+
+	/* One open, one record. A scratch entry for this thread means an openat is
+	 * in flight around this hook, and openat_exit will report it with the
+	 * return value, the dirfd and the base directory this hook has none of. So
+	 * the pair keeps the opens it can complete and this program takes the rest,
+	 * which is what makes it additive rather than a second opinion.
+	 *
+	 * The consequence of attaching this program without the openat pair is the
+	 * useful one: no scratch entries exist, so openat opens arrive here too,
+	 * reported by the kernel's own path and without an outcome. */
+	key = bpf_get_current_pid_tgid();
+	if (bpf_map_lookup_elem(&openat_scratch, &key))
+		return 0;
+
+	/* An exec is not a read, and reporting it as one would be worse than
+	 * noise. The kernel opens the program it is about to run through this same
+	 * hook, so without this check every exec would also produce an
+	 * ALLSEER_EVT_FILE_OPEN of the binary - and that record would be validated
+	 * as fs.read against an envelope that granted process.exec. A toolchain
+	 * binary a session is allowed to run but not to read would depart from its
+	 * envelope for running, which is a false positive the exec probe already
+	 * has the right answer for: sched_process_exec reports the same act with
+	 * the resolved image and its arguments.
+	 *
+	 * What this gives up is narrow and worth naming: an execve of a file the
+	 * agent may not read is now reported only if the exec succeeds, since a
+	 * failed one produces no exec record either. It discloses nothing - the
+	 * kernel reads the header and refuses - so what is lost is the attempt,
+	 * not an access. */
+	if (BPF_CORE_READ(file, f_flags) & ALLSEER_FMODE_EXEC)
+		return 0;
+
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e) {
+		count_ringbuf_drop();
+		return 0;
+	}
+
+	e->timestamp = bpf_ktime_get_ns();
+	e->type = ALLSEER_EVT_FILE_OPEN;
+
+	/* Not a syscall return, and flagged as not being one. Zero rather than a
+	 * descriptor because no descriptor has been installed yet; the flag is what
+	 * keeps that zero from decoding as a successful open of fd 0. */
+	e->ret = 0;
+	e->version = ALLSEER_ABI_VERSION;
+	e->flags = ALLSEER_EVT_F_OUTCOME_UNKNOWN;
+
+	pid_tgid = key;
+	uid_gid = bpf_get_current_uid_gid();
+	task = (struct task_struct *)bpf_get_current_task();
+
+	/* Identity as the openat pair reports it, field for field and in the same
+	 * units, so a record from this program and one from that pair describe the
+	 * same process the same way. start_time comes from the group leader for the
+	 * reason openat_enter gives: this hook runs on whichever thread opened the
+	 * file, and for an io_uring request that thread may be a worker the
+	 * submitting process never created by name. Its cgroup is the session's
+	 * either way, which is what attribution is keyed on. */
+	e->proc.cgroup_id = cgroup_id;
+	e->proc.start_time = BPF_CORE_READ(task, group_leader, start_boottime);
+	e->proc.pid = (__u32)(pid_tgid >> 32);
+	e->proc.tid = (__u32)pid_tgid;
+	e->proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
+	e->proc.uid = (__u32)uid_gid;
+	e->proc.gid = (__u32)(uid_gid >> 32);
+	e->proc._pad = 0;
+	bpf_get_current_comm(&e->proc.comm, sizeof(e->proc.comm));
+
+	ALLSEER_CLEAR_PAYLOAD(e);
+
+	/* The file the kernel is about to hand back, described from the kernel's
+	 * own structures: the inode it resolved to, the device it lives on, and the
+	 * flags the open was granted with. `dirfd` and `dir` stay zero and empty,
+	 * and nothing reads them for a path ALLSEER_PATH_KERNEL marks absolute. */
+	e->payload.file.inode = BPF_CORE_READ(file, f_inode, i_ino);
+	e->payload.file.device = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
+	e->payload.file.flags = BPF_CORE_READ(file, f_flags);
+	e->payload.file.path_flags = ALLSEER_PATH_INFO | ALLSEER_PATH_KERNEL;
+
+	/* bpf_d_path is allowed here because the kernel allows it here:
+	 * security_file_open is one of the few functions on its BTF allowlist,
+	 * which is the other reason this hook rather than a kprobe deeper in the
+	 * open path. A negative return is a name that did not fit or a file with no
+	 * path of its own, and either way the field keeps the zero the clear above
+	 * left - an empty path means the read failed, never that nothing was
+	 * opened.
+	 *
+	 * The cast drops a const this kernel's struct file carries on f_path and
+	 * the helper's prototype does not. Nothing here writes through it. */
+	n = bpf_d_path((struct path *)&file->f_path, e->payload.file.path,
+		       sizeof(e->payload.file.path));
+	if (n < 0)
+		e->payload.file.path_flags |= ALLSEER_PATH_UNREADABLE;
 
 	bpf_ringbuf_submit(e, allseer_submit_flags());
 	return 0;
@@ -1522,7 +1682,7 @@ int connect_exit(struct trace_event_raw_sys_exit *ctx)
 	e->type = ALLSEER_EVT_NET_CONNECT;
 	e->ret = (__s32)ctx->ret;
 	e->version = ALLSEER_ABI_VERSION;
-	e->_pad = 0;
+	e->flags = 0;
 	e->proc = s->proc;
 
 	ALLSEER_CLEAR_PAYLOAD(e);
@@ -1992,7 +2152,7 @@ static __always_inline int priv_exit(struct trace_event_raw_sys_exit *ctx, __u32
 	e->type = ALLSEER_EVT_PRIV_CHANGE;
 	e->ret = (__s32)ctx->ret;
 	e->version = ALLSEER_ABI_VERSION;
-	e->_pad = 0;
+	e->flags = 0;
 	e->proc = s->proc;
 
 	/* Reserved space is whatever the ring held before, so the whole union is

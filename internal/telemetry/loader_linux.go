@@ -96,6 +96,10 @@ type BPFLoader struct {
 	// report. A probe that did not attach is a blind spot, and a blind spot
 	// with no reason attached cannot be acted on.
 	attachErrs map[string]string
+
+	// disabled names programs this load left out of the kernel, with the
+	// reason. Only Optional programs can appear here.
+	disabled map[string]string
 }
 
 var _ Loader = (*BPFLoader)(nil)
@@ -118,6 +122,7 @@ func NewLoader(cfg Config, decoder Decoder) *BPFLoader {
 		ringBufs:   make(map[string]*bpf.RingBuffer),
 		loaded:     make(map[string]bool),
 		attachErrs: make(map[string]string),
+		disabled:   make(map[string]string),
 	}
 }
 
@@ -202,12 +207,69 @@ func (l *BPFLoader) Load(ctx context.Context, objectPath string) error {
 
 	if err := module.BPFLoadObject(); err != nil {
 		module.Close()
-		return fmt.Errorf("telemetry: loading BPF object %s: %w", objectPath, err)
+
+		// One retry without the optional programs. A kernel that cannot load
+		// the fentry hook - no BTF for security_file_open, or a signature this
+		// object was not built against - must lose that hook rather than all
+		// telemetry, because libbpf fails the whole object for one program.
+		// The first error is what gets reported either way: it is the reason
+		// the hook is gone, and a retry that also fails must not replace it
+		// with a second, less informative one.
+		degraded, left, rerr := l.loadWithoutOptional(objectPath, err)
+		if rerr != nil {
+			return rerr
+		}
+		l.module = degraded
+		l.disabled = left
+		l.recordLoadedLocked()
+		return nil
 	}
 
 	l.module = module
 	l.recordLoadedLocked()
 	return nil
+}
+
+// loadWithoutOptional reopens the object with every Optional program's autoload
+// off and loads it again. It returns the module and what it left out, or the
+// original load error when the object fails without them too.
+func (l *BPFLoader) loadWithoutOptional(objectPath string, first error) (*bpf.Module, map[string]string, error) {
+	names := OptionalPrograms()
+	if len(names) == 0 {
+		return nil, nil, fmt.Errorf("telemetry: loading BPF object %s: %w", objectPath, first)
+	}
+
+	module, err := bpf.NewModuleFromFile(objectPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("telemetry: reopening BPF object %s: %w", objectPath, err)
+	}
+	fail := func(e error) (*bpf.Module, map[string]string, error) {
+		module.Close()
+		return nil, nil, e
+	}
+	if err := resizeRingBuffer(module, l.cfg.RingBufferSize); err != nil {
+		return fail(err)
+	}
+	if err := applyForceWakeup(module, l.cfg.RingbufForceWakeup); err != nil {
+		return fail(err)
+	}
+
+	left := make(map[string]string, len(names))
+	for _, name := range names {
+		prog, err := module.GetProgram(name)
+		if err != nil {
+			continue
+		}
+		if err := prog.SetAutoload(false); err != nil {
+			return fail(fmt.Errorf("telemetry: disabling %s after a failed load: %w", name, err))
+		}
+		left[name] = "not loaded: " + first.Error()
+	}
+	if err := module.BPFLoadObject(); err != nil {
+		module.Close()
+		return nil, nil, fmt.Errorf("telemetry: loading BPF object %s: %w", objectPath, first)
+	}
+	return module, left, nil
 }
 
 // recordLoadedLocked notes which of the object's programs are present.
@@ -217,6 +279,12 @@ func (l *BPFLoader) Load(ctx context.Context, objectPath string) error {
 // coverage. The staleness test is what keeps the table honest.
 func (l *BPFLoader) recordLoadedLocked() {
 	for _, d := range AllProbes() {
+		if _, disabled := l.disabled[d.Name]; disabled {
+			// Present in the object and absent from the kernel. GetProgram
+			// still finds it, so the disabled set is the only thing that can
+			// tell the difference.
+			continue
+		}
 		if _, err := l.module.GetProgram(d.Name); err == nil {
 			l.loaded[d.Name] = true
 		}
@@ -293,6 +361,14 @@ func (l *BPFLoader) Attach(ctx context.Context, programName string) error {
 		return fmt.Errorf("%w: %s", ErrAlreadyAttached, programName)
 	}
 
+	if reason, ok := l.disabled[programName]; ok {
+		// GetProgram would succeed and the attach would fail with something
+		// about a missing file descriptor, which says nothing about why.
+		err := fmt.Errorf("telemetry: program %q was not loaded: %s", programName, reason)
+		l.attachErrs[programName] = err.Error()
+		return err
+	}
+
 	prog, err := l.module.GetProgram(programName)
 	if err != nil {
 		err = fmt.Errorf("telemetry: program %q: %w", programName, err)
@@ -336,7 +412,7 @@ func (l *BPFLoader) Probes() []ProbeInfo {
 			Capabilities: capabilitiesFor([]ProbeDescriptor{d}),
 			Loaded:       l.loaded[d.Name],
 			Attached:     attached,
-			Error:        l.attachErrs[d.Name],
+			Error:        l.probeErrorLocked(d.Name),
 		})
 	}
 	return out
@@ -654,3 +730,14 @@ func (l *BPFLoader) readyLocked() error {
 // and making Load honour the list too would put the same policy in two places.
 // The collector is where it belongs, together with the ProbeInfo it has to
 // report for probes it deliberately did not attach.
+
+// probeErrorLocked reports why a program is not running: the attach error when
+// one was recorded, otherwise the reason it was never loaded. A program left
+// out of the kernel has no attach to fail, so without this it would read as a
+// program nobody asked for.
+func (l *BPFLoader) probeErrorLocked(name string) string {
+	if err := l.attachErrs[name]; err != "" {
+		return err
+	}
+	return l.disabled[name]
+}

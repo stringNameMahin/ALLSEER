@@ -209,7 +209,7 @@ func (*EventDecoder) Decode(raw []byte) (*event.Event, error) {
 
 	e := &event.Event{
 		KernelTimestamp: rec.Timestamp,
-		Result:          resultOf(rec.Ret),
+		Result:          resultOf(rec.Ret, abi.EventFlag(rec.Flags)),
 		Process: event.Process{
 			// The C fields are unsigned and the Go fields are signed. The
 			// conversion is two's complement and reversible, which matters for
@@ -791,6 +791,7 @@ func decodeBaseDir(p *abi.FilePayload, out *event.FilePayload) error {
 		out.Truncated = true
 	}
 	out.PathLate = f&abi.AllseerPathLate != 0
+	out.KernelPath = f&abi.AllseerPathKernel != 0
 	if out.Path == "" || strings.HasPrefix(out.Path, "/") {
 		return nil
 	}
@@ -1040,7 +1041,23 @@ func addressString(raw [16]uint8, family uint16) string {
 //
 // Widened to int64 before negation so the one value int32 cannot negate,
 // math.MinInt32, does not wrap back onto itself and yield a nonsensical errno.
-func resultOf(ret int32) event.Result {
+// resultOf turns a record's return value into event.Result.
+//
+// ALLSEER_EVT_F_OUTCOME_UNKNOWN makes `ret` meaningless, so it is not read: the
+// probe ran before the operation had an outcome. Succeeded is nonetheless true,
+// and that is a judgement worth stating. The flag is set by the
+// security_file_open hook, which the kernel reaches once a path is resolved and
+// an open permitted - the point at which the file's contents became reachable
+// by the process. Reporting that as "not succeeded" would be the costlier
+// error: risk's credential-egress detector counts a read as a qualifying access
+// only when it succeeded, so a false "failed" would let a key read through
+// io_uring pass as no access at all. What the record does not claim is that the
+// syscall returned successfully, and OutcomeUnobserved is how a reader tells
+// the two apart.
+func resultOf(ret int32, flags abi.EventFlag) event.Result {
+	if flags&abi.AllseerEvtFOutcomeUnknown != 0 {
+		return event.Result{Succeeded: true, OutcomeUnobserved: true}
+	}
 	r := event.Result{ReturnCode: int64(ret), Succeeded: ret >= 0}
 	if ret < 0 {
 		r.Errno = errnoName(-int64(ret))

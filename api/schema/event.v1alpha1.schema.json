@@ -106,6 +106,10 @@
           "type": "integer"
         },
         "errno": { "type": "string" },
+        "outcome_unobserved": {
+          "description": "The probe reported the operation before its outcome was decided, so return_code and errno are absent and succeeded describes what the kernel did, not what the call returned.",
+          "type": "boolean"
+        },
         "succeeded": { "type": "boolean" }
       }
     },
@@ -187,6 +191,10 @@
         "dir_status": {
           "description": "What the kernel could establish about the directory of a relative path. Only complete may be joined to the path.",
           "enum": ["complete", "truncated", "unavailable", "deleted"]
+        },
+        "kernel_path": {
+          "description": "The path is the kernel's own fully resolved name for the opened file, so it is used as it stands rather than resolved in user space.",
+          "type": "boolean"
         },
         "path_late": {
           "description": "The path could not be read at syscall entry and was read at exit. For a successful open it is trusted only when the opened inode confirms it.",

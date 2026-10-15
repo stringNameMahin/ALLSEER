@@ -103,6 +103,12 @@ type Spec struct {
 	// successes is not a realistic one.
 	Ret int32
 
+	// Flags are enum allseer_event_flag bits for the record header. A spec
+	// carrying ALLSEER_EVT_F_OUTCOME_UNKNOWN renders what the
+	// security_file_open hook submits, where Ret is not a return value and is
+	// not read.
+	Flags uint32
+
 	// Proc is the acting process. Nil uses Config.Process, which is the common
 	// case: a stream is usually one process, or a small tree of them.
 	Proc *Proc
@@ -287,6 +293,7 @@ func record(s Spec, proc *Proc, timestamp uint64) ([]byte, error) {
 	// against bytes written in decode_fuzz_test.go, where the value under test
 	// is the version itself.
 	put32(raw, abi.OffsetEventVersion, abi.ABIVersion)
+	put32(raw, abi.OffsetEventFlags, s.Flags)
 
 	if err := putProc(raw, proc); err != nil {
 		return nil, err

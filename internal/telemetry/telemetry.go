@@ -667,11 +667,11 @@ type Config struct {
 // Three constraints on that work, none of them optional:
 //
 //  1. The unit of degradation is the probe family, never the program. Thirteen
-//     of the twenty-eight programs are syscall enter/exit pairs sharing a
+//     of the twenty-nine programs are syscall enter/exit pairs sharing a
 //     scratch map, so dropping sys_exit_openat while keeping sys_enter_openat
 //     would leak openat_scratch and emit nothing, which is worse than dropping
-//     both. That is fifteen degradation units - two sched singletons and
-//     thirteen pairs - and never twenty-eight.
+//     both. That is sixteen degradation units - two sched singletons,
+//     thirteen pairs and the fentry hook - and never twenty-nine.
 //  2. proc_exec and proc_exit are a floor rather than a family. They are the
 //     attribution backbone every other probe hangs off, so a host that cannot
 //     load them must refuse to run rather than degrade. See the M7 requirement

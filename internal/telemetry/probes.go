@@ -66,6 +66,21 @@ const (
 	// data leaves, and it cannot be undone after the fact" — that is the blind
 	// spot most worth not having by accident.
 	ProgConnectExit = "connect_exit"
+
+	// ProgFileOpen is the fentry/security_file_open program, emitting
+	// ALLSEER_EVT_FILE_OPEN.
+	//
+	// Not a pair and not a syscall probe: one hook the kernel reaches from
+	// every entry point that opens a file, which is the only place io_uring
+	// opens can be seen at all. It needs no scratch map because the kernel
+	// hands it the opened file, and it reports no outcome because it runs
+	// before there is one. bpf/allseer.bpf.c states the whole argument.
+	//
+	// Attached alone it observes every open without a return value; attached
+	// with the openat family it leaves openat to that pair and covers what the
+	// pair cannot see. Either way it is additive, so there is no half of it to
+	// be missing.
+	ProgFileOpen = "file_open"
 )
 
 // The privilege programs, one enter/exit pair per credential syscall, all
@@ -147,21 +162,34 @@ func ProgPrivPairs() []string {
 	}
 }
 
-// probeTypeTracepoint is the eBPF program type of every program in this object.
-// Named rather than repeated so the table below says what it means.
-const probeTypeTracepoint = "tracepoint"
+// The eBPF program types in this object. Named rather than repeated so the
+// table below says what it means.
+//
+// fentry needs kernel BTF and a function the kernel exposes to tracing, so an
+// fentry program can fail to load on a kernel where every tracepoint program
+// loads. That is a per-program property the loader reports rather than a reason
+// to withhold the hook: the capability it covers is unobservable without it.
+const (
+	probeTypeTracepoint = "tracepoint"
+	probeTypeFentry     = "fentry"
+)
 
 // Probe families, the unit that loads, attaches and degrades together.
 //
-// Fifteen units rather than twenty-eight programs: two sched singletons and
-// thirteen syscall enter/exit pairs. A pair shares a scratch map, so dropping
-// one half leaks the scratch entry and emits nothing at all, which is worse
-// than dropping both.
+// Sixteen units rather than twenty-nine programs: two sched singletons,
+// thirteen syscall enter/exit pairs and one fentry singleton. A pair shares a
+// scratch map, so dropping one half leaks the scratch entry and emits nothing
+// at all, which is worse than dropping both.
 const (
 	FamilyProcExec = "proc_exec"
 	FamilyProcExit = "proc_exit"
 	FamilyOpenat   = "openat"
 	FamilyConnect  = "connect"
+
+	// FamilyFileOpen is the one-program family over security_file_open. It
+	// degrades on its own: dropping it costs the entry points no syscall
+	// tracepoint reaches, and costs nothing the openat family already covers.
+	FamilyFileOpen = "file_open"
 )
 
 // PrivFamilyFor names the family carrying one credential syscall.
@@ -221,6 +249,32 @@ type ProbeDescriptor struct {
 	// PrivOp is the credential operation a privilege program reports, and
 	// abi.OpUnknown for every other program.
 	PrivOp abi.PrivOp
+
+	// Optional marks a program the object may be loaded without.
+	//
+	// Only the fentry hook is: it needs kernel BTF to carry the function it
+	// attaches to, and a kernel that does not expose security_file_open cannot
+	// load it at all. libbpf fails the whole object when any program fails to
+	// load, so without this the hook would turn every such kernel from
+	// "governed, with the entry points no tracepoint reaches unwatched" into
+	// "refuses to govern". The loader drops it and reports the loss; coverage
+	// is what says the entry points went with it.
+	Optional bool
+
+	// Syscalls names the kernel entry points this program observes, in the
+	// spelling pkg/capability's descriptors use.
+	//
+	// It exists so coverage can answer the question a capability name cannot:
+	// fs.read is reachable through open, openat, openat2, creat and io_uring,
+	// and a probe on one of them observes one of them. Reporting the kind as
+	// observable without saying which entry points were watched is how a blind
+	// spot gets dressed as a control, so ComputeCoverage subtracts this from
+	// what the catalog declares and names the difference.
+	//
+	// A sched tracepoint lists the syscalls whose effect it observes even
+	// though it is not attached to them: sched_process_exit sees a process end
+	// however it ended, which includes exit and exit_group and more besides.
+	Syscalls []string
 }
 
 // AllProbes returns every program in the object, in declaration order.
@@ -232,6 +286,7 @@ func AllProbes() []ProbeDescriptor {
 			Type:        probeTypeTracepoint,
 			AttachPoint: "sched/sched_process_exec",
 			Emits:       abi.EvtProcExec,
+			Syscalls:    []string{"execve", "execveat"},
 		},
 		{
 			Name:        ProgProcExit,
@@ -239,6 +294,7 @@ func AllProbes() []ProbeDescriptor {
 			Type:        probeTypeTracepoint,
 			AttachPoint: "sched/sched_process_exit",
 			Emits:       abi.EvtProcExit,
+			Syscalls:    []string{"exit", "exit_group"},
 		},
 		{
 			Name:        ProgOpenatEnter,
@@ -246,6 +302,7 @@ func AllProbes() []ProbeDescriptor {
 			Type:        probeTypeTracepoint,
 			AttachPoint: "syscalls/sys_enter_openat",
 			Emits:       abi.EvtUnknown,
+			Syscalls:    []string{"openat"},
 		},
 		{
 			Name:        ProgOpenatExit,
@@ -253,6 +310,7 @@ func AllProbes() []ProbeDescriptor {
 			Type:        probeTypeTracepoint,
 			AttachPoint: "syscalls/sys_exit_openat",
 			Emits:       abi.EvtFileOpen,
+			Syscalls:    []string{"openat"},
 		},
 		{
 			Name:        ProgConnectEnter,
@@ -260,6 +318,7 @@ func AllProbes() []ProbeDescriptor {
 			Type:        probeTypeTracepoint,
 			AttachPoint: "syscalls/sys_enter_connect",
 			Emits:       abi.EvtUnknown,
+			Syscalls:    []string{"connect"},
 		},
 		{
 			Name:        ProgConnectExit,
@@ -267,6 +326,19 @@ func AllProbes() []ProbeDescriptor {
 			Type:        probeTypeTracepoint,
 			AttachPoint: "syscalls/sys_exit_connect",
 			Emits:       abi.EvtNetConnect,
+			Syscalls:    []string{"connect"},
+		},
+		{
+			Name:        ProgFileOpen,
+			Family:      FamilyFileOpen,
+			Type:        probeTypeFentry,
+			AttachPoint: "security_file_open",
+			Emits:       abi.EvtFileOpen,
+			Optional:    true,
+			// Every entry point that reaches do_dentry_open. open and creat do
+			// not exist on arm64, where glibc calls openat for both; listing
+			// them costs nothing there and is the truth on amd64.
+			Syscalls: []string{"open", "openat", "openat2", "creat", "open_by_handle_at", "io_uring"},
 		},
 	}
 
@@ -283,6 +355,7 @@ func AllProbes() []ProbeDescriptor {
 				AttachPoint: "syscalls/sys_enter_" + s.name,
 				Emits:       abi.EvtUnknown,
 				PrivOp:      s.op,
+				Syscalls:    []string{s.name},
 			},
 			ProbeDescriptor{
 				Name:        "priv_exit_" + s.name,
@@ -291,6 +364,7 @@ func AllProbes() []ProbeDescriptor {
 				AttachPoint: "syscalls/sys_exit_" + s.name,
 				Emits:       abi.EvtPrivChange,
 				PrivOp:      s.op,
+				Syscalls:    []string{s.name},
 			},
 		)
 	}
@@ -312,9 +386,12 @@ type ProbeFamily struct {
 
 	// Capabilities is what the family observes with every program attached.
 	Capabilities []capability.Kind
+
+	// Syscalls is every kernel entry point the family's programs observe.
+	Syscalls []string
 }
 
-// AllProbeFamilies returns the fifteen degradation units, in declaration order.
+// AllProbeFamilies returns the sixteen degradation units, in declaration order.
 func AllProbeFamilies() []ProbeFamily {
 	var order []string
 	members := make(map[string][]ProbeDescriptor)
@@ -337,6 +414,7 @@ func AllProbeFamilies() []ProbeFamily {
 			Programs:     programs,
 			Floor:        name == FamilyProcExec || name == FamilyProcExit,
 			Capabilities: capabilitiesFor(descs),
+			Syscalls:     syscallsOf(descs),
 		})
 	}
 	return out
@@ -382,6 +460,61 @@ func capabilitiesFor(descs []ProbeDescriptor) []capability.Kind {
 	return out
 }
 
+// OptionalPrograms names every program the object may be loaded without, in
+// declaration order. The loader disables these and retries when a load fails,
+// so a kernel missing one hook loses that hook rather than all telemetry.
+func OptionalPrograms() []string {
+	var out []string
+	for _, d := range AllProbes() {
+		if d.Optional {
+			out = append(out, d.Name)
+		}
+	}
+	return out
+}
+
+// syscallsOf is the union of what a family's programs observe, first-seen
+// order. An entry program and its exit program name the same syscall, so a
+// family's list is shorter than the sum of its parts.
+func syscallsOf(descs []ProbeDescriptor) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, d := range descs {
+		for _, sc := range d.Syscalls {
+			if !seen[sc] {
+				seen[sc] = true
+				out = append(out, sc)
+			}
+		}
+	}
+	return out
+}
+
+// EntryPointGap is one capability's entry-point coverage: which of the kernel
+// entry points the catalog declares for it were watched by this load, and which
+// were not.
+//
+// It exists because "observable" is a claim about a capability and a probe is
+// attached to an entry point, and those are not the same statement. A load with
+// only the openat family attached observes fs.read through openat and not
+// through openat2 or io_uring, and an agent that reads a key through io_uring
+// leaves no record at all. Reporting the kind as observable and stopping there
+// would describe that load as governing something it cannot see.
+//
+// Missing is not always a defect to be closed. ALLSEER observes a file by the
+// open that reached it, so the read and mmap entry points of fs.read are listed
+// as unwatched because they are: a process reading through a descriptor it
+// already holds produces no further record. Naming them is the point - the
+// operator learns where the evidence comes from rather than inferring it.
+type EntryPointGap struct {
+	Kind capability.Kind `json:"kind"`
+
+	// Observed and Missing partition the catalog's declared entry points for
+	// the kind, both in declaration order.
+	Observed []string `json:"observed,omitempty"`
+	Missing  []string `json:"missing,omitempty"`
+}
+
 // Coverage is what an attached probe set can actually observe.
 //
 // This is the value the reporting destinations share. allseerctl renders it,
@@ -419,6 +552,12 @@ type Coverage struct {
 
 	// Degraded reports whether any family is incomplete.
 	Degraded bool `json:"degraded"`
+
+	// EntryPoints is per-capability entry-point coverage, for every observable
+	// kind that some declared entry point was not watched for. A kind absent
+	// from this list is either fully watched or not observable at all, and the
+	// lists above say which.
+	EntryPoints []EntryPointGap `json:"entry_points,omitempty"`
 }
 
 // FamilyCoverage is one degradation unit's status.
@@ -437,6 +576,47 @@ type FamilyCoverage struct {
 	// Capabilities is what the family observes when complete. Reported even
 	// when it is not, because that is the gap.
 	Capabilities []capability.Kind `json:"capabilities"`
+
+	// Syscalls is every kernel entry point the family observes.
+	Syscalls []string `json:"syscalls,omitempty"`
+}
+
+// DegradedEntryPoints is the part of EntryPoints a fully attached build would
+// have watched, per capability.
+//
+// The distinction it draws is the one an operator has to act on. fs.read lists
+// read and mmap as unwatched in every load, because ALLSEER observes the open
+// that reached a file and not each later use of a descriptor - that is the
+// design, and no amount of attaching changes it. openat2 and io_uring are
+// unwatched only when the hook that covers them is missing, and that is a
+// kernel or configuration problem with a fix. Reporting both in one list would
+// leave the fixable case indistinguishable from the permanent one.
+func (c Coverage) DegradedEntryPoints() []EntryPointGap {
+	watchable := make(map[capability.Kind]map[string]bool)
+	for _, f := range AllProbeFamilies() {
+		for _, k := range f.Capabilities {
+			if watchable[k] == nil {
+				watchable[k] = make(map[string]bool)
+			}
+			for _, sc := range f.Syscalls {
+				watchable[k][sc] = true
+			}
+		}
+	}
+
+	var out []EntryPointGap
+	for _, g := range c.EntryPoints {
+		var lost []string
+		for _, sc := range g.Missing {
+			if watchable[g.Kind][sc] {
+				lost = append(lost, sc)
+			}
+		}
+		if len(lost) > 0 {
+			out = append(out, EntryPointGap{Kind: g.Kind, Observed: g.Observed, Missing: lost})
+		}
+	}
+	return out
 }
 
 // ComputeCoverage derives coverage from per-probe status.
@@ -453,6 +633,10 @@ func ComputeCoverage(probes []ProbeInfo) Coverage {
 
 	observable := make(map[capability.Kind]bool)
 	emitted := make(map[capability.Kind]bool)
+	watched := make(map[capability.Kind]map[string]bool)
+	for _, k := range capability.AllKinds() {
+		watched[k] = make(map[string]bool)
+	}
 
 	for _, f := range AllProbeFamilies() {
 		fc := FamilyCoverage{
@@ -460,6 +644,7 @@ func ComputeCoverage(probes []ProbeInfo) Coverage {
 			Floor:        f.Floor,
 			Complete:     true,
 			Capabilities: f.Capabilities,
+			Syscalls:     f.Syscalls,
 		}
 		for _, name := range f.Programs {
 			if !attached[name] {
@@ -472,6 +657,9 @@ func ComputeCoverage(probes []ProbeInfo) Coverage {
 			emitted[k] = true
 			if fc.Complete {
 				observable[k] = true
+				for _, sc := range f.Syscalls {
+					watched[k][sc] = true
+				}
 			}
 		}
 
@@ -493,6 +681,28 @@ func ComputeCoverage(probes []ProbeInfo) Coverage {
 			cov.Unobservable = append(cov.Unobservable, k)
 		default:
 			cov.Unsupported = append(cov.Unsupported, k)
+		}
+	}
+
+	// Entry points for the observable kinds only. For a kind nothing observes,
+	// Unobservable and Unsupported already say so, and repeating it here as
+	// "every entry point missing" would bury the loads where some were watched
+	// and some were not - which is the case this reporting exists for.
+	for _, k := range cov.Observable {
+		d, ok := capability.Describe(k)
+		if !ok {
+			continue
+		}
+		gap := EntryPointGap{Kind: k}
+		for _, sc := range d.Syscalls {
+			if watched[k][sc] {
+				gap.Observed = append(gap.Observed, sc)
+			} else {
+				gap.Missing = append(gap.Missing, sc)
+			}
+		}
+		if len(gap.Missing) > 0 {
+			cov.EntryPoints = append(cov.EntryPoints, gap)
 		}
 	}
 	return cov
@@ -597,6 +807,26 @@ func (c Coverage) BugReport() string {
 		}
 	}
 
+	// The entry-point gaps come before the kind-level ones because they are the
+	// subtler reading: a kind listed as observable here is one an agent can
+	// still exercise unobserved, by asking the kernel a different way.
+	if len(c.EntryPoints) > 0 {
+		b.WriteString("\nObservable capabilities with unwatched entry points:\n")
+		for _, g := range c.EntryPoints {
+			fmt.Fprintf(&b, "  %-18s watched %s; unwatched %s\n",
+				g.Kind, joinOrNone(g.Observed), joinOrNone(g.Missing))
+		}
+	}
+
+	// The fixable subset, named separately: these are the ones a fully attached
+	// build would have watched.
+	if lost := c.DegradedEntryPoints(); len(lost) > 0 {
+		b.WriteString("\nEntry points this load lost that this build can watch:\n")
+		for _, g := range lost {
+			fmt.Fprintf(&b, "  %-18s %s\n", g.Kind, strings.Join(g.Missing, ", "))
+		}
+	}
+
 	if len(c.Unobservable) > 0 {
 		b.WriteString("\nCapabilities this build observes but this load does not:\n")
 		for _, k := range c.Unobservable {
@@ -614,4 +844,13 @@ func (c Coverage) BugReport() string {
 		}
 	}
 	return b.String()
+}
+
+// joinOrNone renders an entry-point list for a report, naming an empty one
+// rather than printing nothing where a reader expects names.
+func joinOrNone(in []string) string {
+	if len(in) == 0 {
+		return "none"
+	}
+	return strings.Join(in, ", ")
 }

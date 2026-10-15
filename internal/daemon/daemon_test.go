@@ -266,6 +266,23 @@ func read(path string) synth.Spec {
 	return synth.Spec{Type: abi.EvtFileOpen, Ret: 3, File: &synth.File{Path: path, ResolvedPath: path}}
 }
 
+// kernelRead is the record the security_file_open hook submits: the kernel's
+// own path, no return value, and an outcome nothing observed. This is what an
+// open reached through io_uring or openat2 looks like by the time it reaches
+// the pipeline.
+func kernelRead(path string) synth.Spec {
+	return synth.Spec{
+		Type:  abi.EvtFileOpen,
+		Flags: uint32(abi.AllseerEvtFOutcomeUnknown),
+		File: &synth.File{
+			Path:         path,
+			ResolvedPath: path,
+			Inode:        4242,
+			PathFlags:    uint32(abi.AllseerPathKernel),
+		},
+	}
+}
+
 // --- tests -------------------------------------------------------------------
 
 func TestSessionLifecycleOverTheSocket(t *testing.T) {
@@ -317,6 +334,32 @@ func TestSessionLifecycleOverTheSocket(t *testing.T) {
 	}
 	if again, err := r.client.EndSession(ctx, sid, 0); err != nil || again.State != session.StateCompleted {
 		t.Fatalf("EndSession is not idempotent: %v %v", again, err)
+	}
+}
+
+// The entry points no syscall tracepoint reaches have to arrive at the same
+// decision as the ones that do. A credential read through io_uring carries no
+// syscall return, so the only thing separating it from an openat read is the
+// record shape - and a shape that policy treated as unevaluable would be a
+// bypass with a probe behind it.
+func TestKernelPathReadIsBlockedLikeAnyOther(t *testing.T) {
+	r := newRig(t, policy.ModeEnforce, time.Minute)
+	sid := r.start(t, "run the go tests")
+	r.feed(t, sid, kernelRead("/home/dev/.aws/credentials"))
+
+	waitFor(t, "the kill", func() bool { _, k := r.groups.get(sid).state(); return k })
+	recs := r.audit.all()
+	if len(recs) != 1 || !recs[0].Enforced || recs[0].Action != ece.ActionBlock {
+		t.Fatalf("audit = %+v", recs)
+	}
+	if recs[0].Verdict != decision.VerdictExplicitlyDenied {
+		t.Errorf("verdict = %s, want the denial the path is covered by", recs[0].Verdict)
+	}
+	// Not charged as an unverifiable path: the kernel vouched for this name.
+	for _, f := range recs[0].Risk.Factors {
+		if f.Name == risk.FactorUnverifiablePath {
+			t.Errorf("a kernel path was charged as unverifiable: %+v", f)
+		}
 	}
 }
 

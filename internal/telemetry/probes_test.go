@@ -41,6 +41,15 @@ func withDetached(probes []ProbeInfo, names ...string) []ProbeInfo {
 	return out
 }
 
+func containsEntry(entries []string, want string) bool {
+	for _, e := range entries {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
 func contains(kinds []capability.Kind, want capability.Kind) bool {
 	for _, k := range kinds {
 		if k == want {
@@ -58,6 +67,7 @@ func TestProbeTableNamesEveryAttachableProgram(t *testing.T) {
 		ProgProcExec, ProgProcExit,
 		ProgOpenatEnter, ProgOpenatExit,
 		ProgConnectEnter, ProgConnectExit,
+		ProgFileOpen,
 	}, ProgPrivPairs()...)
 
 	got := make(map[string]bool)
@@ -78,20 +88,21 @@ func TestProbeTableNamesEveryAttachableProgram(t *testing.T) {
 	}
 }
 
-// Twenty-eight programs, confirmed independently from the compiled object's
-// symbol table in every audit of this repository.
-func TestProbeTableIsTwentyEightPrograms(t *testing.T) {
-	if n := len(AllProbes()); n != 28 {
-		t.Errorf("AllProbes() = %d programs, want 28", n)
+// Twenty-nine programs, confirmed independently from the compiled object's
+// symbol table in every audit of this repository: the twenty-eight tracepoint
+// programs and the fentry hook on security_file_open.
+func TestProbeTableIsTwentyNinePrograms(t *testing.T) {
+	if n := len(AllProbes()); n != 29 {
+		t.Errorf("AllProbes() = %d programs, want 29", n)
 	}
 }
 
-// Fifteen degradation units, never twenty-eight. Two sched singletons and
-// thirteen enter/exit pairs.
-func TestProbeFamiliesAreFifteenUnits(t *testing.T) {
+// Sixteen degradation units, never twenty-nine. Two sched singletons, thirteen
+// enter/exit pairs and one fentry singleton.
+func TestProbeFamiliesAreSixteenUnits(t *testing.T) {
 	families := AllProbeFamilies()
-	if len(families) != 15 {
-		t.Fatalf("AllProbeFamilies() = %d units, want 15", len(families))
+	if len(families) != 16 {
+		t.Fatalf("AllProbeFamilies() = %d units, want 16", len(families))
 	}
 
 	singletons, pairs := 0, 0
@@ -105,8 +116,8 @@ func TestProbeFamiliesAreFifteenUnits(t *testing.T) {
 			t.Errorf("family %q has %d programs, want 1 or 2", f.Name, len(f.Programs))
 		}
 	}
-	if singletons != 2 {
-		t.Errorf("%d singleton families, want 2", singletons)
+	if singletons != 3 {
+		t.Errorf("%d singleton families, want 3", singletons)
 	}
 	if pairs != 13 {
 		t.Errorf("%d paired families, want 13", pairs)
@@ -209,36 +220,188 @@ func TestFullAttachHasNoGap(t *testing.T) {
 // the other emitting nothing, so the family must contribute no capability at
 // all rather than half of one.
 func TestHalfAPairObservesNothing(t *testing.T) {
+	files := []capability.Kind{
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate}
+
 	cases := []struct {
 		name string
-		drop string
+		// drop takes the family's own half and every other family that
+		// observes the same kinds, so what is asserted is the pair's own
+		// contribution rather than the union of the object's.
+		drop []string
 		lost []capability.Kind
 	}{
-		{"openat exit missing", ProgOpenatExit, []capability.Kind{
-			capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate}},
-		{"openat entry missing", ProgOpenatEnter, []capability.Kind{
-			capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate}},
-		{"connect entry missing", ProgConnectEnter, []capability.Kind{
+		{"openat exit missing", []string{ProgOpenatExit, ProgFileOpen}, files},
+		{"openat entry missing", []string{ProgOpenatEnter, ProgFileOpen}, files},
+		{"connect entry missing", []string{ProgConnectEnter}, []capability.Kind{
 			capability.KindNetConnect, capability.KindIPCUnixSock}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cov := ComputeCoverage(withDetached(allAttached(), tc.drop))
+			cov := ComputeCoverage(withDetached(allAttached(), tc.drop...))
 
 			if !cov.Degraded {
 				t.Error("a partially attached family does not report Degraded")
 			}
 			for _, k := range tc.lost {
 				if contains(cov.Observable, k) {
-					t.Errorf("%s is reported observable with %s unattached", k, tc.drop)
+					t.Errorf("%s is reported observable with %v unattached", k, tc.drop)
 				}
 				if !contains(cov.Unobservable, k) {
-					t.Errorf("%s is not reported as a gap with %s unattached", k, tc.drop)
+					t.Errorf("%s is not reported as a gap with %v unattached", k, tc.drop)
 				}
 			}
 		})
 	}
+}
+
+// The fentry hook is what makes an incomplete openat pair survivable: the kinds
+// stay observable because every open still reaches security_file_open. What is
+// lost is the openat entry point itself - the return value, the dirfd and the
+// opens that failed during path resolution - and coverage has to say so rather
+// than report the kinds as whole.
+func TestFileOpenKeepsOpensObservableWhenTheOpenatPairIsIncomplete(t *testing.T) {
+	cov := ComputeCoverage(withDetached(allAttached(), ProgOpenatExit))
+
+	if !cov.Degraded {
+		t.Error("an incomplete openat family does not report Degraded")
+	}
+	var openat FamilyCoverage
+	for _, f := range cov.Families {
+		if f.Name == FamilyOpenat {
+			openat = f
+		}
+	}
+	if openat.Complete || len(openat.Missing) != 1 {
+		t.Errorf("openat family = %+v, want incomplete with one missing program", openat)
+	}
+
+	for _, k := range []capability.Kind{
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate} {
+		if !contains(cov.Observable, k) {
+			t.Errorf("%s is not observable although security_file_open is attached", k)
+		}
+		if contains(cov.Unobservable, k) {
+			t.Errorf("%s is reported as a gap although security_file_open is attached", k)
+		}
+		// The entry point is still watched, by the hook rather than by the
+		// pair. What an incomplete pair costs is the openat return value and
+		// the opens that failed before a file existed, and the incomplete
+		// family above is what reports that.
+		if gap := gapFor(cov, k); gap != nil && containsEntry(gap.Missing, "openat") {
+			t.Errorf("%s reports openat unwatched although the hook covers it: %+v", k, gap)
+		}
+	}
+}
+
+// With everything attached, an open is watched at every entry point the catalog
+// declares for it. The read and mmap entry points of fs.read stay unwatched and
+// are reported so: ALLSEER observes the open that reached a file, not each
+// later use of the descriptor.
+func TestEveryOpenEntryPointIsWatchedWhenFullyAttached(t *testing.T) {
+	cov := ComputeCoverage(allAttached())
+
+	for _, k := range []capability.Kind{
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate} {
+		gap := gapFor(cov, k)
+		if gap == nil {
+			continue
+		}
+		for _, entry := range []string{"open", "openat", "openat2", "creat", "io_uring"} {
+			if containsEntry(gap.Missing, entry) {
+				t.Errorf("%s reports %s unwatched with every probe attached: %+v", k, entry, gap)
+			}
+		}
+	}
+
+	read := gapFor(cov, capability.KindFileRead)
+	if read == nil || !containsEntry(read.Missing, "read") || !containsEntry(read.Missing, "mmap") {
+		t.Errorf("fs.read does not report read and mmap as unwatched: %+v", read)
+	}
+}
+
+// Exactly one program may be dropped at load time, and it is the fentry hook.
+// Anything else in this list would mean a tracepoint program could vanish
+// without the floor check or a family noticing.
+func TestOptionalProgramsIsTheFentryHookOnly(t *testing.T) {
+	opt := OptionalPrograms()
+	if len(opt) != 1 || opt[0] != ProgFileOpen {
+		t.Fatalf("OptionalPrograms() = %v, want only %s", opt, ProgFileOpen)
+	}
+	for _, d := range AllProbes() {
+		if d.Optional && d.Type != probeTypeFentry {
+			t.Errorf("%s is optional and is a %s, not an fentry program", d.Name, d.Type)
+		}
+	}
+}
+
+// The degradation the hook is optional for: a kernel that cannot load it keeps
+// the openat pair, so opens stay observable through openat and the entry points
+// only the hook reaches are reported unwatched rather than quietly lost.
+func TestWithoutTheHookOnlyOpenatIsWatched(t *testing.T) {
+	cov := ComputeCoverage(withDetached(allAttached(), ProgFileOpen))
+
+	for _, k := range []capability.Kind{
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate} {
+		if !contains(cov.Observable, k) {
+			t.Errorf("%s is not observable with the openat pair attached", k)
+		}
+		gap := gapFor(cov, k)
+		if gap == nil {
+			t.Fatalf("%s reports no entry-point gap without the hook", k)
+		}
+		if !containsEntry(gap.Observed, "openat") {
+			t.Errorf("%s does not report openat watched: %+v", k, gap)
+		}
+		for _, entry := range []string{"openat2", "io_uring"} {
+			if !containsEntry(gap.Missing, entry) {
+				t.Errorf("%s does not report %s unwatched without the hook: %+v", k, entry, gap)
+			}
+		}
+	}
+}
+
+// The fixable gaps are reported apart from the permanent ones, because an
+// operator can only act on the first kind.
+func TestDegradedEntryPointsSeparatesFixableFromByDesign(t *testing.T) {
+	if lost := ComputeCoverage(allAttached()).DegradedEntryPoints(); len(lost) != 0 {
+		t.Errorf("a fully attached load reports lost entry points: %+v", lost)
+	}
+
+	lost := ComputeCoverage(withDetached(allAttached(), ProgFileOpen)).DegradedEntryPoints()
+	gap := func(k capability.Kind) *EntryPointGap {
+		for i := range lost {
+			if lost[i].Kind == k {
+				return &lost[i]
+			}
+		}
+		return nil
+	}
+	read := gap(capability.KindFileRead)
+	if read == nil {
+		t.Fatalf("fs.read reports no lost entry points without the hook: %+v", lost)
+	}
+	for _, entry := range []string{"openat2", "io_uring"} {
+		if !containsEntry(read.Missing, entry) {
+			t.Errorf("fs.read does not report %s lost: %+v", read, entry)
+		}
+	}
+	// Watched at no attachment, so not a loss: it is how this build works.
+	for _, entry := range []string{"read", "mmap"} {
+		if containsEntry(read.Missing, entry) {
+			t.Errorf("fs.read reports %s as lost, but no probe ever watches it: %+v", entry, read)
+		}
+	}
+}
+
+func gapFor(cov Coverage, k capability.Kind) *EntryPointGap {
+	for i := range cov.EntryPoints {
+		if cov.EntryPoints[i].Kind == k {
+			return &cov.EntryPoints[i]
+		}
+	}
+	return nil
 }
 
 // Dropping one privilege family must not take the other ten with it, and must
@@ -330,13 +493,13 @@ func TestApplySetsObservableOnCatalog(t *testing.T) {
 		t.Fatal("a fresh catalog reports process.exec observable")
 	}
 
-	ComputeCoverage(withDetached(allAttached(), ProgOpenatExit)).Apply(cat)
+	ComputeCoverage(withDetached(allAttached(), ProgOpenatExit, ProgFileOpen)).Apply(cat)
 
 	if !cat.Observable(capability.KindProcessExec) {
 		t.Error("process.exec is not observable after Apply")
 	}
 	if cat.Observable(capability.KindFileRead) {
-		t.Error("fs.read is observable after Apply, with openat_exit unattached")
+		t.Error("fs.read is observable after Apply, with no open probe attached")
 	}
 }
 
@@ -389,8 +552,8 @@ func TestCoverageRoundTripsThroughJSON(t *testing.T) {
 		t.Errorf("Unobservable = %d kinds after round trip, want %d",
 			len(back.Unobservable), len(cov.Unobservable))
 	}
-	if len(back.Probes) != 28 {
-		t.Errorf("Probes = %d after round trip, want 28", len(back.Probes))
+	if len(back.Probes) != 29 {
+		t.Errorf("Probes = %d after round trip, want 29", len(back.Probes))
 	}
 
 	var missing []string
@@ -434,8 +597,8 @@ func TestAttachPointsAreUniqueAndNamed(t *testing.T) {
 		switch {
 		case d.AttachPoint == "":
 			t.Errorf("%s has no attach point", d.Name)
-		case d.Type != "tracepoint":
-			t.Errorf("%s has type %q, want tracepoint", d.Name, d.Type)
+		case d.Type != probeTypeTracepoint && d.Type != probeTypeFentry:
+			t.Errorf("%s has type %q, want tracepoint or fentry", d.Name, d.Type)
 		}
 		if other, dup := seen[d.AttachPoint]; dup {
 			t.Errorf("%s and %s share attach point %q", other, d.Name, d.AttachPoint)
@@ -485,7 +648,7 @@ func TestBugReportFlagsAFloorBreach(t *testing.T) {
 func TestBugReportOnAHealthyLoadReportsNoFailures(t *testing.T) {
 	report := ComputeCoverage(allAttached()).BugReport()
 
-	if !strings.Contains(report, "All 15 probe families attached.") {
+	if !strings.Contains(report, "All 16 probe families attached.") {
 		t.Errorf("healthy report does not say so\n\n%s", report)
 	}
 	if strings.Contains(report, "Attach failures:") {

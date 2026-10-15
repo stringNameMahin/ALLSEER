@@ -2145,6 +2145,44 @@ func TestDecodePathLate(t *testing.T) {
 	}
 }
 
+// ABI v5: the record the security_file_open hook submits. Its `ret` is not a
+// return value and must not decode as one, and its path is the kernel's own.
+func TestDecodeKernelPathWithNoOutcome(t *testing.T) {
+	raw := newRecord(abi.EvtFileOpen)
+	put32(raw, abi.OffsetEventFlags, uint32(abi.AllseerEvtFOutcomeUnknown))
+	put32(raw, offFilePFlags, uint32(abi.AllseerPathInfo|abi.AllseerPathKernel))
+	putStr(raw, offFilePath, "/etc/shadow")
+	e := decode(t, raw)
+
+	if !e.File.KernelPath || e.File.PathLate || e.File.Truncated {
+		t.Errorf("file = %+v, want a kernel path and nothing else", e.File)
+	}
+	// Succeeded, because the kernel opened the file; no return code, because
+	// no syscall had returned when the record was written.
+	if !e.Result.Succeeded || !e.Result.OutcomeUnobserved || e.Result.ReturnCode != 0 || e.Result.Errno != "" {
+		t.Errorf("result = %+v, want succeeded with the outcome unobserved", e.Result)
+	}
+
+	// The same bytes without the flag are an ordinary open of fd 0.
+	raw = newRecord(abi.EvtFileOpen)
+	put32(raw, offFilePFlags, uint32(abi.AllseerPathInfo))
+	putStr(raw, offFilePath, "/etc/shadow")
+	if r := decode(t, raw).Result; r.OutcomeUnobserved || !r.Succeeded || r.ReturnCode != 0 {
+		t.Errorf("result = %+v, want a plain successful open", r)
+	}
+
+	// A negative return with the flag set is still not read as an errno: the
+	// field is meaningless, not inverted.
+	raw = newRecord(abi.EvtFileOpen)
+	put32(raw, abi.OffsetEventFlags, uint32(abi.AllseerEvtFOutcomeUnknown))
+	putI32(raw, abi.OffsetEventRet, -13)
+	put32(raw, offFilePFlags, uint32(abi.AllseerPathInfo|abi.AllseerPathKernel))
+	putStr(raw, offFilePath, "/etc/shadow")
+	if r := decode(t, raw).Result; r.Errno != "" || !r.Succeeded || r.ReturnCode != 0 {
+		t.Errorf("result = %+v, want the return value ignored", r)
+	}
+}
+
 // A truncated exec filename is carried, flagged, and never matched on.
 func TestDecodeTruncatedExecFilename(t *testing.T) {
 	raw := newRecord(abi.EvtProcExec)

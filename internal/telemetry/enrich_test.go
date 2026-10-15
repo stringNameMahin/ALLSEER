@@ -396,3 +396,39 @@ func TestLatePathIsTrustedOnlyWhenTheOpenedInodeConfirmsIt(t *testing.T) {
 		}
 	}
 }
+
+// The kernel's own name for an opened file is the resolved path. It is already
+// absolute and fully resolved, so enrichment neither walks it nor needs a host
+// root to walk it in - and the two things that name is not are refused.
+func TestKernelPathIsTakenAsResolved(t *testing.T) {
+	p := &PathEnricher{HostRoot: tree(t)}
+
+	// A path that does not exist under HostRoot still resolves: the kernel
+	// named the file it opened, and no lookup can improve on that.
+	e := openEvent("/work/keys/id_rsa", 1, 3, true)
+	e.File.KernelPath = true
+	e.File.Inode = 7
+	if err := p.Enrich(context.Background(), e); err != nil || e.File.ResolvedPath != "/work/keys/id_rsa" {
+		t.Fatalf("kernel path: %q, %v", e.File.ResolvedPath, err)
+	}
+
+	// No inode and no outcome, as the hook submits it.
+	e = openEvent("/etc/shadow", 1, 0, true)
+	e.File.KernelPath = true
+	e.Result.OutcomeUnobserved = true
+	if err := p.Enrich(context.Background(), e); err != nil || e.File.ResolvedPath != "/etc/shadow" {
+		t.Fatalf("outcome unobserved: %q, %v", e.File.ResolvedPath, err)
+	}
+
+	refused := map[string]*event.Event{
+		"unreadable": openEvent("", 1, 3, true),
+		"relative":   openEvent("pipe:[12345]", 1, 3, true),
+		"unlinked":   openEvent("/work/src/main.go (deleted)", 1, 3, true),
+	}
+	for name, e := range refused {
+		e.File.KernelPath = true
+		if err := p.Enrich(context.Background(), e); !errors.Is(err, ErrUnresolvable) || e.File.ResolvedPath != "" {
+			t.Errorf("%s: resolved to %q, err %v; want unresolved", name, e.File.ResolvedPath, err)
+		}
+	}
+}

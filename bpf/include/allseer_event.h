@@ -33,7 +33,7 @@
  * size. It does not catch a layout that stayed the same size and changed
  * meaning: a field retyped, two fields swapped, a bound moved from one array to
  * another. Those records decode without complaint into confident nonsense. */
-#define ALLSEER_ABI_VERSION  4
+#define ALLSEER_ABI_VERSION  5
 
 /* Bounded because eBPF stack space is limited to 512 bytes and the verifier
  * rejects unbounded copies. These caps are a real constraint on what a probe
@@ -194,6 +194,10 @@ enum allseer_priv_field {
  *   DIR_UNAVAILABLE  no directory could be read: bad dirfd, no fs, or a
  *                    disconnected dentry
  *   DIR_DELETED      the directory had been removed
+ *   PATH_KERNEL      path is the kernel's own name for the opened file, read
+ *                    from its dentry rather than from user memory. It is
+ *                    already absolute and fully resolved, so user space uses it
+ *                    as it stands and never walks it again
  *   PATH_LATE        the entry read faulted, so path (and dir) were read at
  *                    syscall exit instead. Another thread may have changed the
  *                    buffer after the kernel read it, so for a successful open
@@ -215,6 +219,22 @@ enum allseer_path_flag {
     ALLSEER_DIR_UNAVAILABLE  = 128,
     ALLSEER_DIR_DELETED      = 256,
     ALLSEER_PATH_LATE        = 512,
+    ALLSEER_PATH_KERNEL      = 1024,
+};
+
+/* What a record says about itself, OR'd into `flags` of the event header.
+ *
+ *   OUTCOME_UNKNOWN  the probe ran before the operation's outcome was decided,
+ *                    so `ret` is not a syscall return and carries no errno.
+ *                    `security_file_open` is the case: it fires once the kernel
+ *                    has resolved the path and granted the open, which is where
+ *                    the file becomes reachable, but before the syscall returns
+ *                    and before a device driver's own open can still refuse it.
+ *                    A record carrying this flag reports an operation the kernel
+ *                    performed, not a call that returned successfully.
+ */
+enum allseer_event_flag {
+    ALLSEER_EVT_F_OUTCOME_UNKNOWN = 1,
 };
 
 /* Process identity, captured at event time. Read in the kernel because
@@ -473,7 +493,7 @@ struct allseer_event {
     __u32 type;             /* enum allseer_event_type */
     __s32 ret;              /* syscall return; negative is -errno */
     __u32 version;          /* ALLSEER_ABI_VERSION, as compiled into the probe */
-    __u32 _pad;
+    __u32 flags;            /* enum allseer_event_flag */
     struct allseer_proc proc;
 
     union {

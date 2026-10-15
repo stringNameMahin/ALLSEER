@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/stringNameMahin/ALLSEER/internal/config"
@@ -268,6 +269,15 @@ func (d *Daemon) createSession(ctx context.Context, peer ipc.Peer, req ipc.Creat
 	}
 	if cov := d.tel.Coverage(); cov.Degraded {
 		warnings = append(warnings, fmt.Sprintf("telemetry is degraded on this host; unobservable: %v", cov.Unobservable))
+		// A kind can stay observable and still lose entry points: with the
+		// kernel-side open hook missing, an open through io_uring or openat2
+		// produces no record while fs.read still reads as observable. Naming
+		// the entry points is what keeps that from passing as full coverage.
+		for _, g := range cov.DegradedEntryPoints() {
+			warnings = append(warnings, fmt.Sprintf(
+				"%s is not observed through %s on this host; those operations produce no records",
+				g.Kind, strings.Join(g.Missing, ", ")))
+		}
 	}
 	d.log.Info("session created", "session", sid, "owner", peer.UID, "task", an.Record.TaskType, "mode", mode)
 	return &ipc.CreateSessionResponse{

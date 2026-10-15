@@ -19,6 +19,10 @@ import (
 //
 // The kernel decides the directory; user space follows symlinks below it.
 //
+//   - A path the kernel itself named (KernelPath) is already absolute and fully
+//     resolved, and no user-space walk could improve on it: it is the name of
+//     the file the kernel opened, not of the name a process asked for. It is
+//     taken as the resolved path as it stands.
 //   - An absolute path is walked from the host root. The record's directory is
 //     ignored for it.
 //   - A relative path is joined to the directory openat_enter captured from the
@@ -75,6 +79,10 @@ func (p *PathEnricher) Enrich(_ context.Context, e *event.Event) error {
 		return fmt.Errorf("%w: the record carries no path", ErrUnresolvable)
 	}
 
+	if f.KernelPath {
+		return kernelPath(f)
+	}
+
 	full := f.Path
 	if !filepath.IsAbs(full) {
 		if f.DirStatus != "complete" || !filepath.IsAbs(f.Dir) {
@@ -125,6 +133,26 @@ func (p *PathEnricher) Enrich(_ context.Context, e *event.Event) error {
 		}
 	}
 	f.ResolvedPath = w.resolved()
+	return nil
+}
+
+// deletedSuffix is what the kernel appends to the name of a file that was
+// unlinked while open. It is a rendering rather than a path and names nothing
+// that can be matched.
+const deletedSuffix = " (deleted)"
+
+// kernelPath accepts the kernel's own name for an opened file as the resolved
+// path, and refuses the two things that name is not: a relative or empty string
+// (which the helper never produces for a real file, so it means the read
+// failed) and the rendering of a file unlinked while open.
+func kernelPath(f *event.FilePayload) error {
+	switch {
+	case !filepath.IsAbs(f.Path):
+		return fmt.Errorf("%w: the kernel reported no path for this open", ErrUnresolvable)
+	case strings.HasSuffix(f.Path, deletedSuffix):
+		return fmt.Errorf("%w: %q names a file unlinked while open", ErrUnresolvable, f.Path)
+	}
+	f.ResolvedPath = filepath.Clean(f.Path)
 	return nil
 }
 

@@ -129,6 +129,19 @@ type Result struct {
 	Errno string `json:"errno,omitempty"`
 
 	Succeeded bool `json:"succeeded"`
+
+	// OutcomeUnobserved means the probe reported this operation before its
+	// outcome was decided, so ReturnCode and Errno are empty and Succeeded is a
+	// statement about what the kernel did rather than about what the call
+	// returned.
+	//
+	// It is set for a file open seen at security_file_open, where the kernel
+	// has resolved the path and permitted the open - the point the contents
+	// became reachable - but the syscall has not returned and a device driver
+	// can still refuse it. Treating such a record as a failure would hide a
+	// real access; treating it as a returned success would claim an outcome
+	// nothing observed.
+	OutcomeUnobserved bool `json:"outcome_unobserved,omitempty"`
 }
 
 // Process identifies the actor. Captured in the kernel at event time, because
@@ -190,6 +203,12 @@ type FilePayload struct {
 	// Truncated means Path filled the kernel's buffer or could not be read, so
 	// it may be a prefix. A truncated path is never resolved.
 	Truncated bool `json:"truncated,omitempty"`
+
+	// KernelPath means Path is the kernel's own name for the file that was
+	// opened, read from its dentry rather than from user memory. Such a path is
+	// absolute and already fully resolved, so it is used as it stands: there is
+	// no racing thread that could have rewritten it and nothing left to walk.
+	KernelPath bool `json:"kernel_path,omitempty"`
 
 	// PathLate means the probe could not read Path at syscall entry and read
 	// it at exit instead, together with Dir. Another thread may have changed
