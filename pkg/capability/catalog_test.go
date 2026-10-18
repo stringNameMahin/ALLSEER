@@ -343,3 +343,35 @@ func TestSchemaDomainEnumMatchesTable(t *testing.T) {
 		t.Errorf("schema lists %d domains, table uses %d", got, want)
 	}
 }
+
+// Entry points are the catalog's claim about how a capability can be reached.
+// A kind that lists only the entry point ALLSEER happens to watch cannot
+// report the others as unwatched, which is how net.connect came to be
+// described as fully observed while io_uring egress produced no record.
+func TestNetworkKindsDeclareTheirRealEntryPoints(t *testing.T) {
+	cases := []struct {
+		kind Kind
+		want []string
+	}{
+		{KindNetConnect, []string{"connect", "io_uring", "sendto", "sendmsg"}},
+		{KindNetSend, []string{"sendto", "sendmsg", "io_uring"}},
+	}
+	for _, c := range cases {
+		d, ok := Describe(c.kind)
+		if !ok {
+			t.Fatalf("Describe(%s) missing", c.kind)
+		}
+		for _, sc := range c.want {
+			found := false
+			for _, got := range d.Syscalls {
+				if got == sc {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s does not declare %q as an entry point; got %v", c.kind, sc, d.Syscalls)
+			}
+		}
+	}
+}

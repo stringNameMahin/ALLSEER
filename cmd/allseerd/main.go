@@ -258,4 +258,19 @@ func reportCoverage(log *slog.Logger, cov telemetry.Coverage) {
 	}
 	log.Info("telemetry coverage", "probes_attached", attached, "observable", cov.Observable,
 		"unobservable", cov.Unobservable, "unsupported", cov.Unsupported, "degraded", cov.Degraded)
+
+	// An observable kind is not a fully watched one. Naming the entry points
+	// nothing reports keeps "observable" from reading as "nothing gets past
+	// this", which for network egress is the difference between watching
+	// connect and watching every way out.
+	for _, g := range cov.EntryPoints {
+		if len(g.Missing) > 0 {
+			log.Warn("capability is observed through some entry points but not all",
+				"capability", g.Kind, "observed", g.Observed, "unwatched", g.Missing)
+		}
+		if len(g.SuccessOnly) > 0 {
+			log.Warn("entry points recorded only when the kernel permits the operation",
+				"capability", g.Kind, "success_only", g.SuccessOnly)
+		}
+	}
 }

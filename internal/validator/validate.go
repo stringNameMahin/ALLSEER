@@ -9,6 +9,7 @@ import (
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
 	"github.com/stringNameMahin/ALLSEER/pkg/ece"
+	"github.com/stringNameMahin/ALLSEER/pkg/event"
 )
 
 // Validate is the system's core question, and the order it asks things in is
@@ -124,19 +125,27 @@ func (v *DefaultValidator) Validate(_ context.Context, req ValidateRequest) (*Re
 		"%s on %q", obs.Kind, obs.Target))
 
 	// --- 3 & 4. Denials -----------------------------------------------------
-	denials, denialUnevaluable := v.evaluate(req.Envelope.Denials, obs)
+	//
+	// Checked against every capability the operation exercised, not only the
+	// one the event is labelled with. See exercisedObservations.
+	denials, denialUnevaluable, deniedKind := v.evaluateDenials(req.Envelope.Denials, req.Event, obs)
 
 	if len(denials) > 0 {
 		resolution := ResolvePrecedence(nil, denials)
 		res.Verdict = decision.VerdictExplicitlyDenied
 		res.MatchedDenial = resolution.Winner.Grant
+		detail := resolution.Reason
+		if deniedKind != obs.Kind {
+			detail = fmt.Sprintf("%s; the operation is reported as %s and also exercised %s, which the denial names",
+				detail, obs.Kind, deniedKind)
+		}
 		res.Violations = append(res.Violations, Violation{
 			Type:       ViolationExplicitDenial,
-			Capability: obs.Kind,
+			Capability: deniedKind,
 			Expected:   "no operation matching an envelope denial",
 			Observed:   describeTarget(obs),
-			Detail:     resolution.Reason,
-			Severity:   severityFor(ViolationExplicitDenial, obs.Kind),
+			Detail:     detail,
+			Severity:   severityFor(ViolationExplicitDenial, deniedKind),
 		})
 		res.Reasoning = append(res.Reasoning, step("explicit denial matched", "%s", resolution.Reason))
 		return res, nil
@@ -258,6 +267,66 @@ func (v *DefaultValidator) Validate(_ context.Context, req ValidateRequest) (*Re
 // that could not be evaluated. Precedence chooses between the matches; the
 // unevaluable one only matters when nothing matched, so the first is enough to
 // explain why no conclusion is possible.
+// evaluateDenials checks the denial list against every capability the
+// operation exercised, and reports which kind the matching denial named.
+//
+// An event carries one capability, chosen to describe it best. A denial is a
+// prohibition on an operation, and an open that can both read and write
+// performs both regardless of which label the event got. Consulting only the
+// label is what lets a denial on fs.read be stepped around by opening the file
+// O_RDWR, which the decoder reports as fs.write.
+//
+// Grants are deliberately not treated this way. A denial consulted for an
+// extra kind can only ever find more reason to stop an operation, while
+// requiring a grant for every exercised kind would turn ordinary read-write
+// opens into departures, and the prompt rate that follows is its own failure.
+// That asymmetry is the point: denials fail closed, grants do not move.
+func (v *DefaultValidator) evaluateDenials(denials []capability.Grant, e *event.Event,
+	obs capability.Observation) ([]Match, *MatchResult, capability.Kind) {
+
+	matches, unevaluable := v.evaluate(denials, obs)
+	kind := obs.Kind
+	if len(matches) > 0 {
+		return matches, unevaluable, kind
+	}
+
+	for _, alt := range exercisedObservations(e, obs) {
+		m, u := v.evaluate(denials, alt)
+		if len(m) > 0 {
+			return m, unevaluable, alt.Kind
+		}
+		if unevaluable == nil {
+			unevaluable = u
+		}
+	}
+	return matches, unevaluable, kind
+}
+
+// exercisedObservations returns the same observation under the other
+// capabilities the operation exercised, with the event's own kind left out.
+//
+// Only filesystem opens produce any: they are the case where one syscall
+// exercises more than one capability and the record says which flags it used.
+func exercisedObservations(e *event.Event, obs capability.Observation) []capability.Observation {
+	if e == nil || e.File == nil {
+		return nil
+	}
+	kinds := e.File.ExercisedKinds()
+	if len(kinds) < 2 {
+		return nil
+	}
+	out := make([]capability.Observation, 0, len(kinds)-1)
+	for _, k := range kinds {
+		if k == obs.Kind {
+			continue
+		}
+		alt := obs
+		alt.Kind = k
+		out = append(out, alt)
+	}
+	return out
+}
+
 func (v *DefaultValidator) evaluate(entries []capability.Grant, obs capability.Observation) ([]Match, *MatchResult) {
 	var (
 		matches     []Match

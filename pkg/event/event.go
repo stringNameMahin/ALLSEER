@@ -232,6 +232,60 @@ type FilePayload struct {
 	DirStatus string `json:"dir_status,omitempty"`
 }
 
+// Open flags this package needs to read. Declared here rather than taken from
+// syscall so that the meaning of a recorded flag does not depend on the
+// architecture the reader was built for: the values below are the same on every
+// Linux port, while O_NOFOLLOW and others are not.
+const (
+	openAccMode = 0x3
+	openRdOnly  = 0x0
+	openWrOnly  = 0x1
+	openRdWr    = 0x2
+	openCreat   = 0x40
+)
+
+// ExercisedKinds returns every filesystem capability this open exercised.
+//
+// An event carries one Capability, which is the kind that best describes the
+// open. That is the right answer for one question and the wrong answer for
+// another: an O_RDWR open of a credential file is reported as fs.write, and a
+// denial written against fs.read would never be consulted for it. The access
+// mode says the file could be read as well, so both kinds have to be offered
+// to whatever decides whether this operation was permitted.
+//
+// Order is read, write, create, so the result is stable for tests and for
+// anything that renders it. An open with no readable or writable access mode
+// returns write alone, which matches the decoder's own reading of the fourth
+// access-mode encoding: over-reporting access raises scrutiny, under-reporting
+// it lowers it.
+func (p *FilePayload) ExercisedKinds() []capability.Kind {
+	if p == nil {
+		return nil
+	}
+	flags := uint32(p.Flags)
+	acc := flags & openAccMode
+
+	var out []capability.Kind
+	if acc == openRdOnly || acc == openRdWr {
+		out = append(out, capability.KindFileRead)
+	}
+	if acc == openWrOnly || acc == openRdWr {
+		out = append(out, capability.KindFileWrite)
+	}
+	if flags&openCreat != 0 {
+		out = append(out, capability.KindFileCreate)
+		// O_CREAT implies the file may be written even when the access mode
+		// alone does not say so.
+		if acc != openWrOnly && acc != openRdWr {
+			out = append(out, capability.KindFileWrite)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, capability.KindFileWrite)
+	}
+	return out
+}
+
 // NetworkPayload carries network event detail.
 type NetworkPayload struct {
 	Protocol string `json:"protocol"`

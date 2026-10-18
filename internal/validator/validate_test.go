@@ -1210,3 +1210,141 @@ func BenchmarkValidate(b *testing.B) {
 		})
 	}
 }
+
+// --- denials and the capabilities an open actually exercises -----------------
+
+// fileOpenEvent is a file event with the open flags the kernel recorded, which
+// is what says whether the open could read as well as write.
+func fileOpenEvent(kind capability.Kind, resolved string, flags int32) *event.Event {
+	e := fileEvent(kind, resolved)
+	e.File.Flags = flags
+	return e
+}
+
+const (
+	oRdOnly = 0x0
+	oWrOnly = 0x1
+	oRdWr   = 0x2
+	oCreat  = 0x40
+)
+
+// Opening a denied file O_RDWR reads it. The decoder reports that open as
+// fs.write, so a denial written against fs.read used to be skipped entirely.
+func TestReadWriteOpenCannotStepAroundAReadDenial(t *testing.T) {
+	env := envelope(
+		[]capability.Grant{pathGrantOf(capability.KindFileWrite, "/work/**")},
+		[]capability.Grant{pathGrantOf(capability.KindFileRead, "/home/dev/.ssh/**")},
+	)
+	e := fileOpenEvent(capability.KindFileWrite, "/home/dev/.ssh/id_rsa", oRdWr)
+
+	res := validate(t, env, e, fakeState{})
+	if res.Verdict != decision.VerdictExplicitlyDenied {
+		t.Fatalf("verdict = %s, want explicitly_denied", res.Verdict)
+	}
+	if res.MatchedDenial == nil || res.MatchedDenial.Kind != capability.KindFileRead {
+		t.Fatalf("MatchedDenial = %+v, want the fs.read denial", res.MatchedDenial)
+	}
+	if len(res.Violations) == 0 || res.Violations[0].Capability != capability.KindFileRead {
+		t.Fatalf("violation capability = %+v, want fs.read", res.Violations)
+	}
+	// The record has to say why a write was judged against a read denial.
+	if !strings.Contains(res.Violations[0].Detail, "also exercised") {
+		t.Errorf("violation detail does not explain the extra capability: %q", res.Violations[0].Detail)
+	}
+}
+
+// O_CREAT with a read-only access mode can still produce the file, so a write
+// denial applies to it.
+func TestCreatingOpenCannotStepAroundAWriteDenial(t *testing.T) {
+	env := envelope(
+		[]capability.Grant{pathGrantOf(capability.KindFileCreate, "/work/**")},
+		[]capability.Grant{pathGrantOf(capability.KindFileWrite, "/work/.git/hooks/**")},
+	)
+	e := fileOpenEvent(capability.KindFileCreate, "/work/.git/hooks/pre-commit", oRdOnly|oCreat)
+
+	res := validate(t, env, e, fakeState{})
+	if res.Verdict != decision.VerdictExplicitlyDenied {
+		t.Fatalf("verdict = %s, want explicitly_denied", res.Verdict)
+	}
+	if res.MatchedDenial == nil || res.MatchedDenial.Kind != capability.KindFileWrite {
+		t.Fatalf("MatchedDenial = %+v, want the fs.write denial", res.MatchedDenial)
+	}
+}
+
+// A denial naming the event's own capability still wins, and still reports
+// that capability rather than an extra one.
+func TestDenialOnTheReportedKindIsUnchanged(t *testing.T) {
+	env := envelope(
+		[]capability.Grant{pathGrantOf(capability.KindFileRead, "/work/**")},
+		[]capability.Grant{pathGrantOf(capability.KindFileRead, "/etc/shadow")},
+	)
+	e := fileOpenEvent(capability.KindFileRead, "/etc/shadow", oRdOnly)
+
+	res := validate(t, env, e, fakeState{})
+	if res.Verdict != decision.VerdictExplicitlyDenied {
+		t.Fatalf("verdict = %s, want explicitly_denied", res.Verdict)
+	}
+	if res.Violations[0].Capability != capability.KindFileRead {
+		t.Fatalf("violation capability = %s, want fs.read", res.Violations[0].Capability)
+	}
+	if strings.Contains(res.Violations[0].Detail, "also exercised") {
+		t.Errorf("detail claims an extra capability for a plain read: %q", res.Violations[0].Detail)
+	}
+}
+
+// Grants are deliberately not widened the same way: a write-only grant still
+// covers a read-write open, because requiring a grant per exercised kind would
+// turn ordinary opens into departures.
+func TestGrantsAreNotWidenedByExercisedKinds(t *testing.T) {
+	env := envelope([]capability.Grant{pathGrantOf(capability.KindFileWrite, "/work/**")}, nil)
+	e := fileOpenEvent(capability.KindFileWrite, "/work/main.go", oRdWr)
+
+	res := validate(t, env, e, fakeState{})
+	if res.Verdict != decision.VerdictWithinEnvelope {
+		t.Fatalf("verdict = %s, want within_envelope", res.Verdict)
+	}
+}
+
+// A write-only open exercises no read, so a read denial must not fire: the
+// extra check has to be driven by the flags, not applied to everything.
+func TestWriteOnlyOpenIsNotJudgedAgainstAReadDenial(t *testing.T) {
+	env := envelope(
+		[]capability.Grant{pathGrantOf(capability.KindFileWrite, "/work/**")},
+		[]capability.Grant{pathGrantOf(capability.KindFileRead, "/work/secret.txt")},
+	)
+	e := fileOpenEvent(capability.KindFileWrite, "/work/secret.txt", oWrOnly)
+
+	res := validate(t, env, e, fakeState{})
+	if res.Verdict == decision.VerdictExplicitlyDenied {
+		t.Fatal("a write-only open was judged against a read denial")
+	}
+}
+
+// An unevaluable denial on an extra kind is still unevaluable: making a
+// target unresolvable must not be a way past the widened check either.
+func TestUnevaluableDenialOnAnExercisedKindIsIndeterminate(t *testing.T) {
+	env := envelope(
+		[]capability.Grant{pathGrantOf(capability.KindFileWrite, "/work/**")},
+		[]capability.Grant{pathGrantOf(capability.KindFileRead, "/home/dev/.ssh/**")},
+	)
+	// No resolved path, so the matcher cannot place it against the denial.
+	e := fileOpenEvent(capability.KindFileWrite, "", oRdWr)
+
+	res := validate(t, env, e, fakeState{})
+	if res.Verdict != decision.VerdictIndeterminate {
+		t.Fatalf("verdict = %s, want indeterminate", res.Verdict)
+	}
+}
+
+// Network events carry no open flags and must be unaffected.
+func TestNetworkEventsHaveNoExercisedKinds(t *testing.T) {
+	env := envelope([]capability.Grant{{
+		Kind:     capability.KindNetConnect,
+		Domain:   capability.DomainNetwork,
+		Selector: capability.Selector{Hosts: []string{"api.github.com"}},
+	}}, nil)
+	res := validate(t, env, netEvent("api.github.com", "140.82.121.4", 443), fakeState{})
+	if res.Verdict != decision.VerdictWithinEnvelope {
+		t.Fatalf("verdict = %s, want within_envelope", res.Verdict)
+	}
+}

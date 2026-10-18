@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
@@ -76,6 +77,77 @@ func TestRestrictOnlyTightens(t *testing.T) {
 	for _, c := range cases {
 		if got := Restrict(c.cfg, c.req); got != c.want {
 			t.Errorf("Restrict(%s, %s) = %s, want %s", c.cfg, c.req, got, c.want)
+		}
+	}
+}
+
+// A field that parses and then does nothing is worse than a missing one: the
+// operator who sets drop_privileges has every reason to believe it happened.
+func TestUnimplementedSettingsAreReported(t *testing.T) {
+	cases := []struct {
+		name  string
+		set   func(*Config)
+		field string
+		fatal bool
+	}{
+		{"privilege drop", func(c *Config) { c.Daemon.DropPrivileges = true }, "daemon.drop_privileges", true},
+		{"run as user", func(c *Config) { c.Daemon.RunAsUser = "allseer" }, "daemon.run_as_user", true},
+		{"sanitizer", func(c *Config) { c.Intent.EnableSanitizer = true }, "intent.enable_sanitizer", true},
+		{"dns correlation", func(c *Config) { c.Telemetry.EnableDNSCorrelation = true }, "telemetry.enable_dns_correlation", false},
+		{"binary hashing", func(c *Config) { c.Telemetry.EnableBinaryHashing = true }, "telemetry.enable_binary_hashing", false},
+		{"audit rotation", func(c *Config) { c.Audit.MaxSizeMB = 512 }, "audit.max_size_mb", false},
+		{"audit retention", func(c *Config) { c.Audit.RetentionDays = 90 }, "audit.max_size_mb", false},
+		{"llm analyzer", func(c *Config) { c.Intent.Analyzer = "hybrid" }, "intent.analyzer", false},
+		{"log level", func(c *Config) { c.Logging.Level = "debug" }, "logging.level", false},
+		{"log format", func(c *Config) { c.Logging.Format = "json" }, "logging.format", false},
+		{"log output", func(c *Config) { c.Logging.Output = "/var/log/allseer.log" }, "logging.output", false},
+		{"log source", func(c *Config) { c.Logging.AddSource = true }, "logging.add_source", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := Defaults()
+			c.set(cfg)
+			var got *Issue
+			for _, i := range Validate(cfg) {
+				if i.Field == c.field {
+					cp := i
+					got = &cp
+				}
+			}
+			if got == nil {
+				t.Fatalf("%s set but no issue reported for %s", c.name, c.field)
+			}
+			if got.Fatal != c.fatal {
+				t.Errorf("%s: fatal = %v, want %v (%s)", c.field, got.Fatal, c.fatal, got.Message)
+			}
+			if !strings.Contains(got.Message, "not implemented") {
+				t.Errorf("%s: message does not say it is unimplemented: %q", c.field, got.Message)
+			}
+		})
+	}
+}
+
+// The built-in defaults must describe what the daemon does, so starting with
+// no configuration file at all reports nothing.
+func TestDefaultsReportNoIssues(t *testing.T) {
+	if issues := Validate(Defaults()); len(issues) != 0 {
+		for _, i := range issues {
+			t.Errorf("default config reports %s: %s (fatal %v)", i.Field, i.Message, i.Fatal)
+		}
+	}
+}
+
+// The shipped example is what a deployment starts from, so it has to load.
+func TestExampleConfigLoadsAndReportsNothingFatal(t *testing.T) {
+	c, err := FileLoader{}.Load(context.Background(), "../../configs/allseerd.example.yaml")
+	if err != nil {
+		t.Fatalf("loading the shipped example: %v", err)
+	}
+	for _, i := range Validate(c) {
+		if i.Fatal {
+			t.Errorf("the shipped example is fatal at %s: %s", i.Field, i.Message)
+		} else {
+			t.Logf("example warns at %s: %s", i.Field, i.Message)
 		}
 	}
 }

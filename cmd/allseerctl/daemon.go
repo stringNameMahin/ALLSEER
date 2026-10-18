@@ -91,6 +91,15 @@ func runStatus(args []string) int {
 		if len(g.SuccessOnly) > 0 {
 			fmt.Fprintf(w, "successes only\t%s through %v: refused attempts produce no record\n", g.Kind, g.SuccessOnly)
 		}
+		// An observable kind is not a fully watched one. Printing only the
+		// observable list would let "net.connect" read as "every outbound
+		// connection is seen", which is not what watching connect(2) buys.
+		if len(g.Missing) > 0 {
+			fmt.Fprintf(w, "not watched\t%s through %v: those produce no record\n", g.Kind, g.Missing)
+		}
+	}
+	if st.RefusedRequests > 0 {
+		fmt.Fprintf(w, "refused requests\t%d (callers inside a governed session, or not locatable)\n", st.RefusedRequests)
 	}
 	if st.Coverage.Degraded {
 		fmt.Fprintf(w, "coverage\tDEGRADED; unobservable: %v\n", st.Coverage.Unobservable)

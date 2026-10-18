@@ -106,6 +106,25 @@ type daemon struct {
 }
 
 func startDaemon(t *testing.T, mode string) *daemon {
+	return startDaemonWithConfig(t, mode, "")
+}
+
+// startDaemonWithConfig starts a daemon with extra configuration, written to a
+// file and passed with --config. An empty body uses the built-in defaults.
+func startDaemonWithConfig(t *testing.T, mode, body string) *daemon {
+	t.Helper()
+	need(t)
+	var cfg string
+	if body != "" {
+		cfg = filepath.Join(e.dir, fmt.Sprintf("cfg-%d.yaml", time.Now().UnixNano()))
+		if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return startDaemonWith(t, mode, cfg)
+}
+
+func startDaemonWith(t *testing.T, mode, cfg string) *daemon {
 	t.Helper()
 	need(t)
 	d := &daemon{
@@ -114,10 +133,15 @@ func startDaemon(t *testing.T, mode string) *daemon {
 		log:    &bytes.Buffer{},
 		done:   make(chan error, 1),
 	}
-	d.cmd = exec.Command(filepath.Join(e.bin, "allseerd"),
+	args := []string{
 		"--socket", d.socket, "--object", e.object, "--mode", mode, "--audit", d.audit,
 		"--rules", filepath.Join(e.repo, "configs/rules.default.yaml"),
-		"--sensitivity", filepath.Join(e.repo, "configs/sensitivity.default.yaml"))
+		"--sensitivity", filepath.Join(e.repo, "configs/sensitivity.default.yaml"),
+	}
+	if cfg != "" {
+		args = append([]string{"--config", cfg}, args...)
+	}
+	d.cmd = exec.Command(filepath.Join(e.bin, "allseerd"), args...)
 	d.cmd.Stdout, d.cmd.Stderr = d.log, d.log
 	if err := d.cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -550,6 +574,116 @@ func TestAgentCannotEscapeItsCgroup(t *testing.T) {
 
 // The ABI v3 regression: the same denied read through a relative name, after
 // cd, is denied and contained exactly like the absolute one.
+// The benign case, which is the one that decides whether anybody can leave
+// this running. A build-shaped workload that stays inside what the envelope
+// grants must finish with nothing asked of the user: no approval, no block,
+// and a session that completes with its telemetry intact. A system that
+// interrupts ordinary work trains people to approve without reading.
+func TestBenignBuildWorkloadRaisesNothing(t *testing.T) {
+	d := startDaemon(t, "enforce")
+	ws := workspace(t)
+	// Reads its own sources, compiles nothing it was not given, writes its
+	// output into the workspace, and uses the system tools the envelope grants.
+	agent := script(t, fmt.Sprintf(`set -e
+mkdir -p %[1]s/src %[1]s/out
+for i in 1 2 3 4 5 6 7 8; do
+  printf 'package main\nfunc f%%d() int { return %%d }\n' "$i" "$i" > %[1]s/src/f$i.go
+done
+cat %[1]s/src/*.go > %[1]s/out/all.txt
+wc -l %[1]s/out/all.txt > %[1]s/out/count.txt
+grep -c func %[1]s/out/all.txt >> %[1]s/out/count.txt
+sort %[1]s/out/all.txt | uniq | tail -5 > %[1]s/out/sample.txt
+cp %[1]s/out/all.txt %[1]s/out/all.bak
+rm %[1]s/out/all.bak
+test -s %[1]s/out/count.txt`, ws))
+
+	r := shim(t, d.socket, ws, "enforce", agent)
+	sid := r.sessionID(t)
+	if code := r.wait(t, 60*time.Second); code != 0 {
+		t.Fatalf("the benign workload exited %d under enforce mode\n%s", code, r.stderr.String())
+	}
+
+	s, err := d.client().GetSession(context.Background(), sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != session.StateCompleted {
+		t.Fatalf("session state = %s, want completed: %s", s.State, s.Outcome.Reason)
+	}
+	if !s.Outcome.TelemetryComplete {
+		t.Errorf("telemetry incomplete on a benign run: %s", s.Outcome.Reason)
+	}
+
+	ds := d.decisions(t, sid)
+	if len(ds) == 0 {
+		t.Fatal("no decisions recorded; the workload was not observed at all")
+	}
+	for _, dec := range ds {
+		switch dec.Action {
+		case ece.ActionBlock, ece.ActionRequestApproval:
+			t.Errorf("benign workload triggered %s on %s (verdict %s, risk %.0f): %s",
+				dec.Action, target(dec), dec.Verdict, dec.Risk.Score, dec.MatchedRule)
+		}
+	}
+	// Its own writes must read as expected behaviour, not as departures.
+	if find(ds, decision.VerdictWithinEnvelope, ws+"/out/count.txt") == nil {
+		t.Error("the workspace write was not within the envelope")
+	}
+	t.Logf("benign run: %d decisions, %d events observed", len(ds), s.Summary.EventsObserved)
+}
+
+// Telemetry that drops records cannot support the claim that nothing bad
+// happened, so a drop ends the session rather than letting it run on. The ring
+// and the decode channel are made small enough that a burst of opens overruns
+// them, which is the only way to provoke a real drop from outside the kernel.
+func TestDroppedTelemetryFailsTheSessionClosed(t *testing.T) {
+	d := startDaemonWithConfig(t, "monitor", `telemetry:
+  ring_buffer_size: 4096
+  event_channel_size: 1
+  fail_closed_on_drop: true
+`)
+	ws := workspace(t)
+	marker := filepath.Join(ws, "finished")
+	// A burst of opens, far more than a 4 KiB ring and a 1-deep channel can
+	// carry while user space enriches each one.
+	agent := script(t, fmt.Sprintf(`for i in $(seq 1 4000); do
+  cat %[1]s/src.txt >/dev/null 2>&1 || true
+done
+echo done > %[2]s`, ws, marker))
+	if err := os.WriteFile(filepath.Join(ws, "src.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(filepath.Join(ws, "src.txt"), agentUID, agentUID); err != nil {
+		t.Fatal(err)
+	}
+
+	r := shim(t, d.socket, ws, "", agent)
+	sid := r.sessionID(t)
+	r.wait(t, 90*time.Second)
+
+	s, err := d.client().GetSession(context.Background(), sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := d.client().Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("session %s: %s (telemetry complete %v); daemon dropped %d",
+		s.State, s.Outcome.Reason, s.Outcome.TelemetryComplete, st.DroppedEvents)
+
+	if st.DroppedEvents == 0 && s.Outcome.TelemetryComplete {
+		t.Skip("the burst did not overrun the ring on this host, so there is no drop to fail closed on")
+	}
+	// Something was lost. The session must not read as a clean completion.
+	if s.Outcome.TelemetryComplete {
+		t.Errorf("records were dropped but the session reports complete telemetry")
+	}
+	if s.State == session.StateCompleted && !strings.Contains(s.Outcome.Reason, "telemetry") {
+		t.Errorf("session completed without mentioning the telemetry gap: %s", s.Outcome.Reason)
+	}
+}
+
 // A daemon killed outright never gets to end its sessions, so nothing on the
 // host stops the agent. The shim notices that governance has gone and stops
 // the launcher it holds, which is the one thing an unprivileged shim can do.

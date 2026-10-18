@@ -722,3 +722,50 @@ func TestBugReportOnAHealthyLoadReportsNoFailures(t *testing.T) {
 		t.Errorf("healthy report omits the unsupported section\n\n%s", report)
 	}
 }
+
+// A load with every program attached still has entry points nothing watches.
+// Reporting none would make "observable" read as "complete", which for
+// net.connect would hide io_uring and TCP Fast Open egress entirely.
+func TestFullLoadStillReportsUnwatchedEgressEntryPoints(t *testing.T) {
+	probes := make([]ProbeInfo, 0, len(AllProbes()))
+	for _, p := range AllProbes() {
+		probes = append(probes, ProbeInfo{Name: p.Name, Family: p.Family, Loaded: true, Attached: true})
+	}
+	cov := ComputeCoverage(probes)
+	if cov.Degraded {
+		t.Fatal("a fully attached load reports itself degraded")
+	}
+
+	var gap *EntryPointGap
+	for i := range cov.EntryPoints {
+		if cov.EntryPoints[i].Kind == capability.KindNetConnect {
+			gap = &cov.EntryPoints[i]
+		}
+	}
+	if gap == nil {
+		t.Fatal("net.connect reports no entry-point gap, so it reads as fully watched")
+	}
+	for _, want := range []string{"io_uring", "sendto", "sendmsg"} {
+		found := false
+		for _, m := range gap.Missing {
+			if m == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("net.connect does not report %q as unwatched; missing = %v", want, gap.Missing)
+		}
+	}
+	// connect itself is watched, so the gap must be partial rather than total.
+	if len(gap.Observed) == 0 {
+		t.Error("net.connect reports nothing as observed although the connect pair is attached")
+	}
+
+	// A permanent gap is not a degradation: nothing in this build could watch
+	// those entry points, so an operator has nothing to fix.
+	for _, d := range cov.DegradedEntryPoints() {
+		if d.Kind == capability.KindNetConnect {
+			t.Errorf("net.connect reported as degraded on a full load: %+v", d)
+		}
+	}
+}

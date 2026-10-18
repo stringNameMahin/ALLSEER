@@ -269,11 +269,21 @@ ci: ## Run the whole CI pipeline locally (integration uses sudo)
 	$(MAKE) ci-security
 
 .PHONY: ci-lint
-ci-lint: ## CI job: gofmt, golangci-lint, go.mod tidiness, actionlint
-	./scripts/ci/tools.sh golangci-lint actionlint shellcheck
-	$(MAKE) fmt-check lint
+ci-lint: ## CI job: gofmt, golangci-lint (both tag sets), go.mod tidiness, actionlint, shellcheck
+	./scripts/ci/tools.sh golangci-lint actionlint shellcheck libbpf
+	$(MAKE) fmt-check lint lint-ebpf
 	$(GO) mod tidy -diff
 	actionlint
+	shellcheck -x scripts/*.sh scripts/ci/*.sh
+
+# The ebpf-tagged files were vetted but never linted, so every linter the
+# default build runs stopped at the build tag. Scoped to the packages that have
+# tagged files, because golangci-lint with a tag set still has to typecheck
+# what it loads.
+.PHONY: lint-ebpf
+lint-ebpf: ## Run golangci-lint over the ebpf-tagged code
+	@command -v golangci-lint >/dev/null || { echo "golangci-lint not found; see make lint"; exit 1; }
+	$(EBPF_ENV) golangci-lint run --build-tags ebpf ./internal/telemetry/... ./cmd/allseerd/...
 
 .PHONY: ci-static
 ci-static: ## CI job: go vet for both tag sets, ABI staleness, schema examples
@@ -343,7 +353,24 @@ ci-integration: ## CI job: ebpf telemetry, containment and end-to-end tests as r
 		$(CI_OUT)/integration.json $(CI_OUT)/integration-coverage.txt > $(CI_OUT)/integration.md; \
 	cat $(CI_OUT)/integration.md; \
 	if [ -n "$${GITHUB_STEP_SUMMARY:-}" ]; then cat $(CI_OUT)/integration.md >> "$$GITHUB_STEP_SUMMARY"; fi; \
+	./scripts/ci/require-ran.sh $(CI_OUT)/integration.json $(REQUIRED_INTEGRATION_TESTS) || status=1; \
 	exit $$status
+
+# Tests whose skip would make the integration job meaningless: loading probes
+# on a real kernel, cgroup containment, and the governed paths end to end. Each
+# skips itself without root, kernel BTF or the BPF object, and a skipped test
+# exits 0, so the job has to check they ran rather than trust its exit status.
+REQUIRED_INTEGRATION_TESTS := \
+	TestRuntimeExecExitAndOpenShareOneRingBuffer \
+	TestRuntimeFreezeThawKill \
+	TestRuntimeUnprivilegedProcessCannotEscape \
+	TestMonitorRecordsDeparturesAndPropagatesExitCode \
+	TestNoUnobservedLaunchWindow \
+	TestEnforceKillsAfterCredentialRead \
+	TestInteractiveApproveResumesAndDenyKills \
+	TestAgentCannotEscapeItsCgroup \
+	TestAgentCannotObtainAWeakerNestedSession \
+	TestDaemonSelfTestProvesTheOpenProbe
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify

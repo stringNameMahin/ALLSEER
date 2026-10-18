@@ -21,8 +21,12 @@ daemon:
   shutdown_grace: 30s
   # eBPF loading needs CAP_BPF and CAP_SYS_ADMIN; steady-state operation does
   # not. Keeping them after attach is an unnecessary standing risk.
-  drop_privileges: true
-  run_as_user: allseer
+  #
+  # Not implemented in this build: the daemon stays root for its lifetime.
+  # Setting either of these is refused at startup rather than ignored, so a
+  # deployment cannot believe privileges were dropped when they were not.
+  drop_privileges: false
+  # run_as_user: allseer
 
 telemetry:
   object_path: /usr/lib/allseer/allseer.bpf.o
@@ -34,7 +38,9 @@ telemetry:
   # overhead, paid for in blind spots.
   enabled_probes: []
   enable_binary_hashing: false
-  enable_dns_correlation: true
+  # Not implemented in this build: there is no DNS correlator, so a grant that
+  # names a hostname cannot match and connections reach policy by address.
+  enable_dns_correlation: false
   # A gap in telemetry means the system can no longer make sound statements
   # about what the agent did, including "nothing bad happened". Halting is the
   # honest response, and also the disruptive one.
@@ -43,10 +49,15 @@ telemetry:
 intent:
   # "rules" is deterministic and offline. "llm" is more accurate on novel
   # phrasing. "hybrid" runs both and takes the intersection.
-  analyzer: hybrid
+  #
+  # Only "rules" is built. The LLM analyzer is deferred, so "llm" or "hybrid"
+  # would still run the rule analyzer and the file would be claiming otherwise.
+  analyzer: rules
   timeout: 20s
   fallback_to_rules: true
-  enable_sanitizer: true
+  # Not implemented in this build: no prompt-injection sanitizer exists, so
+  # prompts reach the analyzer unfiltered. Refused rather than ignored.
+  enable_sanitizer: false
   llm:
     provider: anthropic
     model: claude-sonnet-5
@@ -130,13 +141,18 @@ audit:
   format: jsonl
   # Expensive, but necessary for research analysis and replay-based development.
   record_all_events: false
-  max_size_mb: 512
-  retention_days: 90
+  # Not implemented in this build: the audit log is never rotated or pruned,
+  # so it grows without bound. Left at 0 rather than stating a limit nothing
+  # enforces.
+  max_size_mb: 0
+  retention_days: 0
   # Without this, a crash loses exactly the records most likely to matter.
   sync_writes: true
 
+# Not read in this build: the daemon logs text at info level to stderr, with
+# no redaction. The values below are what it actually does.
 logging:
   level: info
-  format: json
+  format: text
   output: stderr
   add_source: false

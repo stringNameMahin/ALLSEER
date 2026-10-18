@@ -147,6 +147,71 @@ func Validate(c *Config) []Issue {
 	if c.Envelope.AutoApproveBelowRisk > 0 {
 		warn("envelope.auto_approve_below_risk", "set: some envelopes are approved without a human")
 	}
+	out = append(out, unimplemented(c)...)
+	return out
+}
+
+// unimplemented reports settings this build accepts and does not act on.
+//
+// A configuration field that parses and then does nothing is worse than a
+// missing one. The operator who writes drop_privileges: true has every reason
+// to believe the daemon drops privileges, and nothing in the log or the status
+// output would tell them otherwise. Each of these is reported with what the
+// build actually does instead, so the gap is visible at startup rather than
+// after an incident.
+//
+// Security-relevant settings are fatal when they are switched on: silently
+// running with less protection than the file asks for is the failure this
+// function exists to prevent. The rest warn, because the daemon's behaviour is
+// still correct, just not configurable yet.
+func unimplemented(c *Config) []Issue {
+	var out []Issue
+	ignored := func(field, what string) {
+		out = append(out, Issue{Field: field, Message: "not implemented in this build: " + what})
+	}
+	refuse := func(field, what string) {
+		out = append(out, Issue{Field: field, Message: "not implemented in this build: " + what, Fatal: true})
+	}
+
+	if c.Daemon.DropPrivileges {
+		refuse("daemon.drop_privileges",
+			"the daemon stays root for its lifetime; unset this or do not rely on it")
+	}
+	if c.Daemon.RunAsUser != "" {
+		refuse("daemon.run_as_user", "privilege dropping is not implemented, so this user is never switched to")
+	}
+	if c.Intent.EnableSanitizer {
+		refuse("intent.enable_sanitizer",
+			"no prompt-injection sanitizer exists; prompts reach the analyzer unfiltered")
+	}
+	if c.Telemetry.EnableDNSCorrelation {
+		ignored("telemetry.enable_dns_correlation",
+			"no DNS correlator exists, so hostname grants cannot match and connections reach policy by address")
+	}
+	if c.Telemetry.EnableBinaryHashing {
+		ignored("telemetry.enable_binary_hashing", "executables are not hashed")
+	}
+	if c.Audit.MaxSizeMB > 0 || c.Audit.RetentionDays > 0 {
+		ignored("audit.max_size_mb", "the audit log is never rotated or pruned; it grows without bound")
+	}
+	if c.Intent.Analyzer == "llm" || c.Intent.Analyzer == "hybrid" {
+		ignored("intent.analyzer",
+			"only the deterministic rule analyzer is built, and it is what runs whatever this says")
+	}
+	// Only what the daemon cannot deliver. It logs text at info level, so a
+	// file asking for exactly that is not being ignored.
+	if c.Logging.Level != "" && c.Logging.Level != "info" {
+		ignored("logging.level", "the daemon logs at info level and does not read this")
+	}
+	if c.Logging.Format != "" && c.Logging.Format != "text" {
+		ignored("logging.format", "the daemon logs text and does not read this")
+	}
+	if c.Logging.Output != "" && c.Logging.Output != "stderr" {
+		ignored("logging.output", "the daemon logs to stderr and does not read this")
+	}
+	if c.Logging.AddSource {
+		ignored("logging.add_source", "log records carry no source location")
+	}
 	return out
 }
 

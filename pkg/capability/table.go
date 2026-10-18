@@ -164,7 +164,13 @@ var descriptors = []Descriptor{
 		Domain:           DomainNetwork,
 		Summary:          "Open an outbound connection to a remote endpoint.",
 		BaselineSeverity: SeverityHigh,
-		Syscalls:         []string{"connect"},
+		// More than connect(2), for the same reason the fs kinds list
+		// io_uring: these are the other ways a process reaches a remote
+		// endpoint, and a kind that lists only the entry point we happen to
+		// watch cannot report that the others are unwatched. io_uring submits
+		// IORING_OP_CONNECT without entering connect at all, and TCP Fast Open
+		// carries the connect inside the first sendto or sendmsg.
+		Syscalls: []string{"connect", "io_uring", "sendto", "sendmsg"},
 	},
 	{
 		Kind:             KindNetBind,
@@ -192,7 +198,7 @@ var descriptors = []Descriptor{
 		Domain:           DomainNetwork,
 		Summary:          "Transmit data over a socket. Volume is the exfiltration signal.",
 		BaselineSeverity: SeverityHigh,
-		Syscalls:         []string{"send", "sendto", "sendmsg", "sendmmsg", "write"},
+		Syscalls:         []string{"send", "sendto", "sendmsg", "sendmmsg", "write", "io_uring"},
 	},
 	{
 		Kind:             KindNetReceive,
