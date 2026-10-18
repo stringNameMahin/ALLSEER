@@ -24,6 +24,10 @@ type approvals struct {
 	subs    map[int]chan decision.ApprovalRequest
 	nextSub int
 	seq     uint64
+	// terminating holds sessions whose approval was denied. The kill runs on
+	// the dispatch loop, so without this a later answer could resume a session
+	// that is already on its way down.
+	terminating map[string]bool
 }
 
 type pendingApproval struct {
@@ -32,12 +36,19 @@ type pendingApproval struct {
 }
 
 func newApprovals(d *Daemon) *approvals {
-	return &approvals{d: d, pending: map[string]*pendingApproval{}, subs: map[int]chan decision.ApprovalRequest{}}
+	return &approvals{d: d, pending: map[string]*pendingApproval{},
+		subs: map[int]chan decision.ApprovalRequest{}, terminating: map[string]bool{}}
 }
 
 func (a *approvals) open(dec decision.Decision) {
 	now := a.d.now()
 	a.mu.Lock()
+	if a.terminating[dec.SessionID] {
+		a.mu.Unlock()
+		a.d.log.Warn("not asking for approval: the session is already being terminated",
+			"session", dec.SessionID)
+		return
+	}
 	a.seq++
 	id := fmt.Sprintf("apr-%s-%d", dec.SessionID, a.seq)
 	req := decision.ApprovalRequest{
@@ -131,6 +142,19 @@ func (a *approvals) resolve(ctx context.Context, resp decision.ApprovalResponse)
 	p.timer.Stop()
 	delete(a.pending, resp.RequestID)
 	sid := p.req.SessionID
+	// A denial takes the whole session down, so the other requests waiting on
+	// it are moot. Dropping them here is what stops a later answer from
+	// resuming a session whose kill has not run yet.
+	if !resp.Approved {
+		a.terminating[sid] = true
+		for id, q := range a.pending {
+			if q.req.SessionID == sid {
+				q.timer.Stop()
+				delete(a.pending, id)
+			}
+		}
+	}
+	terminating := a.terminating[sid]
 	remaining := 0
 	for _, q := range a.pending {
 		if q.req.SessionID == sid {
@@ -155,6 +179,11 @@ func (a *approvals) resolve(ctx context.Context, resp decision.ApprovalResponse)
 		})
 		return true
 	}
+	if terminating {
+		a.d.log.Warn("approval granted for a session that is already being terminated; not resuming",
+			"session", sid, "request", resp.RequestID)
+		return true
+	}
 	if remaining == 0 {
 		if err := a.d.manager.Resume(ctx, sid); err != nil {
 			a.d.log.Error("resuming session after approval", "session", sid, "err", err)
@@ -172,6 +201,7 @@ func (a *approvals) cancelSession(sid string) {
 			delete(a.pending, id)
 		}
 	}
+	delete(a.terminating, sid)
 }
 
 func (a *approvals) subscribe() (int, <-chan decision.ApprovalRequest) {

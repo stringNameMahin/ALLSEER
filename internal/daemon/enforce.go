@@ -104,11 +104,30 @@ func (e *Enforcer) terminate(ctx context.Context, d decision.Decision, why strin
 	if g == nil {
 		return note(d, false, "no session cgroup to contain")
 	}
-	if err := g.Kill(ctx); err != nil {
-		e.d.log.Error("killing session tree failed", "session", d.SessionID, "err", err)
-		return note(d, false, "kill failed: "+err.Error())
-	}
 	sid := d.SessionID
+	if err := g.Kill(ctx); err != nil {
+		e.d.log.Error("killing session tree failed", "session", sid, "err", err)
+		// Containment failed, so the session must not carry on as though it
+		// had worked. Freeze is the weaker containment this host still has;
+		// try it, record what was actually applied, and end the session as
+		// failed either way. Failed rather than terminated: policy did decide
+		// to stop the agent, but our own containment is what broke.
+		what := "kill failed: " + err.Error()
+		applied := false
+		if ferr := g.Freeze(ctx); ferr == nil {
+			applied = true
+			what += "; the session was frozen instead"
+		} else {
+			e.d.log.Error("freezing after a failed kill also failed", "session", sid, "err", ferr)
+			what += "; freezing it instead also failed: " + ferr.Error()
+		}
+		d = note(d, applied, what)
+		e.d.later(func() {
+			e.d.failSessionAs(context.Background(), sid, session.StateFailed,
+				"containment failed: "+err.Error())
+		})
+		return d
+	}
 	d = note(d, true, "session process tree killed: "+why)
 	if st, ok := e.d.manager.State(sid); ok {
 		if ms, ok := st.(*session.MemoryState); ok {

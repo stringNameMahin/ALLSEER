@@ -115,6 +115,24 @@ type fakeGroup struct {
 	adopted                 []int
 	frozen, killed, removed bool
 	populated               bool
+	// killErr and freezeErr make containment fail, which is how the
+	// fail-closed paths are exercised.
+	killErr   error
+	freezeErr error
+}
+
+// failKill makes every Kill on this group fail.
+func (g *fakeGroup) failKill(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.killErr = err
+}
+
+// failFreeze makes every Freeze on this group fail.
+func (g *fakeGroup) failFreeze(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.freezeErr = err
 }
 
 func (g *fakeGroup) CgroupID() uint64 { return g.id }
@@ -127,8 +145,11 @@ func (g *fakeGroup) Adopt(pid int) error {
 }
 func (g *fakeGroup) Freeze(context.Context) error {
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.freezeErr != nil {
+		return g.freezeErr
+	}
 	g.frozen = true
-	g.mu.Unlock()
 	return nil
 }
 func (g *fakeGroup) Thaw(context.Context) error {
@@ -140,6 +161,9 @@ func (g *fakeGroup) Thaw(context.Context) error {
 func (g *fakeGroup) Kill(context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.killErr != nil {
+		return g.killErr
+	}
 	g.killed, g.populated = true, false
 	return nil
 }
@@ -603,6 +627,113 @@ func TestStartRefusesAProcessThatIsNotTheCallersChild(t *testing.T) {
 	var e *ipc.Error
 	if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {
 		t.Fatalf("StartSession with a foreign pid = %v", err)
+	}
+}
+
+// A kill that fails must not leave the session running as though containment
+// had worked. Freeze is the weaker containment left, and the session ends as
+// failed because our own containment is what broke.
+func TestFailedKillFreezesAndFailsTheSession(t *testing.T) {
+	r := newRig(t, policy.ModeEnforce, time.Minute)
+	ctx := context.Background()
+	sid := r.start(t, "run the go tests")
+	r.groups.get(sid).failKill(errors.New("injected kill failure"))
+
+	r.feed(t, sid, read("/home/dev/.aws/credentials"))
+	waitFor(t, "the freeze fallback", func() bool { f, _ := r.groups.get(sid).state(); return f })
+	waitFor(t, "the session to fail", func() bool {
+		s, _ := r.client.GetSession(ctx, sid)
+		return s != nil && s.State == session.StateFailed
+	})
+
+	recs := r.audit.all()
+	if len(recs) == 0 {
+		t.Fatal("no decision was recorded")
+	}
+	d := recs[len(recs)-1]
+	if d.Action != ece.ActionBlock {
+		t.Fatalf("action = %s, want block", d.Action)
+	}
+	// Freeze worked, so containment was applied and Enforced must say so.
+	if !d.Enforced {
+		t.Fatalf("enforced = false although the session was frozen: %+v", d.Reasoning)
+	}
+	last := d.Reasoning[len(d.Reasoning)-1]
+	if !strings.Contains(last.Conclusion, "kill failed") || !strings.Contains(last.Conclusion, "frozen instead") {
+		t.Fatalf("reasoning does not record the failure: %q", last.Conclusion)
+	}
+}
+
+// When neither kill nor freeze works there is no containment at all, and the
+// record has to say so rather than claim a block was applied.
+func TestContainmentFailureIsReportedHonestly(t *testing.T) {
+	r := newRig(t, policy.ModeEnforce, time.Minute)
+	ctx := context.Background()
+	sid := r.start(t, "run the go tests")
+	g := r.groups.get(sid)
+	g.failKill(errors.New("injected kill failure"))
+	g.failFreeze(errors.New("injected freeze failure"))
+
+	r.feed(t, sid, read("/home/dev/.aws/credentials"))
+	waitFor(t, "the session to fail", func() bool {
+		s, _ := r.client.GetSession(ctx, sid)
+		return s != nil && s.State == session.StateFailed
+	})
+	recs := r.audit.all()
+	d := recs[len(recs)-1]
+	if d.Enforced {
+		t.Fatal("enforced = true although no containment was applied")
+	}
+	if f, k := g.state(); f || k {
+		t.Fatalf("group reports frozen=%v killed=%v after both failed", f, k)
+	}
+}
+
+// A denied approval takes the session down. A second request answered after
+// the denial must not thaw it before the kill runs.
+func TestDeniedSessionIsNotThawedByALaterApproval(t *testing.T) {
+	r := newRig(t, policy.ModeInteractive, time.Minute)
+	ctx := context.Background()
+	sid := r.start(t, "run the go tests")
+
+	egress := func(ip string) synth.Spec {
+		return synth.Spec{Type: abi.EvtNetConnect, Ret: 0,
+			Net: &synth.Net{Family: 2, DestAddr: netip.MustParseAddr(ip), DestPort: 443}}
+	}
+	r.feed(t, sid, egress("203.0.113.9"), egress("203.0.113.10"))
+	waitFor(t, "two pending approvals", func() bool {
+		p, _ := r.client.PendingApprovals(ctx)
+		return len(p) >= 2
+	})
+	pending, err := r.client.PendingApprovals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Answered directly rather than over the socket. The denial's kill runs on
+	// the dispatch loop, and going through the socket lets it land first, which
+	// hides the reversal behind timing. Called back to back, the second answer
+	// is the one that used to resume the session.
+	if !r.d.approvals.resolve(ctx, decision.ApprovalResponse{
+		RequestID: pending[0].ID, Approved: false, RespondedBy: "operator"}) {
+		t.Fatal("the denial was not accepted")
+	}
+	if r.d.approvals.resolve(ctx, decision.ApprovalResponse{
+		RequestID: pending[1].ID, Approved: true, RespondedBy: "operator"}) {
+		t.Fatal("an approval was accepted for a session that had already been denied")
+	}
+
+	waitFor(t, "the kill after the denial", func() bool { _, k := r.groups.get(sid).state(); return k })
+	s, _ := r.client.GetSession(ctx, sid)
+	if s == nil || s.State != session.StateTerminated {
+		t.Fatalf("session state = %v, want terminated", s)
+	}
+	// Still frozen, never resumed: a thaw here is the reversal this guards.
+	if f, _ := r.groups.get(sid).state(); !f {
+		t.Fatal("the denied session was thawed by the later approval")
+	}
+	if p, _ := r.client.PendingApprovals(ctx); len(p) != 0 {
+		t.Fatalf("pending approvals after the denial = %d, want 0", len(p))
 	}
 }
 
