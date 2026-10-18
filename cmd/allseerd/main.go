@@ -93,7 +93,12 @@ func run(args []string) int {
 		return 1
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// SIGHUP shuts down rather than reloading: this build refuses policy
+	// reload outright, and the default action for an unhandled SIGHUP kills
+	// the daemon without ending its sessions, which leaves governed agents
+	// running unobserved.
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	rs, err := policy.NewLoader().Load(ctx, cfg.Policy.RuleSetPath)
@@ -133,6 +138,7 @@ func run(args []string) int {
 		log.Error("cgroup.freeze is unavailable; sessions could not be contained")
 		return 1
 	}
+	reportSweep(log, mgr)
 
 	tel, err := newTelemetry(ctx, cfg.Telemetry)
 	if err != nil {
@@ -218,6 +224,27 @@ func preflight(cfg *config.Config) error {
 		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// reportSweep clears the empty session cgroups a previous daemon left behind
+// and reports the ones that still hold processes. A populated leftover is a
+// process tree nothing is governing any more, so it is reported at error level
+// rather than cleaned up: the base may be shared with a running daemon, and
+// killing somebody else's live session would be worse than naming this one.
+func reportSweep(log *slog.Logger, mgr *containment.Manager) {
+	res, err := mgr.Sweep()
+	if err != nil {
+		log.Error("sweeping leftover session cgroups", "base", mgr.Base(), "err", err)
+		return
+	}
+	if len(res.Removed) > 0 {
+		log.Info("removed empty session cgroups left by an earlier daemon",
+			"base", mgr.Base(), "removed", res.Removed)
+	}
+	for _, name := range res.Populated {
+		log.Error("a leftover session cgroup still holds processes; nothing is governing them",
+			"base", mgr.Base(), "session", name)
+	}
 }
 
 func reportCoverage(log *slog.Logger, cov telemetry.Coverage) {

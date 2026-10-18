@@ -29,6 +29,15 @@ var sessionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // ValidSessionName reports whether id can name a session cgroup.
 func ValidSessionName(id string) bool { return sessionName.MatchString(id) }
 
+// SweepResult reports what a startup sweep found under the base.
+type SweepResult struct {
+	// Removed names the empty session cgroups that were cleaned up.
+	Removed []string `json:"removed"`
+	// Populated names the leftover session cgroups that still hold processes.
+	// Each one is a tree no session is governing any more.
+	Populated []string `json:"populated"`
+}
+
 // Capabilities reports which whole-tree operations the host supports.
 type Capabilities struct {
 	Freeze bool `json:"freeze"`

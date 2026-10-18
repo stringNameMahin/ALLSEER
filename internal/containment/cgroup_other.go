@@ -20,6 +20,8 @@ func NewManager(string) (*Manager, error) { return nil, ErrUnsupported }
 func (*Manager) Base() string                  { return "" }
 func (*Manager) Capabilities() Capabilities    { return Capabilities{} }
 func (*Manager) Governed(int) (bool, error)    { return false, ErrUnsupported }
+func (*Manager) List() ([]*Group, error)       { return nil, ErrUnsupported }
+func (*Manager) Sweep() (SweepResult, error)   { return SweepResult{}, ErrUnsupported }
 func (*Manager) Create(string) (*Group, error) { return nil, ErrUnsupported }
 func (*Manager) Open(string) (*Group, error)   { return nil, ErrUnsupported }
 func (*Group) Adopt(int) error                 { return ErrUnsupported }

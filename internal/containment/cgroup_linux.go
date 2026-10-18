@@ -53,6 +53,54 @@ func (m *Manager) Capabilities() Capabilities {
 	return Capabilities{Freeze: ferr == nil, Kill: kerr == nil}
 }
 
+// Sweep removes the empty session cgroups left under the base and reports the
+// ones that still hold processes.
+//
+// A leftover group means a daemon exited without finishing its sessions. The
+// empty ones are pure garbage. The populated ones are not killed here: the
+// base can be shared with another running daemon, and killing a live session
+// that belongs to somebody else would be worse than reporting it.
+func (m *Manager) Sweep() (SweepResult, error) {
+	var out SweepResult
+	groups, err := m.List()
+	if err != nil {
+		return out, err
+	}
+	for _, g := range groups {
+		pop, err := g.Populated()
+		if err != nil || pop {
+			out.Populated = append(out.Populated, g.Session)
+			continue
+		}
+		if err := g.Remove(); err != nil {
+			out.Populated = append(out.Populated, g.Session)
+			continue
+		}
+		out.Removed = append(out.Removed, g.Session)
+	}
+	return out, nil
+}
+
+// List returns the session cgroups that currently exist under the base.
+func (m *Manager) List() ([]*Group, error) {
+	entries, err := os.ReadDir(m.base)
+	if err != nil {
+		return nil, fmt.Errorf("containment: reading %s: %w", m.base, err)
+	}
+	var out []*Group
+	for _, e := range entries {
+		if !e.IsDir() || !ValidSessionName(e.Name()) {
+			continue
+		}
+		g, err := m.Open(e.Name())
+		if err != nil {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out, nil
+}
+
 // Governed reports whether pid sits inside a session cgroup under this base.
 //
 // An unreadable or vanished process is an error, never a false. A caller the

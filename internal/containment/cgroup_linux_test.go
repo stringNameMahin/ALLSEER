@@ -128,6 +128,61 @@ func TestRuntimeFreezeThawKill(t *testing.T) {
 	}
 }
 
+// A daemon that died without ending its sessions leaves their cgroups behind.
+// The empty ones are garbage and are cleared; a populated one is a tree
+// nothing governs any more, and has to be reported rather than killed.
+func TestRuntimeSweepClearsEmptyLeftoversAndReportsLive(t *testing.T) {
+	requireRoot(t)
+	mnt, err := cgroup2Mount()
+	if err != nil {
+		t.Skipf("no cgroup v2: %v", err)
+	}
+	base := filepath.Join(mnt, fmt.Sprintf("allseer-sweep-%d", time.Now().UnixNano()))
+	m, err := NewManager(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(base) })
+
+	empty, err := m.Create("gone-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := m.Create("live-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = live.Kill(context.Background()); _ = live.Remove() })
+	startHeld(t, live, "while :; do sleep 0.05; done", nil)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if pop, _ := live.Populated(); pop {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	res, err := m.Sweep()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Removed) != 1 || res.Removed[0] != "gone-1" {
+		t.Fatalf("Removed = %v, want [gone-1]", res.Removed)
+	}
+	if len(res.Populated) != 1 || res.Populated[0] != "live-1" {
+		t.Fatalf("Populated = %v, want [live-1]", res.Populated)
+	}
+	if _, err := os.Stat(empty.Path); !os.IsNotExist(err) {
+		t.Fatalf("the empty leftover survived the sweep: %v", err)
+	}
+	if _, err := os.Stat(live.Path); err != nil {
+		t.Fatalf("the populated group was removed: %v", err)
+	}
+	if pop, _ := live.Populated(); !pop {
+		t.Fatal("the sweep killed the processes in a live group")
+	}
+}
+
 // An unprivileged agent cannot move itself out of its session cgroup.
 func TestRuntimeUnprivilegedProcessCannotEscape(t *testing.T) {
 	m := requireRoot(t)

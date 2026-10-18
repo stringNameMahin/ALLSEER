@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -183,7 +184,12 @@ func run(args []string) int {
 	}()
 
 	approvalsCtx, stopApprovals := context.WithCancel(ctx)
+	var daemonGone atomic.Bool
 	go watchApprovals(approvalsCtx, client, sid, !*noTTY)
+	go watchDaemon(approvalsCtx, client, func() {
+		daemonGone.Store(true)
+		_ = child.Process.Kill()
+	})
 
 	if _, err := gateW.Write([]byte{'g'}); err != nil {
 		stopApprovals()
@@ -195,6 +201,11 @@ func run(args []string) int {
 	stopApprovals()
 	signal.Stop(sigs)
 
+	// Nothing to report the end to, and the agent was stopped because of it.
+	if daemonGone.Load() {
+		note("the session was not ended cleanly: the governance daemon is gone")
+		return code
+	}
 	endCtx, cancelEnd := context.WithTimeout(ctx, 30*time.Second)
 	s, err := client.EndSession(endCtx, sid, code)
 	cancelEnd()
@@ -244,6 +255,51 @@ func watchApprovals(ctx context.Context, c *ipc.SocketClient, sid string, useTTY
 		if err := c.RespondApproval(ctx, decision.ApprovalResponse{RequestID: req.ID, Approved: ok}); err != nil {
 			fmt.Fprintf(os.Stderr, "[allseer] answering %s: %v\n", req.ID, err)
 		}
+	}
+}
+
+// watchDaemon stops the agent if the daemon stops answering.
+//
+// The shim refuses to launch an agent with no daemon reachable. A daemon that
+// disappears mid-session leaves the agent running with nothing observing it,
+// which is the same situation, so it gets the same answer. The grace period is
+// there so a restart or a slow reply does not kill a long build.
+//
+// It kills the launcher it started. Descendants that have left that process
+// behind are out of reach: killing the session cgroup needs the daemon, and
+// the shim is unprivileged by design.
+func watchDaemon(ctx context.Context, c *ipc.SocketClient, kill func()) {
+	const (
+		every = 2 * time.Second
+		grace = 10 * time.Second
+	)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	var downSince time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, err := c.Status(callCtx)
+		cancel()
+		if err == nil {
+			downSince = time.Time{}
+			continue
+		}
+		if downSince.IsZero() {
+			downSince = time.Now()
+			continue
+		}
+		if time.Since(downSince) < grace {
+			continue
+		}
+		fmt.Fprintf(os.Stderr,
+			"\n[allseer] the governance daemon has not answered for %s; stopping the agent\n", grace)
+		kill()
+		return
 	}
 }
 

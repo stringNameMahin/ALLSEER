@@ -550,6 +550,44 @@ func TestAgentCannotEscapeItsCgroup(t *testing.T) {
 
 // The ABI v3 regression: the same denied read through a relative name, after
 // cd, is denied and contained exactly like the absolute one.
+// A daemon killed outright never gets to end its sessions, so nothing on the
+// host stops the agent. The shim notices that governance has gone and stops
+// the launcher it holds, which is the one thing an unprivileged shim can do.
+func TestAgentStopsWhenTheDaemonDiesWithoutCleanup(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	ws := workspace(t)
+	marker := filepath.Join(ws, "survived")
+	// stdio detached so the orphaned sleep does not hold the shim's output
+	// pipe open after its shell is killed, which would only slow the test.
+	// That it survives at all is the point below.
+	r := shim(t, d.socket, ws, "", script(t,
+		"sleep 25 </dev/null >/dev/null 2>&1\necho x > "+marker))
+	sid := r.sessionID(t)
+	time.Sleep(500 * time.Millisecond)
+
+	// SIGKILL, so no shutdown path runs and the session cgroup is left behind.
+	if err := d.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-d.done
+
+	if code := r.wait(t, 30*time.Second); code == 0 {
+		t.Fatalf("shim exit = 0 after the daemon was killed; the agent ran to completion\n%s", r.stderr.String())
+	}
+	if exists(marker) {
+		t.Fatal("the agent completed its work after governance disappeared")
+	}
+	if !strings.Contains(r.stderr.String(), "has not answered") {
+		t.Fatalf("the shim did not report the daemon loss:\n%s", r.stderr.String())
+	}
+	// The cgroup outlives the daemon here, which is what the next daemon's
+	// startup sweep is for.
+	left := filepath.Join("/sys/fs/cgroup/allseer", sid)
+	if exists(left) {
+		t.Cleanup(func() { _ = os.Remove(left) })
+	}
+}
+
 // The agent runs as its owner, so it can reach the control socket and the
 // shipped shim. What it must not be able to do is ask the daemon for a second,
 // weaker session and have one of its own processes moved into it: that process
