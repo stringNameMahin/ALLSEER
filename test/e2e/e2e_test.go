@@ -550,6 +550,55 @@ func TestAgentCannotEscapeItsCgroup(t *testing.T) {
 
 // The ABI v3 regression: the same denied read through a relative name, after
 // cd, is denied and contained exactly like the absolute one.
+// The agent runs as its owner, so it can reach the control socket and the
+// shipped shim. What it must not be able to do is ask the daemon for a second,
+// weaker session and have one of its own processes moved into it: that process
+// would leave the envelope its owner approved and the cgroup enforce mode
+// kills. The nested shim runs inside the session cgroup, which is what the
+// daemon refuses on.
+func TestAgentCannotObtainAWeakerNestedSession(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	ws := workspace(t)
+	out := filepath.Join(ws, "nested.out")
+	agent := script(t, fmt.Sprintf(
+		"%s/allseer-shim -socket %s -yes -quiet -no-tty-approvals "+
+			"-prompt 'anything the agent wants' -workspace %s -- /bin/true > %s 2>&1\n"+
+			"echo exit=$? >> %s\nsleep 2",
+		e.bin, d.socket, ws, out, out))
+	r := shim(t, d.socket, ws, "enforce", agent)
+	sid := r.sessionID(t)
+	r.wait(t, 30*time.Second)
+
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("the agent produced no result: %v\n%s", err, r.stderr.String())
+	}
+	got := string(b)
+	if !strings.Contains(got, "a governed process cannot govern") {
+		t.Fatalf("the nested shim was not refused by the daemon:\n%s", got)
+	}
+	if strings.Contains(got, "exit=0") {
+		t.Fatalf("the nested shim reported success:\n%s", got)
+	}
+	// The original session is the only one that ever existed.
+	sessions, err := d.client().ListSessions(context.Background(), session.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != sid {
+		var ids []string
+		for _, s := range sessions {
+			ids = append(ids, s.ID)
+		}
+		t.Fatalf("sessions = %v, want only %s", ids, sid)
+	}
+	if st, err := d.client().Status(context.Background()); err != nil {
+		t.Fatal(err)
+	} else if st.RefusedRequests == 0 {
+		t.Fatal("the refusal was not counted in the daemon status")
+	}
+}
+
 func TestEnforceKillsRelativeCredentialRead(t *testing.T) {
 	d := startDaemon(t, "monitor")
 	ws := workspace(t)

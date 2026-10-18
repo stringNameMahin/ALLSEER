@@ -31,10 +31,16 @@ func (d *Daemon) Call(ctx context.Context, peer ipc.Peer, method string, params 
 		if err := decode(params, &req); err != nil {
 			return nil, err
 		}
+		if err := d.ungoverned(peer, method); err != nil {
+			return nil, err
+		}
 		return d.createSession(ctx, peer, req)
 	case ipc.MethodApproveEnvelope:
 		var req ipc.ApproveEnvelopeRequest
 		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		if err := d.ungoverned(peer, method); err != nil {
 			return nil, err
 		}
 		return struct{}{}, d.approveEnvelope(ctx, peer, req)
@@ -43,10 +49,16 @@ func (d *Daemon) Call(ctx context.Context, peer ipc.Peer, method string, params 
 		if err := decode(params, &req); err != nil {
 			return nil, err
 		}
+		if err := d.ungoverned(peer, method); err != nil {
+			return nil, err
+		}
 		return struct{}{}, d.startSession(ctx, peer, req)
 	case ipc.MethodEndSession:
 		var req ipc.EndSessionRequest
 		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		if err := d.ungoverned(peer, method); err != nil {
 			return nil, err
 		}
 		return d.endSession(ctx, peer, req)
@@ -100,6 +112,9 @@ func (d *Daemon) Call(ctx context.Context, peer ipc.Peer, method string, params 
 		sid, ok := d.approvals.sessionOf(resp.RequestID)
 		if !ok {
 			return nil, ipc.Errorf(ipc.ErrCodeInvalidRequest, "no pending approval %q", resp.RequestID)
+		}
+		if err := d.ungoverned(peer, method); err != nil {
+			return nil, err
 		}
 		if err := d.authorize(peer, sid); err != nil {
 			return nil, err
@@ -183,6 +198,52 @@ func decode(params json.RawMessage, v any) error {
 		return ipc.Errorf(ipc.ErrCodeInvalidRequest, "malformed params: %v", err)
 	}
 	return nil
+}
+
+// ungoverned refuses a state-changing call made from inside a session cgroup.
+//
+// The daemon acts for the human who launched an agent, not for the agent. The
+// owner's UID is also the agent's UID, so UID alone cannot tell them apart: a
+// governed process that could create, approve, start or end sessions would be
+// able to hand its own descendants an envelope its owner never approved, or
+// answer its own approval request.
+//
+// Root is exempt. A kernel-privileged caller is out of the threat model, and
+// the operator's own root tooling must keep working.
+//
+// A caller the daemon cannot place is refused as well. Treating an unreadable
+// peer as ungoverned would make the check optional for anyone who can race it.
+func (d *Daemon) ungoverned(peer ipc.Peer, method string) error {
+	if peer.Root() {
+		return nil
+	}
+	governed, err := d.groups.Governed(peer.PID)
+	if err != nil {
+		d.refuse(method, peer, "the caller could not be located: "+err.Error())
+		return ipc.Errorf(ipc.ErrCodePermissionDenied,
+			"refusing %s: the calling process could not be located (%v)", method, err)
+	}
+	if governed {
+		d.refuse(method, peer, "the caller is inside a governed session")
+		return ipc.Errorf(ipc.ErrCodePermissionDenied,
+			"refusing %s: a governed process cannot govern", method)
+	}
+	return nil
+}
+
+// refusalCount returns how many control requests have been refused.
+func (d *Daemon) refusalCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.refusals
+}
+
+// refuse records a rejected control request.
+func (d *Daemon) refuse(method string, peer ipc.Peer, why string) {
+	d.mu.Lock()
+	d.refusals++
+	d.mu.Unlock()
+	d.log.Warn("control request refused", "method", method, "pid", peer.PID, "uid", peer.UID, "reason", why)
 }
 
 // authorize allows a session's owner and root.
@@ -348,6 +409,18 @@ func (d *Daemon) startSession(ctx context.Context, peer ipc.Peer, req ipc.StartS
 	if !peer.Root() && uid != peer.UID {
 		return ipc.Errorf(ipc.ErrCodePermissionDenied, "pid %d belongs to another user", req.RootPID)
 	}
+	// A process already inside a session cgroup must not be moved into a
+	// second one. Adopting it would take it out of the scope its owner
+	// approved, and out of reach of that session's containment.
+	if governed, err := d.groups.Governed(req.RootPID); err != nil {
+		d.refuse(ipc.MethodStartSession, peer, fmt.Sprintf("root pid %d could not be located: %v", req.RootPID, err))
+		return ipc.Errorf(ipc.ErrCodePermissionDenied,
+			"refusing to adopt pid %d: it could not be located (%v)", req.RootPID, err)
+	} else if governed {
+		d.refuse(ipc.MethodStartSession, peer, fmt.Sprintf("root pid %d is already governed", req.RootPID))
+		return ipc.Errorf(ipc.ErrCodePermissionDenied,
+			"refusing to adopt pid %d: it is already governed by another session", req.RootPID)
+	}
 
 	g, err := d.groups.Create(req.SessionID)
 	if err != nil {
@@ -430,6 +503,7 @@ func (d *Daemon) status() *ipc.StatusResponse {
 		DroppedEvents:     cs.DroppedEvents,
 		Coverage:          cov,
 		Collector:         cs,
+		RefusedRequests:   d.refusalCount(),
 		Dispatch:          d.dispatch.Stats(),
 		Containment:       d.groups.Capabilities(),
 		Enforcer:          d.enforcer.Capabilities(),

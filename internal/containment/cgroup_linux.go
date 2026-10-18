@@ -53,6 +53,42 @@ func (m *Manager) Capabilities() Capabilities {
 	return Capabilities{Freeze: ferr == nil, Kill: kerr == nil}
 }
 
+// Governed reports whether pid sits inside a session cgroup under this base.
+//
+// An unreadable or vanished process is an error, never a false. A caller the
+// daemon cannot place must not be treated as ungoverned.
+func (m *Manager) Governed(pid int) (bool, error) {
+	rel, err := procCgroup(pid)
+	if err != nil {
+		return false, err
+	}
+	mnt, err := cgroup2Mount()
+	if err != nil {
+		return false, err
+	}
+	base := filepath.Clean(m.base)
+	p := filepath.Join(mnt, rel)
+	if p == base {
+		return true, nil
+	}
+	return strings.HasPrefix(p, base+string(filepath.Separator)), nil
+}
+
+// procCgroup returns pid's cgroup v2 path, relative to the cgroup2 mount.
+func procCgroup(pid int) (string, error) {
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cgroup"))
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		// The unified hierarchy is the line with no controller name.
+		if rest, ok := strings.CutPrefix(line, "0::"); ok {
+			return strings.TrimSpace(rest), nil
+		}
+	}
+	return "", fmt.Errorf("containment: pid %d has no cgroup2 entry", pid)
+}
+
 // Group is one session's cgroup.
 type Group struct {
 	Session string `json:"session"`

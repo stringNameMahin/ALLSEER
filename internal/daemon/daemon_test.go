@@ -158,6 +158,10 @@ func (g *fakeGroup) state() (frozen, killed bool) {
 type fakeGroups struct {
 	mu     sync.Mutex
 	groups map[string]*fakeGroup
+	// governed records which pids sit inside a session cgroup. govErr makes
+	// the lookup fail, which is how the fail-closed path is exercised.
+	governed map[int32]bool
+	govErr   error
 }
 
 func (f *fakeGroups) Create(sid string) (SessionGroup, error) {
@@ -172,6 +176,24 @@ func (f *fakeGroups) Create(sid string) (SessionGroup, error) {
 }
 func (f *fakeGroups) Capabilities() containment.Capabilities {
 	return containment.Capabilities{Freeze: true, Kill: true}
+}
+func (f *fakeGroups) Governed(pid int32) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.govErr != nil {
+		return false, f.govErr
+	}
+	return f.governed[pid], nil
+}
+
+// govern marks pid as being inside a session cgroup.
+func (f *fakeGroups) govern(pid int32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.governed == nil {
+		f.governed = map[int32]bool{}
+	}
+	f.governed[pid] = true
 }
 func (f *fakeGroups) get(sid string) *fakeGroup {
 	f.mu.Lock()
@@ -581,6 +603,104 @@ func TestStartRefusesAProcessThatIsNotTheCallersChild(t *testing.T) {
 	var e *ipc.Error
 	if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {
 		t.Fatalf("StartSession with a foreign pid = %v", err)
+	}
+}
+
+// A governed agent runs as its owner's UID, so UID authorization alone would
+// let it drive the daemon. Every call that changes state has to refuse it.
+func TestGovernedCallerCannotChangeState(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	ctx := context.Background()
+	sid := r.start(t, "run the go tests")
+	r.feed(t, sid, synth.Spec{Type: abi.EvtNetConnect, Ret: 0,
+		Net: &synth.Net{Family: 2, DestAddr: netip.MustParseAddr("203.0.113.9"), DestPort: 443}})
+
+	// Every later call arrives from a process inside a session cgroup.
+	r.groups.govern(int32(os.Getpid()))
+
+	denied := func(what string, err error) {
+		t.Helper()
+		var e *ipc.Error
+		if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {
+			t.Fatalf("%s from a governed caller = %v, want permission_denied", what, err)
+		}
+	}
+	_, err := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: "anything", WorkspaceRoot: r.ws})
+	denied("CreateSession", err)
+	denied("ApproveEnvelope", r.client.ApproveEnvelope(ctx,
+		ipc.ApproveEnvelopeRequest{SessionID: sid, Approved: true}))
+	denied("StartSession", r.client.StartSession(ctx, sid, 4242))
+	denied("EndSession", func() error { _, err := r.client.EndSession(ctx, sid, 0); return err }())
+
+	if n := r.d.refusalCount(); n < 4 {
+		t.Fatalf("refusals = %d, want at least 4", n)
+	}
+	if s, _ := r.client.GetSession(ctx, sid); s == nil || session.IsTerminal(s.State) {
+		t.Fatal("the refused calls ended the session anyway")
+	}
+}
+
+// A frozen agent must not be able to answer the approval it is waiting on,
+// directly or through a helper it placed in a session cgroup.
+func TestGovernedCallerCannotAnswerApprovals(t *testing.T) {
+	r := newRig(t, policy.ModeInteractive, time.Minute)
+	ctx := context.Background()
+	sid := r.start(t, "run the go tests")
+	r.feed(t, sid, synth.Spec{Type: abi.EvtNetConnect, Ret: 0,
+		Net: &synth.Net{Family: 2, DestAddr: netip.MustParseAddr("203.0.113.9"), DestPort: 443}})
+	waitFor(t, "the freeze", func() bool { f, _ := r.groups.get(sid).state(); return f })
+
+	pending, err := r.client.PendingApprovals(ctx)
+	if err != nil || len(pending) == 0 {
+		t.Fatalf("PendingApprovals = %v, %v", pending, err)
+	}
+	r.groups.govern(int32(os.Getpid()))
+
+	err = r.client.RespondApproval(ctx, decision.ApprovalResponse{RequestID: pending[0].ID, Approved: true})
+	var e *ipc.Error
+	if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {
+		t.Fatalf("self-approval = %v, want permission_denied", err)
+	}
+	if f, _ := r.groups.get(sid).state(); !f {
+		t.Fatal("the session was thawed by a governed caller")
+	}
+}
+
+// A caller the daemon cannot place is refused. Otherwise the check is optional
+// for anyone able to make the lookup fail.
+func TestUnlocatableCallerIsRefused(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	r.groups.govErr = errors.New("no such process")
+	_, err := r.client.CreateSession(context.Background(),
+		ipc.CreateSessionRequest{Prompt: "run the go tests", WorkspaceRoot: r.ws})
+	var e *ipc.Error
+	if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {
+		t.Fatalf("CreateSession with an unlocatable caller = %v, want permission_denied", err)
+	}
+}
+
+// An already-governed process cannot be moved into a second session, which is
+// what would take it out of the scope its owner approved.
+func TestAlreadyGovernedProcessIsNotAdopted(t *testing.T) {
+	r := newRig(t, policy.ModeMonitor, time.Minute)
+	ctx := context.Background()
+	resp, err := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: "run the go tests", WorkspaceRoot: r.ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.client.ApproveEnvelope(ctx, ipc.ApproveEnvelopeRequest{SessionID: resp.SessionID, Approved: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.groups.govern(4242)
+	err = r.client.StartSession(ctx, resp.SessionID, 4242)
+	var e *ipc.Error
+	if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {
+		t.Fatalf("adopting a governed pid = %v, want permission_denied", err)
+	}
+	if g := r.groups.get(resp.SessionID); g != nil {
+		if _, k := g.state(); !k {
+			t.Log("note: the refused session kept its cgroup; it is cleaned up by session failure")
+		}
 	}
 }
 

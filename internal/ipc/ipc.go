@@ -193,6 +193,10 @@ type StatusResponse struct {
 	// SelfTest is the startup check that the critical probe actually reports.
 	SelfTest SelfTestResult `json:"self_test"`
 
+	// RefusedRequests counts control requests rejected because the caller was
+	// itself a governed process, or could not be located.
+	RefusedRequests int `json:"refused_requests"`
+
 	// TelemetryHealthy reports whether the attribution floor is attached and
 	// the startup self-test passed. Probes merely being attached is not enough.
 	// False means the daemon is running but governing nothing, the most

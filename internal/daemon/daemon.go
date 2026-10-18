@@ -56,6 +56,8 @@ type SessionGroup interface {
 type Groups interface {
 	Create(sessionID string) (SessionGroup, error)
 	Capabilities() containment.Capabilities
+	// Governed reports whether pid is inside a session cgroup this daemon owns.
+	Governed(pid int32) (bool, error)
 }
 
 // Host answers questions about local processes and users.
@@ -130,6 +132,10 @@ type Daemon struct {
 
 	control chan func()
 	started time.Time
+
+	// refusals counts control requests rejected because the caller was itself
+	// governed, or could not be located.
+	refusals int
 
 	prober          Prober
 	selfTestTimeout time.Duration
