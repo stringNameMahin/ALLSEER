@@ -20,6 +20,8 @@ package ece
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
@@ -139,6 +141,44 @@ type Constraints struct {
 	// AllowNetworkByDefault inverts network posture. Defaults to false: for a
 	// coding agent, egress should be the exception.
 	AllowNetworkByDefault bool `json:"allow_network_by_default,omitempty"`
+}
+
+// MarshalJSON writes MaxDuration as a Go duration string such as "30m0s", the
+// form ece.v1alpha1.schema.json documents. time.Duration on its own would
+// write integer nanoseconds, which the schema rejects.
+func (c Constraints) MarshalJSON() ([]byte, error) {
+	// wire has no methods, so marshalling it does not re-enter this one. The
+	// outer field is shallower and so replaces wire's max_duration.
+	type wire Constraints
+	out := struct {
+		MaxDuration string `json:"max_duration,omitempty"`
+		wire
+	}{wire: wire(c)}
+	if c.MaxDuration != 0 {
+		out.MaxDuration = c.MaxDuration.String()
+	}
+	return json.Marshal(out)
+}
+
+// UnmarshalJSON reads MaxDuration from a Go duration string.
+func (c *Constraints) UnmarshalJSON(data []byte) error {
+	type wire Constraints
+	var in struct {
+		MaxDuration string `json:"max_duration,omitempty"`
+		wire
+	}
+	if err := json.Unmarshal(data, &in); err != nil {
+		return err
+	}
+	*c = Constraints(in.wire)
+	if in.MaxDuration != "" {
+		d, err := time.ParseDuration(in.MaxDuration)
+		if err != nil {
+			return fmt.Errorf("ece: max_duration %q: %w", in.MaxDuration, err)
+		}
+		c.MaxDuration = d
+	}
+	return nil
 }
 
 // Action is the enforcement outcome the envelope prescribes.
