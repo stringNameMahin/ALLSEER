@@ -7,8 +7,16 @@ One document per schema shape, validated by
 |---|---|---|
 | `ece.example.json` | `ece.v1alpha1.schema.json` | A reference envelope, hand-written |
 | `event.example.json` | `event.v1alpha1.schema.json` | A recorded kernel event, lifted from the replay corpus |
-| `decision.example.json` | `decision.v1alpha1.schema.json` | A scored decision, lifted from the golden corpus |
-| `decision.unscored.example.json` | `decision.v1alpha1.schema.json` | The decision a failed pipeline stage produces |
+| `decision.example.json` | `decision.v1alpha2.schema.json` | A scored decision, lifted from the golden corpus |
+| `decision.unscored.example.json` | `decision.v1alpha2.schema.json` | The decision a failed pipeline stage produces |
+| `audit.session_start.example.json` | `audit.v1alpha2.schema.json` | The record that opens a session in the audit log |
+| `audit.approval.example.json` | `audit.v1alpha2.schema.json` | An approval request's answer |
+| `audit.control_refused.example.json` | `audit.v1alpha2.schema.json` | A control request refused because a governed process sent it |
+| `audit.session_end.example.json` | `audit.v1alpha2.schema.json` | The record that closes a session in the audit log |
+
+Every line of the audit log names its kind in a `record` field, decisions
+included. `audit.v1alpha2.schema.json` admits any line; the decision examples
+are validated against both schemas.
 
 These are the published shape of the wire contracts. `pkg/` is public precisely
 so an external consumer can parse ALLSEER output without vendoring the system,
@@ -55,6 +63,12 @@ emitted:
   wire format was settled, and a contract is worth more when its awkward case is
   written down.
 
+The four `audit.*` documents are real output too: lines lifted from the audit
+log the root end-to-end suite (`test/e2e`) writes, pretty-printed and otherwise
+unchanged. The session start is from the monitor-mode scenario, the approval
+from the interactive denial, the refusal from the nested-session attempt, and
+the session end from the enforce-mode kill.
+
 ## Regenerating
 
 The three derived documents are copies. If the corpora they come from change,
@@ -63,9 +77,11 @@ in what the system publishes.
 
 ## Cross-file references
 
-`decision.v1alpha1.schema.json` and `event.v1alpha1.schema.json` both `$ref`
+`decision.v1alpha2.schema.json` and `event.v1alpha1.schema.json` both `$ref`
 into `ece.v1alpha1.schema.json`, for the action, grant, capability-kind and
-domain vocabularies. Each schema's `$id` is
+domain vocabularies. `audit.v1alpha2.schema.json` refs the decision schema for
+decision lines and the envelope schema for the envelope a session start
+carries. Each schema's `$id` is
 `https://allseer.dev/schema/<filename>`, which is what makes those
 filename-relative refs resolve to the right document - under a resolver that
 loads by `$id` and under one that loads from this directory alike.

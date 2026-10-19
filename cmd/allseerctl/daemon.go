@@ -98,6 +98,9 @@ func runStatus(args []string) int {
 			fmt.Fprintf(w, "not watched\t%s through %v: those produce no record\n", g.Kind, g.Missing)
 		}
 	}
+	if st.AuditErrors > 0 {
+		fmt.Fprintf(w, "audit log	%d WRITE FAILURES; the log is missing records\n", st.AuditErrors)
+	}
 	if st.RefusedRequests > 0 {
 		fmt.Fprintf(w, "refused requests\t%d (callers inside a governed session, or not locatable)\n", st.RefusedRequests)
 	}

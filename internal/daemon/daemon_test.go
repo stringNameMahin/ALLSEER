@@ -35,6 +35,7 @@ type fakeTel struct {
 	ch       chan event.Event
 	attached map[string]uint64
 	observe  []capability.Kind
+	gaps     []telemetry.EntryPointGap
 }
 
 func newFakeTel() *fakeTel {
@@ -50,7 +51,9 @@ func (f *fakeTel) Close() error                             { return nil }
 func (f *fakeTel) Stats() event.SourceStats                 { return event.SourceStats{} }
 func (f *fakeTel) CollectorStats() telemetry.CollectorStats { return telemetry.CollectorStats{} }
 func (f *fakeTel) Coverage() telemetry.Coverage {
-	return telemetry.Coverage{FloorIntact: true, Observable: f.observe}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return telemetry.Coverage{FloorIntact: true, Observable: f.observe, EntryPoints: f.gaps}
 }
 func (f *fakeTel) AttachCgroup(_ context.Context, sid string, id uint64, _ int32) error {
 	f.mu.Lock()
@@ -182,9 +185,10 @@ func (g *fakeGroup) state() (frozen, killed bool) {
 type fakeGroups struct {
 	mu     sync.Mutex
 	groups map[string]*fakeGroup
-	// governed records which pids sit inside a session cgroup. govErr makes
-	// the lookup fail, which is how the fail-closed path is exercised.
-	governed map[int32]bool
+	// governed maps pids inside a session cgroup to the session holding them.
+	// govErr makes the lookup fail, which is how the fail-closed path is
+	// exercised.
+	governed map[int32]string
 	govErr   error
 }
 
@@ -201,23 +205,24 @@ func (f *fakeGroups) Create(sid string) (SessionGroup, error) {
 func (f *fakeGroups) Capabilities() containment.Capabilities {
 	return containment.Capabilities{Freeze: true, Kill: true}
 }
-func (f *fakeGroups) Governed(pid int32) (bool, error) {
+func (f *fakeGroups) Governed(pid int32) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.govErr != nil {
-		return false, f.govErr
+		return "", false, f.govErr
 	}
-	return f.governed[pid], nil
+	sid, ok := f.governed[pid]
+	return sid, ok, nil
 }
 
-// govern marks pid as being inside a session cgroup.
-func (f *fakeGroups) govern(pid int32) {
+// govern marks pid as being inside session sid's cgroup.
+func (f *fakeGroups) govern(pid int32, sid string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.governed == nil {
-		f.governed = map[int32]bool{}
+		f.governed = map[int32]string{}
 	}
-	f.governed[pid] = true
+	f.governed[pid] = sid
 }
 func (f *fakeGroups) get(sid string) *fakeGroup {
 	f.mu.Lock()
@@ -232,14 +237,29 @@ func (fakeHost) Home(uint32) string                     { return "/home/dev" }
 func (fakeHost) UserName(uint32) string                 { return "dev" }
 
 type memSink struct {
-	mu  sync.Mutex
-	got []decision.Decision
+	mu   sync.Mutex
+	got  []decision.Decision
+	recs []decision.Record
+	// kinds is every line in the order it was written.
+	kinds  []decision.RecordKind
+	recErr error
 }
 
 func (s *memSink) Emit(_ context.Context, d decision.Decision) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.got = append(s.got, d)
+	s.kinds = append(s.kinds, decision.RecordDecision)
+	return nil
+}
+func (s *memSink) EmitRecord(_ context.Context, r decision.Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recErr != nil {
+		return s.recErr
+	}
+	s.recs = append(s.recs, r)
+	s.kinds = append(s.kinds, r.RecordKind())
 	return nil
 }
 func (s *memSink) Flush(context.Context) error { return nil }
@@ -247,6 +267,16 @@ func (s *memSink) all() []decision.Decision {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]decision.Decision(nil), s.got...)
+}
+func (s *memSink) records() []decision.Record {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]decision.Record(nil), s.recs...)
+}
+func (s *memSink) order() []decision.RecordKind {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]decision.RecordKind(nil), s.kinds...)
 }
 
 // --- harness -----------------------------------------------------------------
@@ -747,7 +777,7 @@ func TestGovernedCallerCannotChangeState(t *testing.T) {
 		Net: &synth.Net{Family: 2, DestAddr: netip.MustParseAddr("203.0.113.9"), DestPort: 443}})
 
 	// Every later call arrives from a process inside a session cgroup.
-	r.groups.govern(int32(os.Getpid()))
+	r.groups.govern(int32(os.Getpid()), sid)
 
 	denied := func(what string, err error) {
 		t.Helper()
@@ -785,7 +815,7 @@ func TestGovernedCallerCannotAnswerApprovals(t *testing.T) {
 	if err != nil || len(pending) == 0 {
 		t.Fatalf("PendingApprovals = %v, %v", pending, err)
 	}
-	r.groups.govern(int32(os.Getpid()))
+	r.groups.govern(int32(os.Getpid()), sid)
 
 	err = r.client.RespondApproval(ctx, decision.ApprovalResponse{RequestID: pending[0].ID, Approved: true})
 	var e *ipc.Error
@@ -822,7 +852,7 @@ func TestAlreadyGovernedProcessIsNotAdopted(t *testing.T) {
 	if err := r.client.ApproveEnvelope(ctx, ipc.ApproveEnvelopeRequest{SessionID: resp.SessionID, Approved: true}); err != nil {
 		t.Fatal(err)
 	}
-	r.groups.govern(4242)
+	r.groups.govern(4242, "s-other")
 	err = r.client.StartSession(ctx, resp.SessionID, 4242)
 	var e *ipc.Error
 	if !errors.As(err, &e) || e.Code != ipc.ErrCodePermissionDenied {

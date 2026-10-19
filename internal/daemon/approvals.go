@@ -166,6 +166,27 @@ func (a *approvals) resolve(ctx context.Context, resp decision.ApprovalResponse)
 	a.d.log.Info("approval answered", "session", sid, "request", resp.RequestID,
 		"approved", resp.Approved, "by", resp.RespondedBy, "timed_out", resp.TimedOut)
 
+	effect := decision.EffectWait
+	switch {
+	case !resp.Approved:
+		effect = decision.EffectTerminate
+	case terminating:
+		effect = decision.EffectNone
+	case remaining == 0:
+		effect = decision.EffectResume
+	}
+	at := resp.RespondedAt
+	if at.IsZero() {
+		at = a.d.now()
+	}
+	// Written before the answer takes effect, so a resumed session's next
+	// decisions follow it in the log.
+	a.d.record(ctx, decision.Approval{
+		SessionID: sid, Timestamp: at.UTC(), RequestID: resp.RequestID, DecisionID: p.req.Decision.ID,
+		Approved: resp.Approved, RespondedBy: resp.RespondedBy, TimedOut: resp.TimedOut,
+		Reason: resp.Reason, Effect: effect,
+	})
+
 	if !resp.Approved {
 		reason := fmt.Sprintf("approval %s denied by %s", resp.RequestID, resp.RespondedBy)
 		if resp.TimedOut {

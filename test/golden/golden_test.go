@@ -328,7 +328,14 @@ func TestGoldenStreamIsWellFormed(t *testing.T) {
 					t.Errorf("line %d is blank; a JSONL stream has no blank records", i)
 					continue
 				}
-				var d decision.Decision
+				// plain has Decision's fields and none of its methods, so the
+				// strict decoder below applies to every field rather than
+				// stopping at Decision's own UnmarshalJSON.
+				type plain decision.Decision
+				var d struct {
+					Record decision.RecordKind `json:"record"`
+					plain
+				}
 				dec := json.NewDecoder(strings.NewReader(line))
 				dec.DisallowUnknownFields()
 				if err := dec.Decode(&d); err != nil {
@@ -337,6 +344,9 @@ func TestGoldenStreamIsWellFormed(t *testing.T) {
 					// That is the drift worth catching: it means the record on
 					// disk stopped being the type.
 					t.Fatalf("line %d does not decode into decision.Decision: %v\nline: %s", i, err, line)
+				}
+				if d.Record != decision.RecordDecision {
+					t.Fatalf("line %d has record kind %q, want %q", i, d.Record, decision.RecordDecision)
 				}
 				if err := dec.Decode(new(json.RawMessage)); err == nil {
 					t.Errorf("line %d holds more than one JSON value", i)
@@ -441,7 +451,7 @@ func TestGoldenDecisionsAreTheExpectedFindings(t *testing.T) {
 // TestNoGoldenDecisionIsUnscored guards the one shape the shipped decision
 // schema cannot accept.
 //
-// api/schema/decision.v1alpha1.schema.json requires risk.level to be one of five
+// api/schema/decision.v1alpha2.schema.json requires risk.level to be one of five
 // named levels and risk.factors to be an array. Decision.Risk is a value, so a
 // decision nothing scored publishes "" and null, and the schema admits neither
 // — an open wire-format question recorded in devdocs/milestones.md and STATUS.md

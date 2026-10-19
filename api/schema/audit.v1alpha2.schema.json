@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://allseer.dev/schema/audit.v1alpha2.schema.json",
+  "title": "ALLSEER Audit Record",
+  "description": "One line of the audit log. Every line carries a 'record' field naming its kind, and a reader dispatches on it. Decisions are the per-event verdicts; the other kinds are session-level facts that frame them: what the probes could see when the session started, how approval requests were answered, control requests refused, and how the session ended.",
+  "type": "object",
+  "required": ["record"],
+  "properties": {
+    "record": { "$ref": "#/$defs/recordKind" }
+  },
+  "oneOf": [
+    { "$ref": "decision.v1alpha2.schema.json" },
+    { "$ref": "#/$defs/sessionStart" },
+    { "$ref": "#/$defs/approval" },
+    { "$ref": "#/$defs/controlRefused" },
+    { "$ref": "#/$defs/sessionEnd" }
+  ],
+
+  "$defs": {
+    "recordKind": {
+      "type": "string",
+      "enum": ["decision", "session_start", "approval", "control_refused", "session_end"]
+    },
+
+    "capabilityKinds": {
+      "type": "array",
+      "items": { "$ref": "ece.v1alpha1.schema.json#/$defs/capabilityKind" }
+    },
+
+    "sessionStart": {
+      "description": "Written when an agent begins running under governance. Carries what every later decision in the session is judged against. Sessions do not survive a daemon restart, so the envelope here is the only durable copy.",
+      "type": "object",
+      "required": ["record", "session_id", "timestamp", "owner", "owner_uid", "mode", "root_pid", "cgroup_id", "envelope", "coverage"],
+      "additionalProperties": false,
+      "properties": {
+        "record": { "const": "session_start" },
+        "session_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "owner": { "type": "string" },
+        "owner_uid": { "type": "integer", "minimum": 0 },
+        "mode": { "type": "string", "enum": ["monitor", "warn", "interactive", "enforce"] },
+        "root_pid": { "type": "integer" },
+        "cgroup_id": { "type": "integer", "minimum": 0 },
+        "envelope": { "$ref": "ece.v1alpha1.schema.json" },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "daemon_version": { "type": "string" }
+      }
+    },
+
+    "coverage": {
+      "description": "What the attached probes could observe. A missing record for an operation the probes could not see is not evidence that the operation did not happen.",
+      "type": "object",
+      "required": ["observable", "degraded"],
+      "additionalProperties": false,
+      "properties": {
+        "observable": { "$ref": "#/$defs/capabilityKinds" },
+        "unobservable": {
+          "description": "What this build can watch and this load could not.",
+          "$ref": "#/$defs/capabilityKinds"
+        },
+        "degraded": {
+          "description": "This load lost something this build can watch.",
+          "type": "boolean"
+        },
+        "entry_points": {
+          "description": "Observable kinds that some entry point is not watched for, whether the build never watches it or this load lost it.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": { "$ref": "ece.v1alpha1.schema.json#/$defs/capabilityKind" },
+              "missing": {
+                "description": "Entry points that produce no record at all.",
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "success_only": {
+                "description": "Entry points recorded only when the kernel permitted the operation.",
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "approval": {
+      "description": "The answer to an approval request a frozen session was waiting on: a human's, or the configured default when nobody answered in time.",
+      "type": "object",
+      "required": ["record", "session_id", "timestamp", "request_id", "decision_id", "approved", "responded_by", "timed_out", "effect"],
+      "additionalProperties": false,
+      "properties": {
+        "record": { "const": "approval" },
+        "session_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "request_id": { "type": "string" },
+        "decision_id": {
+          "description": "The request_approval decision this answers.",
+          "type": "string"
+        },
+        "approved": { "type": "boolean" },
+        "responded_by": {
+          "description": "The answering user's name, or 'timeout'.",
+          "type": "string"
+        },
+        "timed_out": { "type": "boolean" },
+        "reason": { "type": "string" },
+        "effect": {
+          "description": "resume: the last open request was approved and the session resumes. wait: approved, but other requests keep it frozen. terminate: denied or timed out under deny; the session is killed and its other requests withdrawn. none: approved, but an earlier denial is already terminating the session.",
+          "type": "string",
+          "enum": ["resume", "wait", "terminate", "none"]
+        }
+      }
+    },
+
+    "controlRefused": {
+      "description": "A control-socket request the daemon turned down because the caller was inside a governed session, or could not be located.",
+      "type": "object",
+      "required": ["record", "timestamp", "method", "pid", "uid", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "record": { "const": "control_refused" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "method": { "type": "string" },
+        "pid": { "type": "integer" },
+        "uid": { "type": "integer", "minimum": 0 },
+        "session_id": {
+          "description": "The session whose cgroup holds the caller, when known.",
+          "type": "string"
+        },
+        "reason": { "type": "string" }
+      }
+    },
+
+    "sessionEnd": {
+      "description": "Written once, when a session reaches a terminal state, whether or not it ever started.",
+      "type": "object",
+      "required": ["record", "session_id", "timestamp", "result", "reason", "telemetry_complete", "violation_count", "blocked_count", "events_observed", "decisions_issued", "peak_risk_score"],
+      "additionalProperties": false,
+      "properties": {
+        "record": { "const": "session_end" },
+        "session_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "result": {
+          "description": "completed: the agent finished. terminated: policy stopped it. failed: governance itself broke.",
+          "type": "string",
+          "enum": ["completed", "terminated", "failed"]
+        },
+        "reason": { "type": "string" },
+        "telemetry_complete": {
+          "description": "False qualifies every conclusion drawn from the session, including that nothing bad happened.",
+          "type": "boolean"
+        },
+        "violation_count": { "type": "integer", "minimum": 0 },
+        "blocked_count": { "type": "integer", "minimum": 0 },
+        "events_observed": { "type": "integer", "minimum": 0 },
+        "decisions_issued": { "type": "integer", "minimum": 0 },
+        "peak_risk_score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "capability_usage": {
+          "type": "object",
+          "propertyNames": { "$ref": "ece.v1alpha1.schema.json#/$defs/capabilityKind" },
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "unused_grants": { "$ref": "#/$defs/capabilityKinds" },
+        "top_violations": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

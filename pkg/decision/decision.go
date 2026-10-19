@@ -10,6 +10,7 @@ package decision
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
@@ -51,6 +52,36 @@ type Decision struct {
 	// distinction is critical for audit, since a "block" that was never
 	// enforced must not read as if it stopped something.
 	Enforced bool `json:"enforced"`
+}
+
+// MarshalJSON writes the decision with its record kind first, so a decision
+// says what it is on every wire it travels: the audit log, the decision stream
+// and an approval request alike.
+func (d Decision) MarshalJSON() ([]byte, error) {
+	// A distinct type so json.Marshal does not re-enter this method.
+	type wire Decision
+	return json.Marshal(struct {
+		Record RecordKind `json:"record"`
+		wire
+	}{RecordDecision, wire(d)})
+}
+
+// UnmarshalJSON refuses an audit line of another kind, so a session record
+// read by mistake does not decode into a near-empty decision.
+func (d *Decision) UnmarshalJSON(data []byte) error {
+	type wire Decision
+	var w struct {
+		Record RecordKind `json:"record"`
+		wire
+	}
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	if w.Record != "" && w.Record != RecordDecision {
+		return fmt.Errorf("decision: audit line is a %q record, not %q", w.Record, RecordDecision)
+	}
+	*d = Decision(w.wire)
+	return nil
 }
 
 // Verdict classifies an observation against the envelope.
@@ -159,7 +190,7 @@ type RiskAssessment struct {
 // Decision.Risk is a value rather than a pointer, so an unscored decision
 // carries a zero RiskAssessment no matter what the producer does. Written out
 // literally that is `"level": ""` and `"factors": null`, and
-// api/schema/decision.v1alpha1.schema.json admits neither - which meant this
+// api/schema/decision.v1alpha2.schema.json admits neither - which meant this
 // build could publish a record that fails its own contract, and did, to disk.
 //
 // Two normalizations, and the distinction between them matters:
@@ -213,7 +244,7 @@ const (
 	//
 	// Producers set it explicitly. RiskAssessment.MarshalJSON renders the zero
 	// value as this as well, so a producer that forgets cannot publish a shape
-	// api/schema/decision.v1alpha1.schema.json rejects. That mirrors how the
+	// api/schema/decision.v1alpha2.schema.json rejects. That mirrors how the
 	// record ABI version is handled: the explicit set is the mechanism, the
 	// marshaler is the backstop.
 	LevelUnscored Level = "unscored"

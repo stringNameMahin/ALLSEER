@@ -55,8 +55,16 @@ validate "$SCHEMA_DIR/ece.v1alpha1.schema.json" "$EXAMPLE_DIR/ece.example.json"
 # real record lifted from test/testdata/golden/; the unscored one is what a
 # stage failure produces, and it is the shape that was rejected by this schema
 # until the wire format was settled.
-validate "$SCHEMA_DIR/decision.v1alpha1.schema.json" "$EXAMPLE_DIR/decision.example.json"
-validate "$SCHEMA_DIR/decision.v1alpha1.schema.json" "$EXAMPLE_DIR/decision.unscored.example.json"
+validate "$SCHEMA_DIR/decision.v1alpha2.schema.json" "$EXAMPLE_DIR/decision.example.json"
+validate "$SCHEMA_DIR/decision.v1alpha2.schema.json" "$EXAMPLE_DIR/decision.unscored.example.json"
+
+# Every line of the audit log validates against the audit schema, decisions
+# included, so a consumer can check a log line by line without dispatching.
+for doc in decision.example.json decision.unscored.example.json \
+  audit.session_start.example.json audit.approval.example.json \
+  audit.control_refused.example.json audit.session_end.example.json; do
+  validate "$SCHEMA_DIR/audit.v1alpha2.schema.json" "$EXAMPLE_DIR/$doc"
+done
 
 validate "$SCHEMA_DIR/event.v1alpha1.schema.json" "$EXAMPLE_DIR/event.example.json"
 

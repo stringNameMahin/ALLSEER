@@ -7,7 +7,7 @@ import (
 )
 
 // The wire form of a risk assessment is a contract with external tooling -
-// api/schema/decision.v1alpha1.schema.json is the published half of it - so the
+// api/schema/decision.v1alpha2.schema.json is the published half of it - so the
 // cases below are about bytes rather than about Go values.
 
 // An assessment nobody made must render in the one form the schema admits, and

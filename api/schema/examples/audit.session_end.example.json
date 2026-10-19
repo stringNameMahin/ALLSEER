@@ -1,0 +1,27 @@
+{
+  "record": "session_end",
+  "session_id": "s-20261019t111305-f9fb33cb",
+  "timestamp": "2026-10-19T11:13:05.365981314Z",
+  "result": "terminated",
+  "reason": "terminated: block in enforce mode, with no human to ask",
+  "telemetry_complete": true,
+  "violation_count": 3,
+  "blocked_count": 1,
+  "events_observed": 23,
+  "decisions_issued": 23,
+  "peak_risk_score": 100,
+  "capability_usage": {
+    "fs.create": 1,
+    "fs.read": 17,
+    "fs.write": 1,
+    "ipc.unixsocket": 2,
+    "process.exec": 2
+  },
+  "unused_grants": [
+    "process.exit"
+  ],
+  "top_violations": [
+    "outside_envelope \u00d72 (rule medium-risk-departure)",
+    "explicitly_denied \u00d71 (rule envelope-explicit-denial)"
+  ]
+}

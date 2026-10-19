@@ -429,7 +429,8 @@ func TestSerializedRecordRoundTripsToTheDecision(t *testing.T) {
 
 // The writer adds nothing of its own. A record with a field the type does not
 // have is a second decision schema, and the point of using the type's own JSON
-// encoding is that there is only one.
+// encoding is that there is only one. The record kind is part of that encoding,
+// not something the sink adds.
 func TestNoFieldsAreFabricated(t *testing.T) {
 	s, path := openSink(t, config.AuditConfig{RecordAllEvents: true})
 
@@ -451,8 +452,12 @@ func TestNoFieldsAreFabricated(t *testing.T) {
 	if err := json.Unmarshal([]byte(line), &keys); err != nil {
 		t.Fatalf("decoding to a key map: %v", err)
 	}
+	if kind, err := decision.KindOf([]byte(line)); err != nil || kind != decision.RecordDecision {
+		t.Errorf("record kind = %q, %v; want %q", kind, err, decision.RecordDecision)
+	}
 	want := map[string]bool{
-		"id": true, "session_id": true, "event_id": true, "timestamp": true,
+		"record": true,
+		"id":     true, "session_id": true, "event_id": true, "timestamp": true,
 		"action": true, "verdict": true, "risk": true, "reasoning": true,
 		"matched_rule": true, "latency": true, "enforced": true,
 	}
@@ -522,7 +527,7 @@ func TestIdenticalDecisionsSerializeIdentically(t *testing.T) {
 
 // Contradiction 1, settled. An unscored decision used to reach disk with an
 // empty risk level and a null factor list, neither of which
-// api/schema/decision.v1alpha1.schema.json admitted, so this build could
+// api/schema/decision.v1alpha2.schema.json admitted, so this build could
 // publish a record that failed its own contract.
 //
 // The wire-format decision was taken in favour of a named absence:
@@ -1076,3 +1081,129 @@ func (discard) Sync() error                 { return nil }
 func (discard) Close() error                { return nil }
 
 var _ io.Writer = discard{}
+
+// --- session records ---------------------------------------------------------
+
+func sessionStart() decision.SessionStart {
+	return decision.SessionStart{
+		SessionID: "s-git", Timestamp: stamp, Owner: "dev", OwnerUID: 1000,
+		Mode: "enforce", RootPID: 4242, CgroupID: 77,
+		Envelope: &ece.Envelope{SchemaVersion: ece.SchemaVersion, ID: "env-1", SessionID: "s-git", Sealed: true, Digest: "sha256:ab"},
+		Coverage: decision.Coverage{
+			Observable: []capability.Kind{capability.KindFileRead, capability.KindNetConnect},
+			EntryPoints: []decision.EntryPointGap{
+				{Kind: capability.KindNetConnect, Missing: []string{"io_uring", "sendto"}},
+			},
+		},
+	}
+}
+
+func sessionEnd() decision.SessionEnd {
+	return decision.SessionEnd{
+		SessionID: "s-git", Timestamp: stamp.Add(time.Minute), Result: "terminated",
+		Reason: "terminated: blocked by policy", ViolationCount: 1, BlockedCount: 1,
+		EventsObserved: 3, DecisionsIssued: 3, PeakRiskScore: 73.5,
+	}
+}
+
+// Session records share the decisions' stream, each line naming its kind and
+// decoding back to the value that was written.
+func TestSessionRecordsShareTheDecisionStream(t *testing.T) {
+	s, path := openSink(t, config.AuditConfig{RecordAllEvents: true})
+	ctx := context.Background()
+	approval := decision.Approval{SessionID: "s-git", Timestamp: stamp, RequestID: "apr-1",
+		DecisionID: "d-gt-008", RespondedBy: "dev", Effect: decision.EffectTerminate}
+	refused := decision.ControlRefused{Timestamp: stamp, Method: "CreateSession", PID: 99, UID: 1000,
+		SessionID: "s-git", Reason: "the caller is inside a governed session"}
+
+	if err := s.EmitRecord(ctx, sessionStart()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Emit(ctx, scored()); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []decision.Record{approval, refused, sessionEnd()} {
+		if err := s.EmitRecord(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := lines(t, path)
+	want := []decision.RecordKind{decision.RecordSessionStart, decision.RecordDecision,
+		decision.RecordApproval, decision.RecordControlRefused, decision.RecordSessionEnd}
+	if len(got) != len(want) {
+		t.Fatalf("%d lines, want %d", len(got), len(want))
+	}
+	for i, line := range got {
+		kind, err := decision.KindOf([]byte(line))
+		if err != nil || kind != want[i] {
+			t.Errorf("line %d kind = %q, %v; want %q", i, kind, err, want[i])
+		}
+	}
+
+	roundTrip := func(i int, into, want any) {
+		t.Helper()
+		if err := json.Unmarshal([]byte(got[i]), into); err != nil {
+			t.Fatalf("decoding line %d: %v", i, err)
+		}
+		if v := reflect.ValueOf(into).Elem().Interface(); !reflect.DeepEqual(v, want) {
+			t.Errorf("line %d round trip mismatch\n got: %+v\nwant: %+v", i, v, want)
+		}
+	}
+	roundTrip(0, new(decision.SessionStart), sessionStart())
+	roundTrip(2, new(decision.Approval), approval)
+	roundTrip(3, new(decision.ControlRefused), refused)
+	roundTrip(4, new(decision.SessionEnd), sessionEnd())
+
+	// A line read as the wrong type is refused rather than half-decoded.
+	var d decision.Decision
+	if err := json.Unmarshal([]byte(got[0]), &d); err == nil {
+		t.Error("a session_start line decoded as a decision")
+	}
+	var end decision.SessionEnd
+	if err := json.Unmarshal([]byte(got[1]), &end); err == nil {
+		t.Error("a decision line decoded as a session end")
+	}
+
+	if st := s.Stats(); st.Written != 1 || st.Records != 4 {
+		t.Errorf("Stats = %+v, want 1 decision and 4 records", st)
+	}
+}
+
+// RecordAllEvents selects decisions only. The records that frame them are what
+// tell a short log from a blind one, so they are always written.
+func TestSessionRecordsAreNeverFiltered(t *testing.T) {
+	s, path := openSink(t, config.AuditConfig{RecordAllEvents: false})
+	ctx := context.Background()
+	_ = s.EmitRecord(ctx, sessionStart())
+	_ = s.Emit(ctx, allowed("gt-001"))
+	_ = s.EmitRecord(ctx, sessionEnd())
+
+	got := lines(t, path)
+	if len(got) != 2 {
+		t.Fatalf("%d lines, want the two session records", len(got))
+	}
+	if st := s.Stats(); st.Filtered != 1 || st.Records != 2 {
+		t.Errorf("Stats = %+v, want 1 filtered and 2 records", st)
+	}
+}
+
+func TestSessionRecordFailuresAreReported(t *testing.T) {
+	f := &countingFile{writeErr: errors.New("disk full")}
+	s := newSink(f, config.AuditConfig{})
+
+	err := s.EmitRecord(context.Background(), sessionEnd())
+	if err == nil || !strings.Contains(err.Error(), "disk full") || !strings.Contains(err.Error(), "session_end") {
+		t.Fatalf("EmitRecord over a failing writer = %v, want the cause and the record kind", err)
+	}
+	if st := s.Stats(); st.Errors != 1 || st.Records != 0 {
+		t.Errorf("Stats = %+v, want Errors 1 and Records 0", st)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EmitRecord(context.Background(), sessionEnd()); !errors.Is(err, ErrClosed) {
+		t.Errorf("EmitRecord after Close = %v, want ErrClosed", err)
+	}
+}

@@ -101,25 +101,32 @@ func (m *Manager) List() ([]*Group, error) {
 	return out, nil
 }
 
-// Governed reports whether pid sits inside a session cgroup under this base.
+// Governed reports whether pid sits inside a session cgroup under this base,
+// and the session whose cgroup holds it. The session is "" for a process in
+// the base itself.
 //
 // An unreadable or vanished process is an error, never a false. A caller the
 // daemon cannot place must not be treated as ungoverned.
-func (m *Manager) Governed(pid int) (bool, error) {
+func (m *Manager) Governed(pid int) (string, bool, error) {
 	rel, err := procCgroup(pid)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	mnt, err := cgroup2Mount()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	base := filepath.Clean(m.base)
 	p := filepath.Join(mnt, rel)
 	if p == base {
-		return true, nil
+		return "", true, nil
 	}
-	return strings.HasPrefix(p, base+string(filepath.Separator)), nil
+	rest, ok := strings.CutPrefix(p, base+string(filepath.Separator))
+	if !ok {
+		return "", false, nil
+	}
+	sid, _, _ := strings.Cut(rest, string(filepath.Separator))
+	return sid, true, nil
 }
 
 // procCgroup returns pid's cgroup v2 path, relative to the cgroup2 mount.

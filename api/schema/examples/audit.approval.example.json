@@ -1,0 +1,11 @@
+{
+  "record": "approval",
+  "session_id": "s-20261019t111310-3a5af6c1",
+  "timestamp": "2026-10-19T11:13:12.102631529Z",
+  "request_id": "apr-s-20261019t111310-3a5af6c1-2",
+  "decision_id": "d-s-20261019t111310-3a5af6c1/12",
+  "approved": false,
+  "responded_by": "root",
+  "timed_out": false,
+  "effect": "terminate"
+}

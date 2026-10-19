@@ -217,14 +217,14 @@ func (d *Daemon) ungoverned(peer ipc.Peer, method string) error {
 	if peer.Root() {
 		return nil
 	}
-	governed, err := d.groups.Governed(peer.PID)
+	sid, governed, err := d.groups.Governed(peer.PID)
 	if err != nil {
-		d.refuse(method, peer, "the caller could not be located: "+err.Error())
+		d.refuse(method, peer, "", "the caller could not be located: "+err.Error())
 		return ipc.Errorf(ipc.ErrCodePermissionDenied,
 			"refusing %s: the calling process could not be located (%v)", method, err)
 	}
 	if governed {
-		d.refuse(method, peer, "the caller is inside a governed session")
+		d.refuse(method, peer, sid, "the caller is inside a governed session")
 		return ipc.Errorf(ipc.ErrCodePermissionDenied,
 			"refusing %s: a governed process cannot govern", method)
 	}
@@ -238,12 +238,24 @@ func (d *Daemon) refusalCount() int {
 	return d.refusals
 }
 
-// refuse records a rejected control request.
-func (d *Daemon) refuse(method string, peer ipc.Peer, why string) {
+// auditErrors returns how many audit writes have failed.
+func (d *Daemon) auditErrors() uint64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.sinkErrors
+}
+
+// refuse records a rejected control request. sid is the session holding the
+// process the refusal was about, when known.
+func (d *Daemon) refuse(method string, peer ipc.Peer, sid, why string) {
 	d.mu.Lock()
 	d.refusals++
 	d.mu.Unlock()
-	d.log.Warn("control request refused", "method", method, "pid", peer.PID, "uid", peer.UID, "reason", why)
+	d.log.Warn("control request refused", "method", method, "pid", peer.PID, "uid", peer.UID,
+		"session", sid, "reason", why)
+	d.record(context.Background(), decision.ControlRefused{
+		Timestamp: d.now().UTC(), Method: method, PID: peer.PID, UID: peer.UID, SessionID: sid, Reason: why,
+	})
 }
 
 // authorize allows a session's owner and root.
@@ -412,12 +424,12 @@ func (d *Daemon) startSession(ctx context.Context, peer ipc.Peer, req ipc.StartS
 	// A process already inside a session cgroup must not be moved into a
 	// second one. Adopting it would take it out of the scope its owner
 	// approved, and out of reach of that session's containment.
-	if governed, err := d.groups.Governed(req.RootPID); err != nil {
-		d.refuse(ipc.MethodStartSession, peer, fmt.Sprintf("root pid %d could not be located: %v", req.RootPID, err))
+	if holder, governed, err := d.groups.Governed(req.RootPID); err != nil {
+		d.refuse(ipc.MethodStartSession, peer, "", fmt.Sprintf("root pid %d could not be located: %v", req.RootPID, err))
 		return ipc.Errorf(ipc.ErrCodePermissionDenied,
 			"refusing to adopt pid %d: it could not be located (%v)", req.RootPID, err)
 	} else if governed {
-		d.refuse(ipc.MethodStartSession, peer, fmt.Sprintf("root pid %d is already governed", req.RootPID))
+		d.refuse(ipc.MethodStartSession, peer, holder, fmt.Sprintf("root pid %d is already governed", req.RootPID))
 		return ipc.Errorf(ipc.ErrCodePermissionDenied,
 			"refusing to adopt pid %d: it is already governed by another session", req.RootPID)
 	}
@@ -446,6 +458,14 @@ func (d *Daemon) startSession(ctx context.Context, peer ipc.Peer, req ipc.StartS
 	}
 	if err := d.manager.Start(ctx, req.SessionID, req.RootPID); err != nil {
 		return fail("starting the session", err)
+	}
+	// Written before the agent is released, so it precedes every decision
+	// the session produces.
+	if s, err := d.manager.Get(ctx, req.SessionID); err == nil {
+		d.mu.Lock()
+		owner := d.sessions[req.SessionID].owner.UID
+		d.mu.Unlock()
+		d.record(ctx, d.sessionStart(s, owner, g.CgroupID()))
 	}
 	d.log.Info("session started", "session", req.SessionID, "root_pid", req.RootPID, "cgroup", g.CgroupID())
 	return nil
@@ -504,6 +524,7 @@ func (d *Daemon) status() *ipc.StatusResponse {
 		Coverage:          cov,
 		Collector:         cs,
 		RefusedRequests:   d.refusalCount(),
+		AuditErrors:       d.auditErrors(),
 		Dispatch:          d.dispatch.Stats(),
 		Containment:       d.groups.Capabilities(),
 		Enforcer:          d.enforcer.Capabilities(),

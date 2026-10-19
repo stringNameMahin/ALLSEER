@@ -7,14 +7,17 @@
 //
 // # Format
 //
-// Append-only JSON Lines, one decision.Decision per line. Fixed by
+// Append-only JSON Lines, one record per line. Fixed by
 // devdocs/architecture.md as a communication decision — an audit record has to be
 // greppable and consumable by external tooling without a library — and by
-// config.AuditConfig.Format, which names "jsonl". The record is exactly what
-// encoding/json produces for a Decision: this package adds no envelope, no
-// wrapper, and no field of its own. A second decision schema, invented here so
-// the writer could be tidier, would be a second thing to keep in agreement with
-// the type and the JSON schema, and the two would drift.
+// config.AuditConfig.Format, which names "jsonl". A line is either a
+// decision.Decision or one of the session-level decision.Record types, and
+// every line names its kind in a "record" field
+// (api/schema/audit.v1alpha2.schema.json). The kind comes from each type's own
+// JSON encoding: this package adds no envelope, no wrapper, and no field of its
+// own. A second schema, invented here so the writer could be tidier, would be
+// a second thing to keep in agreement with the types and the JSON schema, and
+// they would drift.
 //
 // # What this package is not
 //
@@ -30,7 +33,7 @@
 //  1. An unscored decision does not validate against the shipped schema.
 //     decision.Decision.Risk is a value, not a pointer, so a decision from an
 //     unscored pipeline or from any stage failure publishes "level": "" and
-//     "factors": null. api/schema/decision.v1alpha1.schema.json requires level
+//     "factors": null. api/schema/decision.v1alpha2.schema.json requires level
 //     to be one of five named levels and factors to be an array, and admits
 //     neither. This writer serializes faithfully and does not resolve it. It
 //     does not substitute "none" for the empty level, and it does not turn a
@@ -165,17 +168,24 @@ type JSONLSink struct {
 	path string
 
 	written  uint64
+	records  uint64
 	filtered uint64
 	errors   uint64
 }
 
-var _ decision.Sink = (*JSONLSink)(nil)
+var (
+	_ decision.Sink       = (*JSONLSink)(nil)
+	_ decision.RecordSink = (*JSONLSink)(nil)
+)
 
 // Stats reports what the sink has done. Counters, not health: a sink that is
 // failing every write still returns, and Errors is how a caller notices.
 type Stats struct {
 	// Written is the number of decisions that reached the file.
 	Written uint64 `json:"written"`
+
+	// Records is the number of session-level records that reached the file.
+	Records uint64 `json:"records"`
 
 	// Filtered is the number suppressed by RecordAllEvents=false. Counted
 	// rather than forgotten, so "the log is short" can be told apart from "the
@@ -251,16 +261,44 @@ func (s *JSONLSink) Emit(_ context.Context, d decision.Decision) error {
 		s.filtered++
 		return nil
 	}
+	if err := s.write(d, "decision "+d.ID); err != nil {
+		return err
+	}
+	s.written++
+	return nil
+}
 
+// EmitRecord appends one session-level record as one line.
+//
+// Never filtered. RecordAllEvents selects which decisions are kept, and the
+// records that frame them are what make a filtered log readable: without the
+// session's coverage and outcome, a short log cannot be told apart from a
+// blind one.
+func (s *JSONLSink) EmitRecord(_ context.Context, r decision.Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrClosed
+	}
+	if err := s.write(r, string(r.RecordKind())+" record"); err != nil {
+		return err
+	}
+	s.records++
+	return nil
+}
+
+// write encodes v and appends it as one line. Caller holds mu.
+func (s *JSONLSink) write(v any, what string) error {
 	s.buf.Reset()
 	// Encode appends the trailing newline itself, which is the whole line
 	// discipline. Serialization goes to the scratch buffer rather than straight
 	// to the file so that a record reaches the file in one write: with O_APPEND
 	// that keeps a line whole, where an encoder writing directly could
-	// interleave two decisions from two sessions sharing this sink.
-	if err := s.enc.Encode(d); err != nil {
+	// interleave two records from two sessions sharing this sink.
+	if err := s.enc.Encode(v); err != nil {
 		s.errors++
-		return fmt.Errorf("audit: encoding decision %s: %w", d.ID, err)
+		return fmt.Errorf("audit: encoding %s: %w", what, err)
 	}
 
 	if _, err := s.w.Write(s.buf.Bytes()); err != nil {
@@ -270,17 +308,15 @@ func (s *JSONLSink) Emit(_ context.Context, d decision.Decision) error {
 		// tried to patch over its own failure would produce a log that looks
 		// intact and is not.
 		s.errors++
-		return fmt.Errorf("audit: writing decision %s: %w", d.ID, err)
+		return fmt.Errorf("audit: writing %s: %w", what, err)
 	}
 
 	if s.syncWrites {
 		if err := s.w.Sync(); err != nil {
 			s.errors++
-			return fmt.Errorf("audit: syncing decision %s: %w", d.ID, err)
+			return fmt.Errorf("audit: syncing %s: %w", what, err)
 		}
 	}
-
-	s.written++
 	return nil
 }
 
@@ -344,7 +380,7 @@ func (s *JSONLSink) Close() error {
 func (s *JSONLSink) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Stats{Written: s.written, Filtered: s.filtered, Errors: s.errors}
+	return Stats{Written: s.written, Records: s.records, Filtered: s.filtered, Errors: s.errors}
 }
 
 // routine reports whether a decision is the uninteresting common case that

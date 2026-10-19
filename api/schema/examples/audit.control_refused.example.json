@@ -1,0 +1,9 @@
+{
+  "record": "control_refused",
+  "timestamp": "2026-10-19T11:13:53.015645417Z",
+  "method": "CreateSession",
+  "pid": 22910,
+  "uid": 65534,
+  "session_id": "s-20261019t111352-2b0fea88",
+  "reason": "the caller is inside a governed session"
+}

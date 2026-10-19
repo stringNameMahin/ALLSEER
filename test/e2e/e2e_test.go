@@ -195,27 +195,80 @@ func filterLibbpf(s string) string {
 
 func (d *daemon) client() *ipc.SocketClient { return &ipc.SocketClient{Path: d.socket} }
 
-// decisions returns the audit records of one session.
-func (d *daemon) decisions(t *testing.T, sid string) []decision.Decision {
+// auditLine is one line of the audit log with its kind.
+type auditLine struct {
+	kind decision.RecordKind
+	sid  string
+	raw  []byte
+}
+
+// lines reads the whole audit log. Every line must name its kind.
+func (d *daemon) lines(t *testing.T) []auditLine {
 	t.Helper()
 	f, err := os.Open(d.audit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	var out []decision.Decision
+	var out []auditLine
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<22)
 	for sc.Scan() {
-		var dec decision.Decision
-		if err := json.Unmarshal(sc.Bytes(), &dec); err != nil {
-			t.Fatalf("malformed audit record: %v", err)
+		kind, err := decision.KindOf(sc.Bytes())
+		if err != nil {
+			t.Fatalf("malformed audit record: %v\n%s", err, sc.Bytes())
 		}
-		if dec.SessionID == sid {
-			out = append(out, dec)
+		var head struct {
+			SessionID string `json:"session_id"`
 		}
+		_ = json.Unmarshal(sc.Bytes(), &head)
+		out = append(out, auditLine{kind: kind, sid: head.SessionID, raw: append([]byte(nil), sc.Bytes()...)})
 	}
 	return out
+}
+
+// records decodes the audit lines of one kind that belong to session sid.
+func records[T any](t *testing.T, d *daemon, kind decision.RecordKind, sid string) []T {
+	t.Helper()
+	var out []T
+	for _, l := range d.lines(t) {
+		if l.kind != kind || l.sid != sid {
+			continue
+		}
+		var v T
+		if err := json.Unmarshal(l.raw, &v); err != nil {
+			t.Fatalf("malformed %s record: %v", kind, err)
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// decisions returns the decisions of one session.
+func (d *daemon) decisions(t *testing.T, sid string) []decision.Decision {
+	t.Helper()
+	return records[decision.Decision](t, d, decision.RecordDecision, sid)
+}
+
+// framed checks that a session's part of the log opens with its start record
+// and closes with its end record, and returns both.
+func (d *daemon) framed(t *testing.T, sid string) (decision.SessionStart, decision.SessionEnd) {
+	t.Helper()
+	var kinds []decision.RecordKind
+	for _, l := range d.lines(t) {
+		if l.sid == sid {
+			kinds = append(kinds, l.kind)
+		}
+	}
+	if len(kinds) < 2 || kinds[0] != decision.RecordSessionStart || kinds[len(kinds)-1] != decision.RecordSessionEnd {
+		t.Fatalf("session %s is not framed by its start and end records: %v", sid, kinds)
+	}
+	starts := records[decision.SessionStart](t, d, decision.RecordSessionStart, sid)
+	ends := records[decision.SessionEnd](t, d, decision.RecordSessionEnd, sid)
+	if len(starts) != 1 || len(ends) != 1 {
+		t.Fatalf("session %s has %d start and %d end records, want one of each", sid, len(starts), len(ends))
+	}
+	return starts[0], ends[0]
 }
 
 // explain renders every decision that was not a plain allow, with the factors
@@ -231,6 +284,9 @@ func (d *daemon) explain() string {
 	sc.Buffer(make([]byte, 1<<20), 1<<22)
 	for n := 0; sc.Scan() && n < 60; {
 		var dec decision.Decision
+		if k, _ := decision.KindOf(sc.Bytes()); k != decision.RecordDecision {
+			continue
+		}
 		if json.Unmarshal(sc.Bytes(), &dec) != nil || dec.Action == ece.ActionAllow {
 			continue
 		}
@@ -426,6 +482,24 @@ exit 3`, ws))
 	if find(ds, decision.VerdictOutsideEnvelope, "127.0.0.1:9") == nil {
 		t.Error("the unexpected connection was not outside the envelope")
 	}
+
+	// The log carries what the session was judged against and how it ended.
+	start, end := d.framed(t, sid)
+	if start.Envelope == nil || start.Envelope.Digest != s.Envelope.Digest || start.Mode != "monitor" || start.RootPID == 0 {
+		t.Errorf("session start = mode %s root %d envelope %v", start.Mode, start.RootPID, start.Envelope != nil)
+	}
+	// connect(2) is the only egress entry point watched, and the record says so.
+	unwatched := false
+	for _, g := range start.Coverage.EntryPoints {
+		unwatched = unwatched || (g.Kind == "net.connect" && len(g.Missing) > 0)
+	}
+	if !unwatched {
+		t.Errorf("the start record does not name the unwatched egress entry points: %+v", start.Coverage.EntryPoints)
+	}
+	if end.Result != string(session.StateCompleted) || !end.TelemetryComplete ||
+		end.EventsObserved != s.Summary.EventsObserved || end.ViolationCount != s.Outcome.ViolationCount {
+		t.Errorf("session end = %+v, want it to match the session %+v", end, s.Outcome)
+	}
 }
 
 // The agent's own exec is observed: it happens after the launcher was moved
@@ -520,6 +594,17 @@ func TestInteractiveApproveResumesAndDenyKills(t *testing.T) {
 		if !approve && (code != 137 || exists(marker)) {
 			t.Fatalf("denied: exit %d, finished %v\n%s", code, exists(marker), r.stderr.String())
 		}
+
+		answers := records[decision.Approval](t, d, decision.RecordApproval, sid)
+		want := decision.EffectResume
+		if !approve {
+			want = decision.EffectTerminate
+		}
+		if len(answers) != 1 || answers[0].RequestID != req.ID || answers[0].DecisionID != req.Decision.ID ||
+			answers[0].Approved != approve || answers[0].Effect != want || answers[0].RespondedBy != "root" {
+			t.Fatalf("approval records = %+v, want one %s answer to %s by root", answers, want, req.ID)
+		}
+		d.framed(t, sid)
 	}
 }
 
@@ -547,6 +632,10 @@ func TestDaemonShutdownKillsLiveSessions(t *testing.T) {
 	}
 	if exists(filepath.Join("/sys/fs/cgroup/allseer", sid)) {
 		t.Fatal("the session cgroup outlived the daemon")
+	}
+	// The end is written before the daemon exits, not lost with it.
+	if _, end := d.framed(t, sid); end.Result != string(session.StateFailed) || !strings.Contains(end.Reason, "shut down") {
+		t.Fatalf("session end after shutdown = %+v", end)
 	}
 }
 
@@ -682,6 +771,10 @@ echo done > %[2]s`, ws, marker))
 	if s.State == session.StateCompleted && !strings.Contains(s.Outcome.Reason, "telemetry") {
 		t.Errorf("session completed without mentioning the telemetry gap: %s", s.Outcome.Reason)
 	}
+	// The durable record carries the gap too, not only the live session.
+	if _, end := d.framed(t, sid); end.TelemetryComplete {
+		t.Errorf("the session end record reports complete telemetry after a drop: %+v", end)
+	}
 }
 
 // A daemon killed outright never gets to end its sessions, so nothing on the
@@ -768,6 +861,11 @@ func TestAgentCannotObtainAWeakerNestedSession(t *testing.T) {
 		t.Fatal(err)
 	} else if st.RefusedRequests == 0 {
 		t.Fatal("the refusal was not counted in the daemon status")
+	}
+	// The attempt is in the audit log, attributed to the session it came from.
+	refused := records[decision.ControlRefused](t, d, decision.RecordControlRefused, sid)
+	if len(refused) == 0 || refused[0].Method != ipc.MethodCreateSession || refused[0].UID != agentUID {
+		t.Fatalf("control_refused records for %s = %+v", sid, refused)
 	}
 }
 

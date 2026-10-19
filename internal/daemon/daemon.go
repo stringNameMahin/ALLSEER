@@ -56,8 +56,16 @@ type SessionGroup interface {
 type Groups interface {
 	Create(sessionID string) (SessionGroup, error)
 	Capabilities() containment.Capabilities
-	// Governed reports whether pid is inside a session cgroup this daemon owns.
-	Governed(pid int32) (bool, error)
+	// Governed reports whether pid is inside a session cgroup this daemon
+	// owns, and which session holds it when that is known.
+	Governed(pid int32) (sid string, governed bool, err error)
+}
+
+// AuditTrail is the durable record: every decision, and the session-level
+// records that frame them, in one stream.
+type AuditTrail interface {
+	decision.Sink
+	decision.RecordSink
 }
 
 // Host answers questions about local processes and users.
@@ -78,9 +86,9 @@ type Options struct {
 	Host      Host
 	Policy    pipeline.PolicyEngine
 	Risk      pipeline.RiskEngine
-	// Audit receives every decision. Required: a daemon does not govern
-	// without an audit trail.
-	Audit decision.Sink
+	// Audit receives every decision and session record. Required: a daemon
+	// does not govern without an audit trail.
+	Audit AuditTrail
 	// Resolvers are the DNS servers granted to sessions that need the network.
 	Resolvers []string
 	Logger    *slog.Logger
@@ -113,7 +121,7 @@ type Daemon struct {
 	tel       Telemetry
 	groups    Groups
 	host      Host
-	audit     decision.Sink
+	audit     AuditTrail
 	log       *slog.Logger
 	now       func() time.Time
 	settle    time.Duration
@@ -266,6 +274,17 @@ func (d *Daemon) emit(ctx context.Context, dec decision.Decision) error {
 	return err
 }
 
+// record writes a session-level record. A failed write is counted and logged
+// like a failed decision write; it does not stop governance.
+func (d *Daemon) record(ctx context.Context, r decision.Record) {
+	if err := d.audit.EmitRecord(ctx, r); err != nil {
+		d.mu.Lock()
+		d.sinkErrors++
+		d.mu.Unlock()
+		d.log.Error("audit write failed", "record", r.RecordKind(), "err", err)
+	}
+}
+
 // Run dispatches events until ctx ends or the telemetry stream ends. The
 // second is a failure: every active session is ended as failed and its
 // process tree killed, because it can no longer be observed.
@@ -348,6 +367,7 @@ func (d *Daemon) finish(ctx context.Context, sid string, result session.State, r
 	if err := d.manager.End(ctx, sid, out); err != nil {
 		d.log.Warn("ending session", "session", sid, "err", err)
 	}
+	d.record(ctx, d.sessionEnd(ctx, sid, out))
 	d.dispatch.Release(sid)
 	d.log.Info("session ended", "session", sid, "result", result, "reason", reason)
 }

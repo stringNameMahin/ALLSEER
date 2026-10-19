@@ -197,6 +197,10 @@ type StatusResponse struct {
 	// itself a governed process, or could not be located.
 	RefusedRequests int `json:"refused_requests"`
 
+	// AuditErrors counts records that failed to reach the audit log. Above
+	// zero, the log is missing decisions or session records.
+	AuditErrors uint64 `json:"audit_errors"`
+
 	// TelemetryHealthy reports whether the attribution floor is attached and
 	// the startup self-test passed. Probes merely being attached is not enough.
 	// False means the daemon is running but governing nothing, the most

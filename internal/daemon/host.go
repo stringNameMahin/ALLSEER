@@ -99,8 +99,9 @@ func (c CgroupGroups) Create(sid string) (SessionGroup, error) {
 // Capabilities reports what the host supports.
 func (c CgroupGroups) Capabilities() containment.Capabilities { return c.M.Capabilities() }
 
-// Governed reports whether pid is inside one of this daemon's session cgroups.
-func (c CgroupGroups) Governed(pid int32) (bool, error) { return c.M.Governed(int(pid)) }
+// Governed reports whether pid is inside one of this daemon's session cgroups,
+// and which session holds it.
+func (c CgroupGroups) Governed(pid int32) (string, bool, error) { return c.M.Governed(int(pid)) }
 
 type cgroupGroup struct{ *containment.Group }
 

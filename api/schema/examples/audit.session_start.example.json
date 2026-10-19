@@ -1,0 +1,349 @@
+{
+  "record": "session_start",
+  "session_id": "s-20261019t111843-9de3abeb",
+  "timestamp": "2026-10-19T11:18:43.592220498Z",
+  "owner": "nobody",
+  "owner_uid": 65534,
+  "mode": "monitor",
+  "root_pid": 31604,
+  "cgroup_id": 16227,
+  "envelope": {
+    "schema_version": "allseer.dev/ece/v1alpha1",
+    "id": "d9a7cd53-0d8d-efb6-ff70-e6e5e34d5517",
+    "session_id": "s-20261019t111843-9de3abeb",
+    "created_at": "2026-10-19T11:18:43.575752981Z",
+    "expires_at": "2026-10-19T12:18:43.575752981Z",
+    "intent": {
+      "raw_prompt": "build the project and run the tests",
+      "summary": "Run the project's test suite.",
+      "task_type": "test",
+      "analyzer": "rules:v1",
+      "confidence": 0.6,
+      "ambiguities": [
+        "prompt matches several task types: test, build"
+      ]
+    },
+    "grants": [
+      {
+        "kind": "fs.read",
+        "domain": "filesystem",
+        "selector": {
+          "path_patterns": [
+            "/tmp/allseer-e2e-830045478/ws-2683998672/**",
+            "/usr/**",
+            "/lib/**",
+            "/lib64/**",
+            "/bin/**",
+            "/sbin/**",
+            "/opt/**",
+            "/snap/**",
+            "/etc/ld.so.cache",
+            "/etc/ld.so.conf",
+            "/etc/ld.so.conf.d/**",
+            "/etc/localtime",
+            "/etc/nsswitch.conf",
+            "/etc/passwd",
+            "/etc/group",
+            "/etc/hosts",
+            "/etc/host.conf",
+            "/etc/resolv.conf",
+            "/etc/gai.conf",
+            "/etc/ssl/**",
+            "/etc/ca-certificates/**",
+            "/etc/alternatives/**",
+            "/etc/os-release",
+            "/etc/lsb-release",
+            "/etc/mime.types",
+            "/etc/locale.alias",
+            "/etc/inputrc",
+            "/etc/bash.bashrc",
+            "/etc/profile",
+            "/etc/profile.d/**",
+            "/etc/environment",
+            "/etc/gitconfig",
+            "/etc/timezone",
+            "/run/systemd/resolve/**",
+            "/proc/**",
+            "/sys/**",
+            "/dev/null",
+            "/dev/zero",
+            "/dev/urandom",
+            "/dev/random",
+            "/dev/tty",
+            "/dev/pts/**",
+            "/tmp/**",
+            "/var/tmp/**",
+            "/nonexistent/.gitconfig",
+            "/nonexistent/.config/git/**",
+            "/nonexistent/.cache/**",
+            "/nonexistent/.bashrc",
+            "/nonexistent/.profile",
+            "/nonexistent/go/**",
+            "/nonexistent/.npm/**",
+            "/nonexistent/.cargo/**",
+            "/nonexistent/.rustup/**",
+            "/nonexistent/.local/lib/**",
+            "/nonexistent/.m2/**",
+            "/nonexistent/.gradle/**",
+            "/nonexistent/.config/go/**"
+          ]
+        },
+        "rationale": "The workspace, system libraries, and the configuration every toolchain reads. Credential stores are excluded."
+      },
+      {
+        "kind": "fs.write",
+        "domain": "filesystem",
+        "selector": {
+          "path_patterns": [
+            "/tmp/allseer-e2e-830045478/ws-2683998672/**",
+            "/tmp/**",
+            "/var/tmp/**",
+            "/dev/null",
+            "/dev/tty",
+            "/dev/pts/**",
+            "/nonexistent/.cache/**",
+            "/nonexistent/go/**",
+            "/nonexistent/.npm/**",
+            "/nonexistent/.cargo/**",
+            "/nonexistent/.rustup/**",
+            "/nonexistent/.local/lib/**",
+            "/nonexistent/.m2/**",
+            "/nonexistent/.gradle/**",
+            "/nonexistent/.config/go/**"
+          ]
+        },
+        "rationale": "Changes stay in the workspace, temporary directories and caches."
+      },
+      {
+        "kind": "fs.create",
+        "domain": "filesystem",
+        "selector": {
+          "path_patterns": [
+            "/tmp/allseer-e2e-830045478/ws-2683998672/**",
+            "/tmp/**",
+            "/var/tmp/**",
+            "/dev/null",
+            "/dev/tty",
+            "/dev/pts/**",
+            "/nonexistent/.cache/**",
+            "/nonexistent/go/**",
+            "/nonexistent/.npm/**",
+            "/nonexistent/.cargo/**",
+            "/nonexistent/.rustup/**",
+            "/nonexistent/.local/lib/**",
+            "/nonexistent/.m2/**",
+            "/nonexistent/.gradle/**",
+            "/nonexistent/.config/go/**"
+          ]
+        },
+        "rationale": "New files stay in the workspace, temporary directories and caches."
+      },
+      {
+        "kind": "process.exec",
+        "domain": "process",
+        "selector": {
+          "executables": [
+            "/tmp/allseer-e2e-830045478/ws-2683998672/**",
+            "/usr/bin/**",
+            "/bin/**",
+            "/usr/local/bin/**",
+            "/usr/lib/**",
+            "/usr/libexec/**",
+            "/usr/local/go/**",
+            "/usr/local/lib/**",
+            "/snap/**",
+            "/tmp/**",
+            "/nonexistent/go/bin/**",
+            "/nonexistent/.local/bin/**",
+            "/nonexistent/.cargo/bin/**",
+            "/nonexistent/go/pkg/mod/golang.org/toolchain@*/**",
+            "/nonexistent/.rustup/toolchains/**"
+          ]
+        },
+        "rationale": "System and user toolchain binaries, and programs built in the workspace."
+      },
+      {
+        "kind": "process.exit",
+        "domain": "process",
+        "selector": {
+          "executables": [
+            "/tmp/allseer-e2e-830045478/ws-2683998672/**",
+            "/usr/bin/**",
+            "/bin/**",
+            "/usr/local/bin/**",
+            "/usr/lib/**",
+            "/usr/libexec/**",
+            "/usr/local/go/**",
+            "/usr/local/lib/**",
+            "/snap/**",
+            "/tmp/**",
+            "/nonexistent/go/bin/**",
+            "/nonexistent/.local/bin/**",
+            "/nonexistent/.cargo/bin/**",
+            "/nonexistent/go/pkg/mod/golang.org/toolchain@*/**",
+            "/nonexistent/.rustup/toolchains/**"
+          ]
+        },
+        "rationale": "Exit of the same programs."
+      }
+    ],
+    "denials": [
+      {
+        "kind": "fs.read",
+        "domain": "filesystem",
+        "selector": {
+          "path_patterns": [
+            "/nonexistent/.aws/**",
+            "/nonexistent/.gnupg/**",
+            "/nonexistent/.kube/**",
+            "/nonexistent/.docker/config.json",
+            "/nonexistent/.netrc",
+            "/nonexistent/.config/gh/**",
+            "/nonexistent/.git-credentials",
+            "/nonexistent/.password-store/**",
+            "/nonexistent/.pgpass",
+            "/nonexistent/.ssh/**",
+            "/etc/shadow",
+            "/etc/gshadow",
+            "/etc/sudoers",
+            "/etc/sudoers.d/**",
+            "/root/**"
+          ]
+        },
+        "rationale": "Credential stores are never part of a coding task."
+      },
+      {
+        "kind": "fs.write",
+        "domain": "filesystem",
+        "selector": {
+          "path_patterns": [
+            "/tmp/allseer-e2e-830045478/ws-2683998672/.git/hooks/**",
+            "/nonexistent/.ssh/**",
+            "/nonexistent/.bashrc",
+            "/nonexistent/.profile",
+            "/nonexistent/.bash_profile",
+            "/nonexistent/.zshrc",
+            "/nonexistent/.config/autostart/**",
+            "/tmp/allseer-e2e-830045478/ws-2683998672/.github/workflows/**"
+          ]
+        },
+        "rationale": "Hooks, CI workflows and shell startup files are persistence points."
+      },
+      {
+        "kind": "fs.create",
+        "domain": "filesystem",
+        "selector": {
+          "path_patterns": [
+            "/tmp/allseer-e2e-830045478/ws-2683998672/.git/hooks/**",
+            "/nonexistent/.ssh/**",
+            "/nonexistent/.bashrc",
+            "/nonexistent/.profile",
+            "/nonexistent/.bash_profile",
+            "/nonexistent/.zshrc",
+            "/nonexistent/.config/autostart/**",
+            "/tmp/allseer-e2e-830045478/ws-2683998672/.github/workflows/**"
+          ]
+        },
+        "rationale": "Hooks, CI workflows and shell startup files are persistence points."
+      }
+    ],
+    "constraints": {
+      "max_duration": "1h0m0s",
+      "workspace_root": "/tmp/allseer-e2e-830045478/ws-2683998672"
+    },
+    "default_action": "request_approval",
+    "approval": {
+      "approved_by": "nobody",
+      "approved_at": "2026-10-19T11:18:43.578315299Z",
+      "method": "allseer-shim"
+    },
+    "sealed": true,
+    "digest": "sha256:bc8179ad3c869b4209add2b5d8c1e7c4a1de5ab89b8652567835052a4d17e5ed"
+  },
+  "coverage": {
+    "observable": [
+      "fs.read",
+      "fs.write",
+      "fs.create",
+      "process.exec",
+      "process.exit",
+      "net.connect",
+      "priv.setuid",
+      "priv.capset",
+      "priv.namespace",
+      "priv.seccomp",
+      "ipc.unixsocket"
+    ],
+    "degraded": false,
+    "entry_points": [
+      {
+        "kind": "fs.read",
+        "missing": [
+          "read",
+          "pread64",
+          "readv",
+          "preadv",
+          "mmap"
+        ],
+        "success_only": [
+          "open_by_handle_at",
+          "io_uring"
+        ]
+      },
+      {
+        "kind": "fs.write",
+        "missing": [
+          "write",
+          "pwrite64",
+          "writev",
+          "pwritev"
+        ],
+        "success_only": [
+          "open_by_handle_at",
+          "io_uring"
+        ]
+      },
+      {
+        "kind": "fs.create",
+        "missing": [
+          "mkdir",
+          "mkdirat",
+          "mknod",
+          "mknodat"
+        ],
+        "success_only": [
+          "io_uring"
+        ]
+      },
+      {
+        "kind": "net.connect",
+        "missing": [
+          "io_uring",
+          "sendto",
+          "sendmsg"
+        ]
+      },
+      {
+        "kind": "priv.namespace",
+        "missing": [
+          "clone",
+          "clone3"
+        ]
+      },
+      {
+        "kind": "priv.seccomp",
+        "missing": [
+          "prctl"
+        ]
+      },
+      {
+        "kind": "ipc.unixsocket",
+        "missing": [
+          "socket",
+          "bind"
+        ]
+      }
+    ]
+  },
+  "daemon_version": "63550a8-dirty (63550a8, built 2026-10-19T11:18:15Z)"
+}
