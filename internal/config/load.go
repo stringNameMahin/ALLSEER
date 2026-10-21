@@ -61,6 +61,8 @@ func Defaults() *Config {
 			Format:          "jsonl",
 			RecordAllEvents: true,
 			SyncWrites:      false,
+			MaxSizeMB:       100,
+			MaxFiles:        10,
 		},
 		Logging: LoggingConfig{
 			Level:  "info",
@@ -139,6 +141,12 @@ func Validate(c *Config) []Issue {
 	if c.Audit.Path == "" {
 		fatal("audit.path", "is required: a daemon must not govern without an audit trail")
 	}
+	if c.Audit.MaxSizeMB < 0 || c.Audit.MaxFiles < 0 {
+		fatal("audit.max_size_mb", "max_size_mb and max_files must not be negative")
+	}
+	if c.Audit.MaxSizeMB == 0 {
+		warn("audit.max_size_mb", "0: the audit log is never rotated and grows without bound")
+	}
 	if _, err := logging.ParseLevel(c.Logging.Level); err != nil {
 		fatal("logging.level", "%v", err)
 	}
@@ -201,8 +209,8 @@ func unimplemented(c *Config) []Issue {
 	if c.Telemetry.EnableBinaryHashing {
 		ignored("telemetry.enable_binary_hashing", "executables are not hashed")
 	}
-	if c.Audit.MaxSizeMB > 0 || c.Audit.RetentionDays > 0 {
-		ignored("audit.max_size_mb", "the audit log is never rotated or pruned; it grows without bound")
+	if c.Audit.RetentionDays > 0 {
+		ignored("audit.retention_days", "rotated audit files are kept by count (max_files), not by age")
 	}
 	if c.Intent.Analyzer == "llm" || c.Intent.Analyzer == "hybrid" {
 		ignored("intent.analyzer",

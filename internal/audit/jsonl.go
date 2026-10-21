@@ -167,10 +167,21 @@ type JSONLSink struct {
 
 	path string
 
-	written  uint64
-	records  uint64
-	filtered uint64
-	errors   uint64
+	// Rotation. maxBytes 0 is off; size is what the current file holds and
+	// limit the size that triggers the next attempt, raised after a failure
+	// so a broken rotation is not retried on every record.
+	maxBytes int64
+	maxFiles int
+	size     int64
+	limit    int64
+	onRotErr func(error)
+
+	written   uint64
+	records   uint64
+	filtered  uint64
+	errors    uint64
+	rotations uint64
+	rotateErr uint64
 }
 
 var (
@@ -194,6 +205,12 @@ type Stats struct {
 
 	// Errors is the number of Emit and Flush calls that failed.
 	Errors uint64 `json:"errors"`
+
+	// Rotations counts files rotated out. RotationFailures counts rotations
+	// that could not complete; the record was written to the current file
+	// instead, so nothing was lost, but the file keeps growing.
+	Rotations        uint64 `json:"rotations"`
+	RotationFailures uint64 `json:"rotation_failures"`
 }
 
 // Open creates or appends to the audit file named by cfg.
@@ -221,7 +238,21 @@ func Open(cfg config.AuditConfig) (*JSONLSink, error) {
 
 	s := newSink(f, cfg)
 	s.path = cfg.Path
+	if fi, err := f.Stat(); err == nil {
+		s.size = fi.Size()
+	}
+	s.maxBytes = int64(cfg.MaxSizeMB) << 20
+	s.maxFiles = cfg.MaxFiles
+	s.limit = s.maxBytes
 	return s, nil
+}
+
+// OnRotationError sets a function told about each rotation that failed, so a
+// log that keeps growing past its limit does not do so silently.
+func (s *JSONLSink) OnRotationError(fn func(error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRotErr = fn
 }
 
 // newSink wires a sink over an already-open destination.
@@ -301,7 +332,25 @@ func (s *JSONLSink) write(v any, what string) error {
 		return fmt.Errorf("audit: encoding %s: %w", what, err)
 	}
 
-	if _, err := s.w.Write(s.buf.Bytes()); err != nil {
+	// Rotate before a record would take the file past its limit, so a record
+	// is never split across two files. A record larger than the limit still
+	// goes whole into a fresh file.
+	if s.maxBytes > 0 && s.size > 0 && s.size+int64(s.buf.Len()) > s.limit {
+		if err := s.rotate(); err != nil {
+			s.rotateErr++
+			s.limit = s.size + s.maxBytes
+			if s.onRotErr != nil {
+				s.onRotErr(err)
+			}
+		} else {
+			s.rotations++
+			s.limit = s.maxBytes
+		}
+	}
+
+	n, err := s.w.Write(s.buf.Bytes())
+	s.size += int64(n)
+	if err != nil {
 		// A short or failed write may already have put a partial line on disk,
 		// and there is no unwriting it. Reported rather than repaired: a reader
 		// of a JSONL log can see a malformed final line, and a writer that
@@ -380,7 +429,56 @@ func (s *JSONLSink) Close() error {
 func (s *JSONLSink) Stats() Stats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Stats{Written: s.written, Records: s.records, Filtered: s.filtered, Errors: s.errors}
+	return Stats{Written: s.written, Records: s.records, Filtered: s.filtered, Errors: s.errors,
+		Rotations: s.rotations, RotationFailures: s.rotateErr}
+}
+
+// rotate moves the current file to path.1, after shifting path.1 and up one
+// place, and starts a new file. With maxFiles set, every rotated file from
+// path.maxFiles up is deleted first. Caller holds mu.
+//
+// The new file is opened before the old descriptor is closed, so a failure at
+// any step leaves the sink writing to a file it already had.
+func (s *JSONLSink) rotate() error {
+	if err := s.w.Sync(); err != nil {
+		return err
+	}
+	last := s.maxFiles
+	if last == 0 {
+		for last = 1; exists(rotatedName(s.path, last)); last++ {
+		}
+	} else {
+		// Everything from path.maxFiles up goes, which also clears files left
+		// by an earlier, larger max_files.
+		for n := last; exists(rotatedName(s.path, n)); n++ {
+			if err := os.Remove(rotatedName(s.path, n)); err != nil {
+				return err
+			}
+		}
+	}
+	for i := last - 1; i >= 1; i-- {
+		if err := os.Rename(rotatedName(s.path, i), rotatedName(s.path, i+1)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := os.Rename(s.path, rotatedName(s.path, 1)); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, FileMode)
+	if err != nil {
+		return err
+	}
+	_ = s.w.Close()
+	s.w = f
+	s.size = 0
+	return nil
+}
+
+func rotatedName(path string, n int) string { return fmt.Sprintf("%s.%d", path, n) }
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // routine reports whether a decision is the uninteresting common case that

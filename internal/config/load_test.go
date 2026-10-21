@@ -95,8 +95,7 @@ func TestUnimplementedSettingsAreReported(t *testing.T) {
 		{"sanitizer", func(c *Config) { c.Intent.EnableSanitizer = true }, "intent.enable_sanitizer", true},
 		{"dns correlation", func(c *Config) { c.Telemetry.EnableDNSCorrelation = true }, "telemetry.enable_dns_correlation", false},
 		{"binary hashing", func(c *Config) { c.Telemetry.EnableBinaryHashing = true }, "telemetry.enable_binary_hashing", false},
-		{"audit rotation", func(c *Config) { c.Audit.MaxSizeMB = 512 }, "audit.max_size_mb", false},
-		{"audit retention", func(c *Config) { c.Audit.RetentionDays = 90 }, "audit.max_size_mb", false},
+		{"audit retention", func(c *Config) { c.Audit.RetentionDays = 90 }, "audit.retention_days", false},
 		{"llm analyzer", func(c *Config) { c.Intent.Analyzer = "hybrid" }, "intent.analyzer", false},
 	}
 	for _, c := range cases {
@@ -180,5 +179,33 @@ func TestExampleConfigLoadsAndReportsNothingFatal(t *testing.T) {
 		} else {
 			t.Logf("example warns at %s: %s", i.Field, i.Message)
 		}
+	}
+}
+
+// Rotation is on by default and bounded; switching it off is allowed and said
+// out loud, and a negative bound is refused.
+func TestAuditRotationSettings(t *testing.T) {
+	c := Defaults()
+	if c.Audit.MaxSizeMB <= 0 || c.Audit.MaxFiles <= 0 {
+		t.Fatalf("defaults rotate at %d MB keeping %d files, want both bounded", c.Audit.MaxSizeMB, c.Audit.MaxFiles)
+	}
+	for _, i := range Validate(c) {
+		if i.Field == "audit.max_size_mb" {
+			t.Errorf("default rotation reports %+v", i)
+		}
+	}
+
+	c.Audit.MaxSizeMB = 0
+	warned := false
+	for _, i := range Validate(c) {
+		warned = warned || (i.Field == "audit.max_size_mb" && !i.Fatal)
+	}
+	if !warned {
+		t.Error("rotation switched off without a warning")
+	}
+
+	c.Audit.MaxSizeMB, c.Audit.MaxFiles = 100, -1
+	if len(Fatal(Validate(c))) == 0 {
+		t.Error("a negative max_files was accepted")
 	}
 }

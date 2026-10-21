@@ -144,10 +144,12 @@ audit:
   format: jsonl
   # Expensive, but necessary for research analysis and replay-based development.
   record_all_events: false
-  # Not implemented in this build: the audit log is never rotated or pruned,
-  # so it grows without bound. Left at 0 rather than stating a limit nothing
-  # enforces.
-  max_size_mb: 0
+  # Rotate before the log passes this size, keeping max_files rotated files
+  # (audit.jsonl.1 is the newest) and deleting the oldest. max_size_mb 0
+  # switches rotation off; max_files 0 keeps every rotated file.
+  max_size_mb: 100
+  max_files: 10
+  # Not implemented in this build: rotated files are kept by count, not age.
   retention_days: 0
   # Without this, a crash loses exactly the records most likely to matter.
   sync_writes: true

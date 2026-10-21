@@ -172,7 +172,15 @@ type AuditConfig struct {
 	// necessary for research analysis and replay-based development.
 	RecordAllEvents bool `json:"record_all_events" yaml:"record_all_events"`
 
-	MaxSizeMB     int `json:"max_size_mb" yaml:"max_size_mb"`
+	// MaxSizeMB rotates the log before it would grow past this size: the file
+	// is renamed to path.1, older ones move up one, and a new file starts.
+	// Zero disables rotation.
+	MaxSizeMB int `json:"max_size_mb" yaml:"max_size_mb"`
+
+	// MaxFiles is how many rotated files are kept; the oldest beyond it is
+	// deleted. Zero keeps every rotated file.
+	MaxFiles int `json:"max_files" yaml:"max_files"`
+
 	RetentionDays int `json:"retention_days" yaml:"retention_days"`
 
 	// SyncWrites forces fsync per record. Slower, but without it a crash loses

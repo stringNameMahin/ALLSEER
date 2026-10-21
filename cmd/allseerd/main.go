@@ -147,6 +147,10 @@ func run(args []string) int {
 		return 1
 	}
 	defer sink.Close()
+	sink.OnRotationError(func(err error) {
+		log.Error("audit log rotation failed; records continue in the current file, which keeps growing",
+			"path", cfg.Audit.Path, "err", err)
+	})
 
 	mgr, err := containment.NewManager(*cgroupBase)
 	if err != nil {
