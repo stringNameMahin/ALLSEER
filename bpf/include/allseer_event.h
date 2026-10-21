@@ -232,6 +232,9 @@ enum allseer_path_flag {
  *                    and before a device driver's own open can still refuse it.
  *                    A record carrying this flag reports an operation the kernel
  *                    performed, not a call that returned successfully.
+ *                    `security_socket_connect` is the other case: it reports a
+ *                    connect the kernel is about to attempt, so the record says
+ *                    where the process asked to go, not whether it got there.
  */
 enum allseer_event_flag {
     ALLSEER_EVT_F_OUTCOME_UNKNOWN = 1,

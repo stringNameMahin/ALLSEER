@@ -67,7 +67,7 @@ func TestProbeTableNamesEveryAttachableProgram(t *testing.T) {
 		ProgProcExec, ProgProcExit,
 		ProgOpenatEnter, ProgOpenatExit,
 		ProgConnectEnter, ProgConnectExit,
-		ProgFileOpen,
+		ProgFileOpen, ProgSocketConnect,
 	}, ProgPrivPairs()...)
 
 	got := make(map[string]bool)
@@ -88,21 +88,21 @@ func TestProbeTableNamesEveryAttachableProgram(t *testing.T) {
 	}
 }
 
-// Twenty-nine programs, confirmed independently from the compiled object's
-// symbol table in every audit of this repository: the twenty-eight tracepoint
-// programs and the fentry hook on security_file_open.
-func TestProbeTableIsTwentyNinePrograms(t *testing.T) {
-	if n := len(AllProbes()); n != 29 {
-		t.Errorf("AllProbes() = %d programs, want 29", n)
+// Thirty programs: the twenty-six tracepoint programs, the fentry/fexit pair on
+// do_sys_openat2, and the fentry hooks on security_file_open and
+// security_socket_connect.
+func TestProbeTableIsThirtyPrograms(t *testing.T) {
+	if n := len(AllProbes()); n != 30 {
+		t.Errorf("AllProbes() = %d programs, want 30", n)
 	}
 }
 
-// Sixteen degradation units, never twenty-nine. Two sched singletons, thirteen
-// enter/exit pairs and one fentry singleton.
-func TestProbeFamiliesAreSixteenUnits(t *testing.T) {
+// Seventeen degradation units, never thirty. Two sched singletons, thirteen
+// enter/exit pairs and two fentry singletons.
+func TestProbeFamiliesAreSeventeenUnits(t *testing.T) {
 	families := AllProbeFamilies()
-	if len(families) != 16 {
-		t.Fatalf("AllProbeFamilies() = %d units, want 16", len(families))
+	if len(families) != 17 {
+		t.Fatalf("AllProbeFamilies() = %d units, want 17", len(families))
 	}
 
 	singletons, pairs := 0, 0
@@ -116,8 +116,8 @@ func TestProbeFamiliesAreSixteenUnits(t *testing.T) {
 			t.Errorf("family %q has %d programs, want 1 or 2", f.Name, len(f.Programs))
 		}
 	}
-	if singletons != 3 {
-		t.Errorf("%d singleton families, want 3", singletons)
+	if singletons != 4 {
+		t.Errorf("%d singleton families, want 4", singletons)
 	}
 	if pairs != 13 {
 		t.Errorf("%d paired families, want 13", pairs)
@@ -233,7 +233,7 @@ func TestHalfAPairObservesNothing(t *testing.T) {
 	}{
 		{"openat exit missing", []string{ProgOpenatExit, ProgFileOpen}, files},
 		{"openat entry missing", []string{ProgOpenatEnter, ProgFileOpen}, files},
-		{"connect entry missing", []string{ProgConnectEnter}, []capability.Kind{
+		{"connect entry missing", []string{ProgConnectEnter, ProgSocketConnect}, []capability.Kind{
 			capability.KindNetConnect, capability.KindIPCUnixSock}},
 	}
 
@@ -379,13 +379,13 @@ func TestEveryOpenEntryPointIsWatchedWhenFullyAttached(t *testing.T) {
 	}
 }
 
-// Exactly one program may be dropped at load time, and it is the fentry hook.
-// Anything else in this list would mean a tracepoint program could vanish
-// without the floor check or a family noticing.
-func TestOptionalProgramsIsTheFentryHookOnly(t *testing.T) {
+// Exactly two programs may be dropped at load time, and they are the fentry
+// hooks. Anything else in this list would mean a tracepoint program could
+// vanish without the floor check or a family noticing.
+func TestOptionalProgramsAreTheFentryHooksOnly(t *testing.T) {
 	opt := OptionalPrograms()
-	if len(opt) != 1 || opt[0] != ProgFileOpen {
-		t.Fatalf("OptionalPrograms() = %v, want only %s", opt, ProgFileOpen)
+	if len(opt) != 2 || opt[0] != ProgFileOpen || opt[1] != ProgSocketConnect {
+		t.Fatalf("OptionalPrograms() = %v, want only %s and %s", opt, ProgFileOpen, ProgSocketConnect)
 	}
 	for _, d := range AllProbes() {
 		if d.Optional && d.Type != probeTypeFentry {
@@ -563,7 +563,7 @@ func TestApplySetsObservableOnCatalog(t *testing.T) {
 // A grant nothing watches reads as governance and enforces nothing. Naming
 // those grants is what lets the daemon refuse rather than proceed quietly.
 func TestGrantGapNamesUngovernedGrants(t *testing.T) {
-	cov := ComputeCoverage(withDetached(allAttached(), ProgConnectEnter))
+	cov := ComputeCoverage(withDetached(allAttached(), ProgConnectEnter, ProgSocketConnect))
 
 	granted := []capability.Kind{
 		capability.KindProcessExec,
@@ -609,8 +609,8 @@ func TestCoverageRoundTripsThroughJSON(t *testing.T) {
 		t.Errorf("Unobservable = %d kinds after round trip, want %d",
 			len(back.Unobservable), len(cov.Unobservable))
 	}
-	if len(back.Probes) != 29 {
-		t.Errorf("Probes = %d after round trip, want 29", len(back.Probes))
+	if len(back.Probes) != 30 {
+		t.Errorf("Probes = %d after round trip, want 30", len(back.Probes))
 	}
 
 	var missing []string
@@ -708,7 +708,7 @@ func TestBugReportFlagsAFloorBreach(t *testing.T) {
 func TestBugReportOnAHealthyLoadReportsNoFailures(t *testing.T) {
 	report := ComputeCoverage(allAttached()).BugReport()
 
-	if !strings.Contains(report, "All 16 probe families attached.") {
+	if !strings.Contains(report, "All 17 probe families attached.") {
 		t.Errorf("healthy report does not say so\n\n%s", report)
 	}
 	if strings.Contains(report, "Attach failures:") {
@@ -725,7 +725,7 @@ func TestBugReportOnAHealthyLoadReportsNoFailures(t *testing.T) {
 
 // A load with every program attached still has entry points nothing watches.
 // Reporting none would make "observable" read as "complete", which for
-// net.connect would hide io_uring and TCP Fast Open egress entirely.
+// net.connect would hide unconnected datagram and TCP Fast Open egress.
 func TestFullLoadStillReportsUnwatchedEgressEntryPoints(t *testing.T) {
 	probes := make([]ProbeInfo, 0, len(AllProbes()))
 	for _, p := range AllProbes() {
@@ -745,20 +745,17 @@ func TestFullLoadStillReportsUnwatchedEgressEntryPoints(t *testing.T) {
 	if gap == nil {
 		t.Fatal("net.connect reports no entry-point gap, so it reads as fully watched")
 	}
-	for _, want := range []string{"io_uring", "sendto", "sendmsg"} {
-		found := false
-		for _, m := range gap.Missing {
-			if m == want {
-				found = true
-			}
-		}
-		if !found {
+	for _, want := range []string{"sendto", "sendmsg"} {
+		if !containsEntry(gap.Missing, want) {
 			t.Errorf("net.connect does not report %q as unwatched; missing = %v", want, gap.Missing)
 		}
 	}
-	// connect itself is watched, so the gap must be partial rather than total.
-	if len(gap.Observed) == 0 {
-		t.Error("net.connect reports nothing as observed although the connect pair is attached")
+	// connect and io_uring are watched, with outcomes for connect(2) at least,
+	// so the gap must be partial rather than total.
+	for _, want := range []string{"connect", "io_uring"} {
+		if !containsEntry(gap.Observed, want) || containsEntry(gap.Missing, want) {
+			t.Errorf("net.connect does not report %q as watched: %+v", want, gap)
+		}
 	}
 
 	// A permanent gap is not a degradation: nothing in this build could watch
@@ -766,6 +763,59 @@ func TestFullLoadStillReportsUnwatchedEgressEntryPoints(t *testing.T) {
 	for _, d := range cov.DegradedEntryPoints() {
 		if d.Kind == capability.KindNetConnect {
 			t.Errorf("net.connect reported as degraded on a full load: %+v", d)
+		}
+	}
+}
+
+// The degradation socket_connect is optional for: a kernel that cannot load it
+// keeps the connect pair, so connect(2) stays observable with its return
+// value, and io_uring is reported as lost rather than as a gap by design.
+func TestWithoutTheConnectHookIoUringEgressIsReportedLost(t *testing.T) {
+	cov := ComputeCoverage(withDetached(allAttached(), ProgSocketConnect))
+
+	if !contains(cov.Observable, capability.KindNetConnect) {
+		t.Fatal("net.connect is not observable with the connect pair attached")
+	}
+	gap := gapFor(cov, capability.KindNetConnect)
+	if gap == nil {
+		t.Fatal("net.connect reports no entry-point gap without the hook")
+	}
+	if !containsEntry(gap.Observed, "connect") {
+		t.Errorf("connect is not reported watched: %+v", gap)
+	}
+	if !containsEntry(gap.Missing, "io_uring") {
+		t.Errorf("io_uring is not reported unwatched without the hook: %+v", gap)
+	}
+
+	var lost *EntryPointGap
+	for _, d := range cov.DegradedEntryPoints() {
+		if d.Kind == capability.KindNetConnect {
+			lost = &d
+		}
+	}
+	if lost == nil || !containsEntry(lost.Missing, "io_uring") {
+		t.Errorf("io_uring egress is not reported as lost to degradation: %+v", lost)
+	}
+	if lost != nil && (containsEntry(lost.Missing, "sendto") || containsEntry(lost.Missing, "sendmsg")) {
+		t.Errorf("sendto/sendmsg reported as lost, but no probe ever watches them: %+v", lost)
+	}
+}
+
+// The hook alone keeps every connect observable, the connect(2) ones included,
+// because it is reached from the syscall too.
+func TestTheConnectHookAloneKeepsConnectObservable(t *testing.T) {
+	cov := ComputeCoverage(withDetached(allAttached(), ProgConnectEnter, ProgConnectExit))
+
+	if !contains(cov.Observable, capability.KindNetConnect) {
+		t.Fatal("net.connect is not observable with only the hook attached")
+	}
+	gap := gapFor(cov, capability.KindNetConnect)
+	if gap == nil {
+		t.Fatal("net.connect reports no gap, but sendto and sendmsg are never watched")
+	}
+	for _, want := range []string{"connect", "io_uring"} {
+		if !containsEntry(gap.Observed, want) || containsEntry(gap.SuccessOnly, want) {
+			t.Errorf("%s is not reported fully watched by the hook: %+v", want, gap)
 		}
 	}
 }

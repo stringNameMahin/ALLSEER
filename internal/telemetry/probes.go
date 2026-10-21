@@ -85,6 +85,16 @@ const (
 	// pair cannot see. Either way it is additive, so there is no half of it to
 	// be missing.
 	ProgFileOpen = "file_open"
+
+	// ProgSocketConnect is the fentry/security_socket_connect program, emitting
+	// ALLSEER_EVT_NET_CONNECT.
+	//
+	// The connect counterpart of ProgFileOpen: one hook that connect(2) and an
+	// io_uring connect both reach. With the connect pair attached it gives a
+	// connect(2) in flight the kernel's copy of the address and the socket's
+	// protocol and type, and emits only for connects the pair cannot see.
+	// Attached alone it reports every connect without a return value.
+	ProgSocketConnect = "socket_connect"
 )
 
 // The privilege programs, one enter/exit pair per credential syscall, all
@@ -181,8 +191,8 @@ const (
 
 // Probe families, the unit that loads, attaches and degrades together.
 //
-// Sixteen units rather than twenty-nine programs: two sched singletons,
-// thirteen enter/exit pairs and one fentry singleton. A pair shares a
+// Seventeen units rather than thirty programs: two sched singletons,
+// thirteen enter/exit pairs and two fentry singletons. A pair shares a
 // scratch map, so dropping one half leaks the scratch entry and emits nothing
 // at all, which is worse than dropping both.
 const (
@@ -195,6 +205,10 @@ const (
 	// degrades on its own: dropping it costs the entry points no syscall
 	// tracepoint reaches, and costs nothing the openat family already covers.
 	FamilyFileOpen = "file_open"
+
+	// FamilySocketConnect is the one-program family over
+	// security_socket_connect, on the same terms as FamilyFileOpen.
+	FamilySocketConnect = "socket_connect"
 )
 
 // PrivFamilyFor names the family carrying one credential syscall.
@@ -257,9 +271,9 @@ type ProbeDescriptor struct {
 
 	// Optional marks a program the object may be loaded without.
 	//
-	// Only the fentry hook is: it needs kernel BTF to carry the function it
-	// attaches to, and a kernel that does not expose security_file_open cannot
-	// load it at all. libbpf fails the whole object when any program fails to
+	// Only the fentry hooks are: each needs kernel BTF to carry the function
+	// it attaches to, and a kernel that does not expose security_file_open or
+	// security_socket_connect cannot load it at all. libbpf fails the whole object when any program fails to
 	// load, so without this the hook would turn every such kernel from
 	// "governed, with the entry points no tracepoint reaches unwatched" into
 	// "refuses to govern". The loader drops it and reports the loss; coverage
@@ -355,6 +369,19 @@ func AllProbes() []ProbeDescriptor {
 			// them costs nothing there and is the truth on amd64.
 			Syscalls: []string{"open", "openat", "openat2", "creat", "open_by_handle_at", "io_uring"},
 		},
+		{
+			Name:        ProgSocketConnect,
+			Family:      FamilySocketConnect,
+			Type:        probeTypeFentry,
+			AttachPoint: "security_socket_connect",
+			Emits:       abi.EvtNetConnect,
+			Optional:    true,
+			// Not SuccessOnly: it runs before any LSM verdict and before the
+			// network answers, so a refused or failed connect reaches it too.
+			// sendto and sendmsg are not listed: an unconnected datagram and
+			// TCP Fast Open never call it.
+			Syscalls: []string{"connect", "io_uring"},
+		},
 	}
 
 	// The twenty-two privilege programs are generated from the syscall list for
@@ -410,7 +437,7 @@ type ProbeFamily struct {
 	SuccessOnly bool
 }
 
-// AllProbeFamilies returns the sixteen degradation units, in declaration order.
+// AllProbeFamilies returns the seventeen degradation units, in declaration order.
 func AllProbeFamilies() []ProbeFamily {
 	var order []string
 	members := make(map[string][]ProbeDescriptor)

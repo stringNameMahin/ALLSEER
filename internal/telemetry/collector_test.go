@@ -236,15 +236,17 @@ func TestCollectorRefusesWithoutTheFloor(t *testing.T) {
 	}
 }
 
-// A refused non-floor family is a reported gap, not a startup failure.
+// A refused non-floor family is a reported gap, not a startup failure. The
+// connect hook is refused too, since it alone would keep net.connect observable.
 func TestCollectorReportsPartialCoverage(t *testing.T) {
 	f := newFakeLoader()
 	f.refuse[telemetry.ProgConnectExit] = true
+	f.refuse[telemetry.ProgSocketConnect] = true
 	c := startCollector(t, f, 4)
 	cov := c.Coverage()
 	for _, k := range cov.Observable {
 		if k == capability.KindNetConnect {
-			t.Fatal("net.connect reported observable with half its family attached")
+			t.Fatal("net.connect reported observable with half its family attached and no hook")
 		}
 	}
 	var found bool

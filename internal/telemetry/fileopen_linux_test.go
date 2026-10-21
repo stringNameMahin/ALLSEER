@@ -178,28 +178,41 @@ func (r *uring) openat(t *testing.T, path string) int {
 	*(*uint32)(unsafe.Pointer(&sqe[28])) = uint32(syscall.O_RDONLY)
 	*(*uint64)(unsafe.Pointer(&sqe[32])) = 1 // user_data
 
-	*(*uint32)(unsafe.Pointer(&r.sqRing[r.sqArray])) = 0
-	tail := *(*uint32)(unsafe.Pointer(&r.sqRing[r.sqTail]))
-	*(*uint32)(unsafe.Pointer(&r.sqRing[r.sqTail])) = tail + 1
-
-	_, _, errno := syscall.Syscall6(sysIoUringEnter, uintptr(r.fd), 1, 1, ioringEnterGetEvent, 0, 0)
+	res := r.submitOne(t)
 	runtime.KeepAlive(p)
-	if errno != 0 {
-		t.Fatalf("io_uring_enter: %v", errno)
-	}
-
-	head := *(*uint32)(unsafe.Pointer(&r.cqRing[r.cqHead]))
-	cqTail := *(*uint32)(unsafe.Pointer(&r.cqRing[r.cqTail]))
-	if head == cqTail {
-		t.Fatal("io_uring produced no completion")
-	}
-	cqe := r.cqCQEs + uintptr(head&r.cqMask)*cqeSize
-	res := *(*int32)(unsafe.Pointer(&r.cqRing[cqe+8]))
-	*(*uint32)(unsafe.Pointer(&r.cqRing[r.cqHead])) = head + 1
 	if res >= 0 {
 		syscall.Close(int(res))
 	}
 	return int(res)
+}
+
+// submitOne submits the entry already written at slot 0 and waits for its
+// completion. The wait is retried on EINTR: a request that does not complete
+// inline, such as a connect, can be interrupted by the Go runtime's own
+// preemption signal.
+func (r *uring) submitOne(t *testing.T) int32 {
+	t.Helper()
+	*(*uint32)(unsafe.Pointer(&r.sqRing[r.sqArray])) = 0
+	tail := *(*uint32)(unsafe.Pointer(&r.sqRing[r.sqTail]))
+	*(*uint32)(unsafe.Pointer(&r.sqRing[r.sqTail])) = tail + 1
+
+	if _, _, errno := syscall.Syscall6(sysIoUringEnter, uintptr(r.fd), 1, 0, 0, 0, 0); errno != 0 {
+		t.Fatalf("io_uring_enter submit: %v", errno)
+	}
+	for {
+		head := *(*uint32)(unsafe.Pointer(&r.cqRing[r.cqHead]))
+		cqTail := *(*uint32)(unsafe.Pointer(&r.cqRing[r.cqTail]))
+		if head != cqTail {
+			cqe := r.cqCQEs + uintptr(head&r.cqMask)*cqeSize
+			res := *(*int32)(unsafe.Pointer(&r.cqRing[cqe+8]))
+			*(*uint32)(unsafe.Pointer(&r.cqRing[r.cqHead])) = head + 1
+			return res
+		}
+		_, _, errno := syscall.Syscall6(sysIoUringEnter, uintptr(r.fd), 0, 1, ioringEnterGetEvent, 0, 0)
+		if errno != 0 && errno != syscall.EINTR {
+			t.Fatalf("io_uring_enter wait: %v", errno)
+		}
+	}
 }
 
 // existingFile creates a file and returns its path with symlinks resolved.

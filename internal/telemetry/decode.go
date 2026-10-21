@@ -1054,6 +1054,12 @@ func addressString(raw [16]uint8, family uint16) string {
 // io_uring pass as no access at all. What the record does not claim is that the
 // syscall returned successfully, and OutcomeUnobserved is how a reader tells
 // the two apart.
+//
+// The security_socket_connect hook sets the flag for the same reason, and
+// Succeeded true is the same judgement there: the sequence detector counts an
+// egress only when it succeeded, so a connect through io_uring reported as
+// failed would let a credential read followed by egress pass unseen. The
+// record names a destination the process asked the kernel to reach.
 func resultOf(ret int32, flags abi.EventFlag) event.Result {
 	if flags&abi.AllseerEvtFOutcomeUnknown != 0 {
 		return event.Result{Succeeded: true, OutcomeUnobserved: true}

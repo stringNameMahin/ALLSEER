@@ -454,8 +454,12 @@ _Static_assert(ALLSEER_NAME_BOUND <= ALLSEER_DIR_MAX,
  *                  already treats an empty protocol as unevaluable against a
  *                  grant that constrains protocols". Unevaluable is the
  *                  fail-closed direction; a guessed "tcp" would not be.
+ *                  The security_socket_connect hook is handed the socket and
+ *                  fills this field in the scratch entry when it is attached,
+ *                  so it stays zero only for a connect the hook did not see.
  *   sock_type      the same walk again, and the decoder already renders 0 as
- *                  empty. Nothing in the validator reads it.
+ *                  empty. Nothing in the validator reads it. Filled by the
+ *                  hook on the same terms as protocol.
  *   bytes          connect transfers nothing. decode.go reads the field for
  *                  ALLSEER_EVT_NET_SEND alone.
  *
@@ -519,7 +523,8 @@ struct allseer_connect_scratch {
     __u8  daddr[16];
     __u16 family;
     __u16 dport;
-    __u32 _pad;
+    __u16 protocol;     /* set by security_socket_connect, else zero */
+    __u16 sock_type;    /* likewise */
 };
 
 /* Capacity of `priv_scratch`, in entries.

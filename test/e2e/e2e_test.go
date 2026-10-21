@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,6 +49,9 @@ type env struct {
 var e env
 
 func TestMain(m *testing.M) {
+	if name := os.Getenv(helperEnv); name != "" {
+		os.Exit(helperMain(name, os.Args[1:]))
+	}
 	e = setup()
 	os.Exit(m.Run())
 }
@@ -85,6 +89,14 @@ func setup() env {
 			out.skip = err.Error()
 			return out
 		}
+	}
+	// And this binary, for the agent helpers bash cannot stand in for.
+	self, err := os.ReadFile("/proc/self/exe")
+	if err == nil {
+		err = os.WriteFile(filepath.Join(out.bin, "e2e-helper"), self, 0o755)
+	}
+	if err != nil {
+		out.skip = err.Error()
 	}
 	return out
 }
@@ -981,5 +993,76 @@ func TestDaemonRefusesToGovernWhenTheOpenProbeIsMissing(t *testing.T) {
 	}
 	if left, _ := filepath.Glob("/sys/fs/cgroup/allseer/selftest-*"); len(left) != 0 {
 		t.Errorf("the failed self-test left cgroups behind: %v", left)
+	}
+}
+
+// Plan D's lead scenario: an agent reads a credential and then opens a
+// connection. The sequence detector must mark the egress, whichever entry point
+// it used. connect(2) was the only one observed before the security_socket_connect
+// hook; io_uring is the one that hook added.
+//
+// Monitor mode, because under enforce the credential read is itself a denial
+// and the agent is killed before it can connect (TestEnforceKillsAfterCredentialRead).
+func TestCredentialReadThenEgressIsFlagged(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	dest := ln.Addr().String()
+	port := dest[strings.LastIndex(dest, ":")+1:]
+
+	cases := []struct{ name, egress string }{
+		{"connect", fmt.Sprintf("exec 3<>/dev/tcp/127.0.0.1/%s || exit 1", port)},
+		{"io_uring", fmt.Sprintf("%s=uring-connect %s %s", helperEnv, filepath.Join(e.bin, "e2e-helper"), dest)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := workspace(t)
+			key := filepath.Join(ws, ".ssh", "id_rsa")
+			if err := os.MkdirAll(filepath.Dir(key), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(key, []byte("test fixture, not a key\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range []string{filepath.Dir(key), key} {
+				if err := os.Chown(p, agentUID, agentUID); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			r := shim(t, d.socket, ws, "", script(t, "cat "+key+" >/dev/null || exit 1\n"+tc.egress))
+			sid := r.sessionID(t)
+			code := r.wait(t, 30*time.Second)
+			if code == exitNoUring {
+				t.Skipf("io_uring is unavailable to the agent on this host:\n%s", r.stderr.String())
+			}
+			if code != 0 {
+				t.Fatalf("agent exit = %d, want 0\n%s", code, r.stderr.String())
+			}
+
+			ds := d.decisions(t, sid)
+			var egress *decision.Decision
+			for i := range ds {
+				if strings.HasPrefix(target(ds[i]), "net.connect") && strings.Contains(target(ds[i]), dest) {
+					egress = &ds[i]
+				}
+			}
+			// For io_uring this is the hook's own proof: without it the
+			// connect produces no record and so no decision.
+			if egress == nil {
+				t.Fatalf("no decision for the connect to %s", dest)
+			}
+			flagged := false
+			for _, f := range egress.Risk.Factors {
+				flagged = flagged || (f.Name == "credential_access_egress" && f.Weight > 0)
+			}
+			if !flagged {
+				t.Errorf("the connect after reading %s does not carry credential_access_egress: risk %.0f %+v",
+					key, egress.Risk.Score, egress.Risk.Factors)
+			}
+		})
 	}
 }

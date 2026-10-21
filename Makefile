@@ -370,7 +370,9 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestInteractiveApproveResumesAndDenyKills \
 	TestAgentCannotEscapeItsCgroup \
 	TestAgentCannotObtainAWeakerNestedSession \
-	TestDaemonSelfTestProvesTheOpenProbe
+	TestDaemonSelfTestProvesTheOpenProbe \
+	TestRuntimeConnectIsReportedOnceWithBothAttached \
+	TestCredentialReadThenEgressIsFlagged
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify
