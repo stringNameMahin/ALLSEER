@@ -4,6 +4,7 @@ package containment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -130,8 +131,8 @@ func TestRuntimeFreezeThawKill(t *testing.T) {
 
 // A daemon that died without ending its sessions leaves their cgroups behind.
 // The empty ones are garbage and are cleared; a populated one is a tree
-// nothing governs any more, and has to be reported rather than killed.
-func TestRuntimeSweepClearsEmptyLeftoversAndReportsLive(t *testing.T) {
+// nothing governs any more, and is frozen for an operator rather than killed.
+func TestRuntimeSweepClearsEmptyLeftoversAndFreezesLive(t *testing.T) {
 	requireRoot(t)
 	mnt, err := cgroup2Mount()
 	if err != nil {
@@ -162,7 +163,14 @@ func TestRuntimeSweepClearsEmptyLeftoversAndReportsLive(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	res, err := m.Sweep()
+	if _, err := m.Sweep(context.Background()); !errors.Is(err, ErrNotLocked) {
+		t.Fatalf("Sweep without the lock = %v, want ErrNotLocked", err)
+	}
+	if err := m.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Unlock() })
+	res, err := m.Sweep(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,6 +189,46 @@ func TestRuntimeSweepClearsEmptyLeftoversAndReportsLive(t *testing.T) {
 	if pop, _ := live.Populated(); !pop {
 		t.Fatal("the sweep killed the processes in a live group")
 	}
+	if len(res.Frozen) != 1 || res.Frozen[0] != "live-1" {
+		t.Fatalf("Frozen = %v, want [live-1]", res.Frozen)
+	}
+	if frozen, err := live.Frozen(); err != nil || !frozen {
+		t.Fatalf("the populated leftover is not frozen: %v %v", frozen, err)
+	}
+}
+
+// One daemon per base. The lock is per open of the directory, so a second
+// manager in the same process stands in for a second daemon, and it is free
+// again once released.
+func TestRuntimeOneDaemonPerBase(t *testing.T) {
+	requireRoot(t)
+	mnt, err := cgroup2Mount()
+	if err != nil {
+		t.Skipf("no cgroup v2: %v", err)
+	}
+	base := filepath.Join(mnt, fmt.Sprintf("allseer-lock-%d", time.Now().UnixNano()))
+	first, err := NewManager(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(base) })
+	second, err := NewManager(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Lock(); !errors.Is(err, ErrBaseInUse) {
+		t.Fatalf("second Lock = %v, want ErrBaseInUse", err)
+	}
+	if err := first.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Lock(); err != nil {
+		t.Fatalf("Lock after release = %v", err)
+	}
+	_ = second.Unlock()
 }
 
 // An unprivileged agent cannot move itself out of its session cgroup.

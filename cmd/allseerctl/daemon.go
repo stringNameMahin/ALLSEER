@@ -104,6 +104,9 @@ func runStatus(args []string) int {
 	if st.RefusedRequests > 0 {
 		fmt.Fprintf(w, "refused requests\t%d (callers inside a governed session, or not locatable)\n", st.RefusedRequests)
 	}
+	if st.Leftovers > 0 {
+		fmt.Fprintf(w, "leftovers\t%d session cgroups an earlier daemon left behind (allseerctl leftovers)\n", st.Leftovers)
+	}
 	if st.Coverage.Degraded {
 		fmt.Fprintf(w, "coverage\tDEGRADED; unobservable: %v\n", st.Coverage.Unobservable)
 	}
@@ -302,4 +305,59 @@ func answer(approved bool) func([]string) int {
 		fmt.Printf("%s %s\n", past, f.fs.Arg(0))
 		return 0
 	}
+}
+
+// runLeftovers lists the session cgroups an earlier daemon left behind, or
+// thaws or kills one. Root only, like the daemon side.
+func runLeftovers(args []string) int {
+	f := newDaemonFlags("leftovers", "leftovers [-json] [thaw|kill <name>]")
+	if f.fs.Parse(args) != nil {
+		return 2
+	}
+	ctx := context.Background()
+	switch f.fs.Arg(0) {
+	case "":
+		list, err := f.client().ListLeftovers(ctx)
+		if err != nil {
+			return die("%v", err)
+		}
+		if *f.asJSON {
+			return printJSONValue(list)
+		}
+		if len(list) == 0 {
+			fmt.Println("no leftover session cgroups")
+			return 0
+		}
+		for _, l := range list {
+			state := "RUNNING UNGOVERNED"
+			if l.Frozen {
+				state = "frozen"
+			}
+			fmt.Printf("%s  %s  pids %v  users %v\n", l.Name, state, l.PIDs, l.Users)
+		}
+		return 0
+	case "thaw", "kill":
+		if f.fs.NArg() != 2 {
+			f.fs.Usage()
+			return 2
+		}
+		name := f.fs.Arg(1)
+		var err error
+		if f.fs.Arg(0) == "thaw" {
+			err = f.client().ThawLeftover(ctx, name)
+		} else {
+			err = f.client().KillLeftover(ctx, name)
+		}
+		if err != nil {
+			return die("%v", err)
+		}
+		if f.fs.Arg(0) == "thaw" {
+			fmt.Printf("thawed %s; its processes now run with nothing governing them\n", name)
+		} else {
+			fmt.Printf("killed %s\n", name)
+		}
+		return 0
+	}
+	f.fs.Usage()
+	return 2
 }

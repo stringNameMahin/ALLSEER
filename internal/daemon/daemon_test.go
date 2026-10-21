@@ -176,6 +176,19 @@ func (g *fakeGroup) Populated() (bool, error) {
 	return g.populated, nil
 }
 func (g *fakeGroup) Remove() error { g.mu.Lock(); g.removed = true; g.mu.Unlock(); return nil }
+func (g *fakeGroup) Pids() ([]int, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.populated {
+		return nil, nil
+	}
+	return append([]int(nil), g.adopted...), nil
+}
+func (g *fakeGroup) Frozen() (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.frozen, nil
+}
 func (g *fakeGroup) state() (frozen, killed bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -213,6 +226,13 @@ func (f *fakeGroups) Governed(pid int32) (string, bool, error) {
 	}
 	sid, ok := f.governed[pid]
 	return sid, ok, nil
+}
+
+func (f *fakeGroups) Leftover(name string) (LeftoverGroup, error) {
+	if g := f.get(name); g != nil {
+		return g, nil
+	}
+	return nil, containment.ErrBadSession
 }
 
 // govern marks pid as being inside session sid's cgroup.
@@ -292,6 +312,13 @@ type rig struct {
 
 func newRig(t *testing.T, mode policy.Mode, timeout time.Duration) *rig {
 	t.Helper()
+	return newRigWith(t, mode, timeout, nil)
+}
+
+// newRigWith is newRig with a hook that sees the rig's fakes and the options
+// before the daemon is built.
+func newRigWith(t *testing.T, mode policy.Mode, timeout time.Duration, setup func(*rig, *Options)) *rig {
+	t.Helper()
 	rs, err := policy.NewLoader().Load(context.Background(), "../../configs/rules.default.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -313,13 +340,17 @@ func newRig(t *testing.T, mode policy.Mode, timeout time.Duration) *rig {
 	cfg.Policy.ApprovalTimeout = timeout
 
 	r := &rig{tel: newFakeTel(), groups: &fakeGroups{groups: map[string]*fakeGroup{}}, audit: &memSink{}}
-	r.d, err = New(Options{
+	opts := Options{
 		Config: cfg, Telemetry: r.tel, Groups: r.groups, Host: fakeHost{ppid: int32(os.Getpid())},
 		Policy: pe, Risk: re, Audit: r.audit, Resolvers: []string{"127.0.0.53"},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		EndSettle: 20 * time.Millisecond, OrphanGrace: 50 * time.Millisecond,
 		Prober: fakeProber(r.tel, probeReports), SelfTestTimeout: 200 * time.Millisecond,
-	})
+	}
+	if setup != nil {
+		setup(r, &opts)
+	}
+	r.d, err = New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

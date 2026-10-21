@@ -158,7 +158,14 @@ func run(args []string) int {
 		log.Error("cgroup.freeze is unavailable; sessions could not be contained")
 		return 1
 	}
-	reportSweep(log, mgr)
+	// One daemon per base. Without this a second daemon would freeze or kill
+	// the first one's live sessions as leftovers.
+	if err := mgr.Lock(); err != nil {
+		log.Error("refusing to start", "base", mgr.Base(), "err", err)
+		return 1
+	}
+	defer func() { _ = mgr.Unlock() }()
+	leftovers := sweep(ctx, log, mgr)
 
 	tel, err := newTelemetry(ctx, cfg.Telemetry)
 	if err != nil {
@@ -180,6 +187,7 @@ func run(args []string) int {
 		Logger:    log,
 		Version:   buildinfo.String(),
 		Prober:    selfTestProber,
+		Leftovers: leftovers,
 	})
 	if err != nil {
 		log.Error("building daemon", "err", err)
@@ -246,25 +254,34 @@ func preflight(cfg *config.Config) error {
 	return nil
 }
 
-// reportSweep clears the empty session cgroups a previous daemon left behind
-// and reports the ones that still hold processes. A populated leftover is a
-// process tree nothing is governing any more, so it is reported at error level
-// rather than cleaned up: the base may be shared with a running daemon, and
-// killing somebody else's live session would be worse than naming this one.
-func reportSweep(log *slog.Logger, mgr *containment.Manager) {
-	res, err := mgr.Sweep()
+// sweep clears the empty session cgroups a previous daemon left behind and
+// freezes the ones that still hold processes, so nothing runs ungoverned
+// while an operator decides. allseerctl leftovers lists them and can thaw or
+// kill them.
+func sweep(ctx context.Context, log *slog.Logger, mgr *containment.Manager) containment.SweepResult {
+	res, err := mgr.Sweep(ctx)
 	if err != nil {
 		log.Error("sweeping leftover session cgroups", "base", mgr.Base(), "err", err)
-		return
+		return res
 	}
 	if len(res.Removed) > 0 {
 		log.Info("removed empty session cgroups left by an earlier daemon",
 			"base", mgr.Base(), "removed", res.Removed)
 	}
+	frozen := make(map[string]bool, len(res.Frozen))
+	for _, name := range res.Frozen {
+		frozen[name] = true
+	}
 	for _, name := range res.Populated {
-		log.Error("a leftover session cgroup still holds processes; nothing is governing them",
+		if frozen[name] {
+			log.Warn("froze a leftover session cgroup an earlier daemon left running; see allseerctl leftovers",
+				"base", mgr.Base(), "session", name)
+			continue
+		}
+		log.Error("a leftover session cgroup could not be frozen; nothing is governing its processes",
 			"base", mgr.Base(), "session", name)
 	}
+	return res
 }
 
 func reportCoverage(log *slog.Logger, cov telemetry.Coverage) {

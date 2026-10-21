@@ -103,6 +103,9 @@ func (c CgroupGroups) Capabilities() containment.Capabilities { return c.M.Capab
 // and which session holds it.
 func (c CgroupGroups) Governed(pid int32) (string, bool, error) { return c.M.Governed(int(pid)) }
 
+// Leftover opens a session cgroup an earlier daemon left behind.
+func (c CgroupGroups) Leftover(name string) (LeftoverGroup, error) { return c.M.Open(name) }
+
 type cgroupGroup struct{ *containment.Group }
 
 func (g cgroupGroup) CgroupID() uint64 { return g.ID }

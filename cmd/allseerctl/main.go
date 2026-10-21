@@ -70,6 +70,7 @@ func commands() []command {
 		{"approvals", "List pending runtime approvals", runApprovals},
 		{"approve", "Approve a pending request and resume the agent", answer(true)},
 		{"deny", "Deny a pending request and kill the agent", answer(false)},
+		{"leftovers", "List, thaw or kill the processes a crashed daemon left behind (root)", runLeftovers},
 		{"replay", "Replay a recorded telemetry stream", runReplay},
 		{"policy", "Inspect policy rule sets; dry-run one against a recording", runPolicy},
 		{"capabilities", "List the capability catalog this build knows", runCapabilities},

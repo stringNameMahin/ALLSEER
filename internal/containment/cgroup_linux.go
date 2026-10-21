@@ -20,6 +20,7 @@ const settleTimeout = 5 * time.Second
 // Manager creates session cgroups under one root-owned base directory.
 type Manager struct {
 	base string
+	lock *os.File
 }
 
 // NewManager returns a manager rooted at base, creating it if needed. An empty
@@ -53,15 +54,49 @@ func (m *Manager) Capabilities() Capabilities {
 	return Capabilities{Freeze: ferr == nil, Kill: kerr == nil}
 }
 
-// Sweep removes the empty session cgroups left under the base and reports the
+// Lock takes the base for this manager alone, so a second daemon on the same
+// base refuses to start. It is a flock on the base directory, held until
+// Unlock or until the process exits, so a daemon that crashed never leaves a
+// stale lock behind.
+func (m *Manager) Lock() error {
+	f, err := os.Open(m.base)
+	if err != nil {
+		return fmt.Errorf("containment: opening %s: %w", m.base, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("%w: %s", ErrBaseInUse, m.base)
+		}
+		return fmt.Errorf("containment: locking %s: %w", m.base, err)
+	}
+	m.lock = f
+	return nil
+}
+
+// Unlock releases the base.
+func (m *Manager) Unlock() error {
+	if m.lock == nil {
+		return nil
+	}
+	err := m.lock.Close()
+	m.lock = nil
+	return err
+}
+
+// Sweep removes the empty session cgroups left under the base and freezes the
 // ones that still hold processes.
 //
 // A leftover group means a daemon exited without finishing its sessions. The
-// empty ones are pure garbage. The populated ones are not killed here: the
-// base can be shared with another running daemon, and killing a live session
-// that belongs to somebody else would be worse than reporting it.
-func (m *Manager) Sweep() (SweepResult, error) {
+// empty ones are pure garbage. The populated ones are processes nothing is
+// governing any more; they are frozen rather than killed, so an operator can
+// inspect them and then kill or resume them. Acting on them is only safe when
+// no other daemon can own them, so Sweep requires the base's lock.
+func (m *Manager) Sweep(ctx context.Context) (SweepResult, error) {
 	var out SweepResult
+	if m.lock == nil {
+		return out, ErrNotLocked
+	}
 	groups, err := m.List()
 	if err != nil {
 		return out, err
@@ -70,6 +105,9 @@ func (m *Manager) Sweep() (SweepResult, error) {
 		pop, err := g.Populated()
 		if err != nil || pop {
 			out.Populated = append(out.Populated, g.Session)
+			if err == nil && g.Freeze(ctx) == nil {
+				out.Frozen = append(out.Frozen, g.Session)
+			}
 			continue
 		}
 		if err := g.Remove(); err != nil {

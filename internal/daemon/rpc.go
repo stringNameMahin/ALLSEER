@@ -126,6 +126,17 @@ func (d *Daemon) Call(ctx context.Context, peer ipc.Peer, method string, params 
 		return struct{}{}, nil
 	case ipc.MethodReloadPolicy:
 		return nil, ipc.Errorf(ipc.ErrCodeInvalidRequest, "policy reload is not supported by this build; restart the daemon")
+	case ipc.MethodListLeftovers:
+		return d.listLeftovers(peer)
+	case ipc.MethodThawLeftover, ipc.MethodKillLeftover:
+		var req ipc.LeftoverRequest
+		if err := decode(params, &req); err != nil {
+			return nil, err
+		}
+		if method == ipc.MethodThawLeftover {
+			return struct{}{}, d.thawLeftover(ctx, peer, req.Name)
+		}
+		return struct{}{}, d.killLeftover(ctx, peer, req.Name)
 	}
 	return nil, ipc.Errorf(ipc.ErrCodeInvalidRequest, "unknown method %q", method)
 }
@@ -525,6 +536,7 @@ func (d *Daemon) status() *ipc.StatusResponse {
 		Collector:         cs,
 		RefusedRequests:   d.refusalCount(),
 		AuditErrors:       d.auditErrors(),
+		Leftovers:         d.leftoverCount(),
 		Dispatch:          d.dispatch.Stats(),
 		Containment:       d.groups.Capabilities(),
 		Enforcer:          d.enforcer.Capabilities(),

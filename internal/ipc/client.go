@@ -214,6 +214,22 @@ func (c *SocketClient) Status(ctx context.Context) (*StatusResponse, error) {
 	return &out, c.call(ctx, MethodStatus, nil, &out)
 }
 
+// ListLeftovers implements Client.
+func (c *SocketClient) ListLeftovers(ctx context.Context) ([]LeftoverInfo, error) {
+	var out []LeftoverInfo
+	return out, c.call(ctx, MethodListLeftovers, nil, &out)
+}
+
+// ThawLeftover implements Client.
+func (c *SocketClient) ThawLeftover(ctx context.Context, name string) error {
+	return c.call(ctx, MethodThawLeftover, LeftoverRequest{Name: name}, nil)
+}
+
+// KillLeftover implements Client.
+func (c *SocketClient) KillLeftover(ctx context.Context, name string) error {
+	return c.call(ctx, MethodKillLeftover, LeftoverRequest{Name: name}, nil)
+}
+
 // ReloadPolicy implements Client.
 func (c *SocketClient) ReloadPolicy(ctx context.Context) error {
 	return c.call(ctx, MethodReloadPolicy, nil, nil)

@@ -18,6 +18,7 @@ func TestEveryLineNamesItsKindFirst(t *testing.T) {
 		RecordApproval:       Approval{SessionID: "s1"},
 		RecordControlRefused: ControlRefused{Method: "CreateSession"},
 		RecordSessionEnd:     SessionEnd{SessionID: "s1"},
+		RecordLeftover:       Leftover{SessionID: "s1", Action: LeftoverFrozen},
 	}
 	if len(values) != len(AllRecordKinds()) {
 		t.Fatalf("%d kinds tested, %d declared", len(values), len(AllRecordKinds()))
@@ -57,6 +58,7 @@ func TestALineOfAnotherKindIsRefused(t *testing.T) {
 	for name, into := range map[string]any{
 		"SessionStart": new(SessionStart), "Approval": new(Approval),
 		"ControlRefused": new(ControlRefused), "SessionEnd": new(SessionEnd),
+		"Leftover": new(Leftover),
 	} {
 		if err := json.Unmarshal(dec, into); err == nil {
 			t.Errorf("a decision line decoded as %s", name)
@@ -108,6 +110,7 @@ func TestRecordKindsMatchTheSchema(t *testing.T) {
 			Approval       constProp `json:"approval"`
 			ControlRefused constProp `json:"controlRefused"`
 			SessionEnd     constProp `json:"sessionEnd"`
+			Leftover       constProp `json:"leftover"`
 		} `json:"$defs"`
 	}
 	if err := json.Unmarshal(read("audit.v1alpha2.schema.json"), &audit); err != nil {
@@ -135,6 +138,7 @@ func TestRecordKindsMatchTheSchema(t *testing.T) {
 		RecordApproval:       audit.Defs.Approval,
 		RecordControlRefused: audit.Defs.ControlRefused,
 		RecordSessionEnd:     audit.Defs.SessionEnd,
+		RecordLeftover:       audit.Defs.Leftover,
 	} {
 		if def.Properties.Record.Const != string(kind) {
 			t.Errorf("schema const for %s = %q", kind, def.Properties.Record.Const)

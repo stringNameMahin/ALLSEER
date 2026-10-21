@@ -34,6 +34,9 @@ const (
 
 	// RecordSessionEnd is a SessionEnd.
 	RecordSessionEnd RecordKind = "session_end"
+
+	// RecordLeftover is a Leftover.
+	RecordLeftover RecordKind = "leftover"
 )
 
 // AllRecordKinds returns every kind of audit line this build writes.
@@ -45,6 +48,7 @@ func AllRecordKinds() []RecordKind {
 		RecordApproval,
 		RecordControlRefused,
 		RecordSessionEnd,
+		RecordLeftover,
 	}
 }
 
@@ -228,6 +232,39 @@ type SessionEnd struct {
 	TopViolations   []string                `json:"top_violations,omitempty"`
 }
 
+// LeftoverAction is what happened to a leftover session cgroup.
+type LeftoverAction string
+
+// The actions on a leftover. Append-only.
+const (
+	// LeftoverFrozen: the startup sweep froze it.
+	LeftoverFrozen LeftoverAction = "frozen"
+	// LeftoverFreezeFailed: the startup sweep could not freeze it, so its
+	// processes are still running with nothing governing them.
+	LeftoverFreezeFailed LeftoverAction = "freeze_failed"
+	// LeftoverThawed: an operator resumed it. Its processes run ungoverned.
+	LeftoverThawed LeftoverAction = "thawed"
+	// LeftoverKilled: an operator killed every process in it.
+	LeftoverKilled LeftoverAction = "killed"
+)
+
+// Leftover is an action on a session cgroup a previous daemon left behind
+// with processes still in it. The cgroup is named after the dead session, so
+// these lines follow that session's start record, which has no end record.
+type Leftover struct {
+	SessionID string    `json:"session_id"`
+	Timestamp time.Time `json:"timestamp"`
+
+	Action LeftoverAction `json:"action"`
+
+	// PIDs are the processes in the group when the action was taken.
+	PIDs []int32 `json:"pids,omitempty"`
+
+	// By is the user who acted, or "startup" for the sweep.
+	By     string `json:"by"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // RecordKind implements Record.
 func (SessionStart) RecordKind() RecordKind { return RecordSessionStart }
 
@@ -239,6 +276,9 @@ func (ControlRefused) RecordKind() RecordKind { return RecordControlRefused }
 
 // RecordKind implements Record.
 func (SessionEnd) RecordKind() RecordKind { return RecordSessionEnd }
+
+// RecordKind implements Record.
+func (Leftover) RecordKind() RecordKind { return RecordLeftover }
 
 // The wire types below have no methods, so marshalling one does not re-enter
 // the method that called it. Embedding puts the kind first on the line.
@@ -310,6 +350,24 @@ func (r SessionEnd) MarshalJSON() ([]byte, error) {
 func (r *SessionEnd) UnmarshalJSON(data []byte) error {
 	type wire SessionEnd
 	if err := checkKind(data, RecordSessionEnd); err != nil {
+		return err
+	}
+	return json.Unmarshal(data, (*wire)(r))
+}
+
+// MarshalJSON writes the record with its kind.
+func (r Leftover) MarshalJSON() ([]byte, error) {
+	type wire Leftover
+	return json.Marshal(struct {
+		Record RecordKind `json:"record"`
+		wire
+	}{RecordLeftover, wire(r)})
+}
+
+// UnmarshalJSON refuses a line of another kind.
+func (r *Leftover) UnmarshalJSON(data []byte) error {
+	type wire Leftover
+	if err := checkKind(data, RecordLeftover); err != nil {
 		return err
 	}
 	return json.Unmarshal(data, (*wire)(r))

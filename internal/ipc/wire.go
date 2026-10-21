@@ -49,6 +49,9 @@ const (
 	MethodStreamApprovals  = "StreamApprovals"
 	MethodStatus           = "Status"
 	MethodReloadPolicy     = "ReloadPolicy"
+	MethodListLeftovers    = "ListLeftovers"
+	MethodThawLeftover     = "ThawLeftover"
+	MethodKillLeftover     = "KillLeftover"
 )
 
 // IsStream reports whether a method streams results.

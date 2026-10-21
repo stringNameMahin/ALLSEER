@@ -59,6 +59,8 @@ type Groups interface {
 	// Governed reports whether pid is inside a session cgroup this daemon
 	// owns, and which session holds it when that is known.
 	Governed(pid int32) (sid string, governed bool, err error)
+	// Leftover opens a session cgroup an earlier daemon left behind.
+	Leftover(name string) (LeftoverGroup, error)
 }
 
 // AuditTrail is the durable record: every decision, and the session-level
@@ -106,6 +108,10 @@ type Options struct {
 	// SelfTestTimeout bounds the self-test's wait for its record. Zero uses
 	// DefaultSelfTestTimeout.
 	SelfTestTimeout time.Duration
+
+	// Leftovers is what the startup sweep found: the session cgroups an
+	// earlier daemon left with processes in them, and which it froze.
+	Leftovers containment.SweepResult
 }
 
 type sessionInfo struct {
@@ -150,6 +156,10 @@ type Daemon struct {
 
 	mu       sync.Mutex
 	sessions map[string]*sessionInfo
+
+	// leftovers names the session cgroups an earlier daemon left behind that
+	// still exist. Guarded by mu.
+	leftovers map[string]bool
 
 	sinkErrors uint64
 
@@ -224,6 +234,7 @@ func New(o Options) (*Daemon, error) {
 		control:   make(chan func(), 64),
 		started:   now(),
 		sessions:  make(map[string]*sessionInfo),
+		leftovers: make(map[string]bool),
 	}
 	d.manager = session.NewManager(session.ManagerConfig{
 		RequireApproval: o.Config.Envelope.RequireApproval,
@@ -248,6 +259,7 @@ func New(o Options) (*Daemon, error) {
 		return nil, err
 	}
 	d.dispatch = disp
+	d.noteLeftovers(o.Leftovers)
 	return d, nil
 }
 

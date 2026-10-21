@@ -13,13 +13,14 @@
     { "$ref": "#/$defs/sessionStart" },
     { "$ref": "#/$defs/approval" },
     { "$ref": "#/$defs/controlRefused" },
-    { "$ref": "#/$defs/sessionEnd" }
+    { "$ref": "#/$defs/sessionEnd" },
+    { "$ref": "#/$defs/leftover" }
   ],
 
   "$defs": {
     "recordKind": {
       "type": "string",
-      "enum": ["decision", "session_start", "approval", "control_refused", "session_end"]
+      "enum": ["decision", "session_start", "approval", "control_refused", "session_end", "leftover"]
     },
 
     "capabilityKinds": {
@@ -166,6 +167,25 @@
         },
         "unused_grants": { "$ref": "#/$defs/capabilityKinds" },
         "top_violations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "leftover": {
+      "description": "An action on a session cgroup a previous daemon left behind with processes still in it: frozen by the startup sweep, or thawed or killed by an operator.",
+      "type": "object",
+      "required": ["record", "session_id", "timestamp", "action", "by"],
+      "additionalProperties": false,
+      "properties": {
+        "record": { "const": "leftover" },
+        "session_id": { "description": "The cgroup's name, which is the dead session's ID.", "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "action": { "type": "string", "enum": ["frozen", "freeze_failed", "thawed", "killed"] },
+        "pids": {
+          "description": "The processes in the group when the action was taken.",
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "by": { "description": "The user who acted, or startup for the sweep.", "type": "string" },
+        "reason": { "type": "string" }
       }
     }
   }

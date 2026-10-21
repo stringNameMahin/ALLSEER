@@ -22,6 +22,11 @@ var (
 	ErrUnsupported = errors.New("containment: cgroup v2 containment is not available on this host")
 	ErrBadSession  = errors.New("containment: session ID is not a safe cgroup name")
 	ErrExists      = errors.New("containment: session cgroup already exists")
+	// ErrBaseInUse means another daemon holds the base's lock.
+	ErrBaseInUse = errors.New("containment: another daemon is governing this cgroup base")
+	// ErrNotLocked means an operation that acts on groups it does not own was
+	// attempted without holding the base's lock.
+	ErrNotLocked = errors.New("containment: the cgroup base is not locked by this daemon")
 )
 
 var sessionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -36,6 +41,9 @@ type SweepResult struct {
 	// Populated names the leftover session cgroups that still hold processes.
 	// Each one is a tree no session is governing any more.
 	Populated []string `json:"populated"`
+	// Frozen names the populated leftovers the sweep froze, or found already
+	// frozen. A populated name missing here could not be frozen.
+	Frozen []string `json:"frozen"`
 }
 
 // Capabilities reports which whole-tree operations the host supports.

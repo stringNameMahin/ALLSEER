@@ -62,7 +62,8 @@ validate "$SCHEMA_DIR/decision.v1alpha2.schema.json" "$EXAMPLE_DIR/decision.unsc
 # included, so a consumer can check a log line by line without dispatching.
 for doc in decision.example.json decision.unscored.example.json \
   audit.session_start.example.json audit.approval.example.json \
-  audit.control_refused.example.json audit.session_end.example.json; do
+  audit.control_refused.example.json audit.session_end.example.json \
+  audit.leftover.example.json; do
   validate "$SCHEMA_DIR/audit.v1alpha2.schema.json" "$EXAMPLE_DIR/$doc"
 done
 

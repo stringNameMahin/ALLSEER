@@ -1,0 +1,8 @@
+{
+  "record": "leftover",
+  "session_id": "s-20261021t092037-50e396cc",
+  "timestamp": "2026-10-21T09:20:39.893715225Z",
+  "action": "frozen",
+  "pids": [86027, 86037, 86038, 86088],
+  "by": "startup"
+}

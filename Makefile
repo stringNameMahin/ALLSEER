@@ -374,7 +374,9 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestRuntimeConnectIsReportedOnceWithBothAttached \
 	TestCredentialReadThenEgressIsFlagged \
 	TestInteractiveDefaultPromptsOnARawTerminal \
-	TestEnforceLetsWarnThrough
+	TestEnforceLetsWarnThrough \
+	TestRuntimeOneDaemonPerBase \
+	TestLeftoversAreFrozenAfterADaemonCrash
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify

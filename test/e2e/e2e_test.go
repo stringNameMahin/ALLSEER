@@ -44,6 +44,9 @@ type env struct {
 	object string
 	repo   string
 	skip   string
+	// cgroups is this run's own cgroup base, so the suite neither takes nor
+	// trips over the lock of a daemon installed on the host.
+	cgroups string
 }
 
 var e env
@@ -53,7 +56,32 @@ func TestMain(m *testing.M) {
 		os.Exit(helperMain(name, os.Args[1:]))
 	}
 	e = setup()
-	os.Exit(m.Run())
+	code := m.Run()
+	clearCgroups()
+	os.Exit(code)
+}
+
+// clearCgroups kills whatever this run left under its cgroup base and
+// removes it.
+func clearCgroups() {
+	if e.cgroups == "" {
+		return
+	}
+	entries, _ := os.ReadDir(e.cgroups)
+	for _, ent := range entries {
+		if ent.IsDir() {
+			killGroup(filepath.Join(e.cgroups, ent.Name()))
+		}
+	}
+	_ = os.Remove(e.cgroups)
+}
+
+// killGroup kills every process in a session cgroup and removes it.
+func killGroup(g string) {
+	_ = os.WriteFile(filepath.Join(g, "cgroup.kill"), []byte("1"), 0)
+	for i := 0; i < 100 && os.Remove(g) != nil; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func setup() env {
@@ -75,6 +103,7 @@ func setup() env {
 	}
 	_ = os.Chmod(dir, 0o755)
 	out.dir = dir
+	out.cgroups = fmt.Sprintf("/sys/fs/cgroup/allseer-e2e-%d", os.Getpid())
 	out.object = os.Getenv("ALLSEER_E2E_OBJECT")
 	// Copy the binaries somewhere the agent user can execute them.
 	out.bin = filepath.Join(dir, "bin")
@@ -146,7 +175,7 @@ func startDaemonWith(t *testing.T, mode, cfg string) *daemon {
 		done:   make(chan error, 1),
 	}
 	args := []string{
-		"--socket", d.socket, "--object", e.object, "--audit", d.audit,
+		"--socket", d.socket, "--object", e.object, "--audit", d.audit, "--cgroup-base", e.cgroups,
 		"--rules", filepath.Join(e.repo, "configs/rules.default.yaml"),
 		"--sensitivity", filepath.Join(e.repo, "configs/sensitivity.default.yaml"),
 	}
@@ -676,7 +705,7 @@ func TestDaemonShutdownKillsLiveSessions(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("allseerd did not exit after SIGTERM")
 	}
-	if exists(filepath.Join("/sys/fs/cgroup/allseer", sid)) {
+	if exists(filepath.Join(e.cgroups, sid)) {
 		t.Fatal("the session cgroup outlived the daemon")
 	}
 	// The end is written before the daemon exits, not lost with it.
@@ -855,9 +884,11 @@ func TestAgentStopsWhenTheDaemonDiesWithoutCleanup(t *testing.T) {
 	}
 	// The cgroup outlives the daemon here, which is what the next daemon's
 	// startup sweep is for.
-	left := filepath.Join("/sys/fs/cgroup/allseer", sid)
+	// The orphaned sleep is killed here so the next daemon's sweep does not
+	// find it and freeze it.
+	left := filepath.Join(e.cgroups, sid)
 	if exists(left) {
-		t.Cleanup(func() { _ = os.Remove(left) })
+		t.Cleanup(func() { killGroup(left) })
 	}
 }
 
@@ -978,7 +1009,7 @@ func TestDaemonSelfTestProvesTheOpenProbe(t *testing.T) {
 	if !strings.Contains(d.log.String(), "telemetry self-test passed") {
 		t.Errorf("the daemon did not log the self-test:\n%s", filterLibbpf(d.log.String()))
 	}
-	if left, _ := filepath.Glob("/sys/fs/cgroup/allseer/selftest-*"); len(left) != 0 {
+	if left, _ := filepath.Glob(filepath.Join(e.cgroups, "selftest-*")); len(left) != 0 {
 		t.Errorf("the self-test left cgroups behind: %v", left)
 	}
 }
@@ -1025,7 +1056,7 @@ func TestDaemonRefusesToGovernWhenTheOpenProbeIsMissing(t *testing.T) {
 	if _, err := os.Stat(socket); err == nil {
 		t.Error("the control socket was created although the daemon refused to govern")
 	}
-	if left, _ := filepath.Glob("/sys/fs/cgroup/allseer/selftest-*"); len(left) != 0 {
+	if left, _ := filepath.Glob(filepath.Join(e.cgroups, "selftest-*")); len(left) != 0 {
 		t.Errorf("the failed self-test left cgroups behind: %v", left)
 	}
 }

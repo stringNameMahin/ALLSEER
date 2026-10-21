@@ -87,6 +87,18 @@ type Client interface {
 	// ReloadPolicy reloads the rule set from disk.
 	ReloadPolicy(ctx context.Context) error
 
+	// ListLeftovers lists the session cgroups an earlier daemon left behind
+	// with processes in them. Root only.
+	ListLeftovers(ctx context.Context) ([]LeftoverInfo, error)
+
+	// ThawLeftover resumes a leftover's processes, which then run with nothing
+	// governing them. Root only.
+	ThawLeftover(ctx context.Context, name string) error
+
+	// KillLeftover kills every process in a leftover and removes its cgroup.
+	// Root only.
+	KillLeftover(ctx context.Context, name string) error
+
 	// Close releases the connection.
 	Close() error
 }
@@ -177,6 +189,26 @@ type SelfTestResult struct {
 	At time.Time `json:"at"`
 }
 
+// LeftoverInfo describes a session cgroup an earlier daemon left behind.
+type LeftoverInfo struct {
+	// Name is the cgroup's name, which was the dead session's ID.
+	Name string `json:"name"`
+
+	// Frozen reports whether its processes are stopped. A thawed leftover, or
+	// one the startup sweep could not freeze, is running ungoverned.
+	Frozen bool `json:"frozen"`
+
+	PIDs []int32 `json:"pids"`
+
+	// Users are the owners of those processes.
+	Users []string `json:"users"`
+}
+
+// LeftoverRequest names one leftover.
+type LeftoverRequest struct {
+	Name string `json:"name"`
+}
+
 type StatusResponse struct {
 	Version         string `json:"version"`
 	ProtocolVersion string `json:"protocol_version"`
@@ -200,6 +232,10 @@ type StatusResponse struct {
 	// AuditErrors counts records that failed to reach the audit log. Above
 	// zero, the log is missing decisions or session records.
 	AuditErrors uint64 `json:"audit_errors"`
+
+	// Leftovers counts session cgroups an earlier daemon left behind with
+	// processes in them. See allseerctl leftovers.
+	Leftovers int `json:"leftovers"`
 
 	// TelemetryHealthy reports whether the attribution floor is attached and
 	// the startup self-test passed. Probes merely being attached is not enough.
