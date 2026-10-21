@@ -33,7 +33,7 @@
  * size. It does not catch a layout that stayed the same size and changed
  * meaning: a field retyped, two fields swapped, a bound moved from one array to
  * another. Those records decode without complaint into confident nonsense. */
-#define ALLSEER_ABI_VERSION  5
+#define ALLSEER_ABI_VERSION  6
 
 /* Bounded because eBPF stack space is limited to 512 bytes and the verifier
  * rejects unbounded copies. These caps are a real constraint on what a probe
@@ -64,6 +64,7 @@ enum allseer_event_type {
     ALLSEER_EVT_NET_SEND    = 10,
     ALLSEER_EVT_PRIV_CHANGE = 11,
     ALLSEER_EVT_PTRACE      = 12,
+    ALLSEER_EVT_FILE_LINK   = 13,
 };
 
 /* Which credential operation an ALLSEER_EVT_PRIV_CHANGE record reports.
@@ -266,6 +267,19 @@ struct allseer_file_payload {
     char  path[ALLSEER_PATH_MAX];
     char  new_path[ALLSEER_PATH_MAX];  /* rename/link destination */
     char  dir[ALLSEER_DIR_MAX];        /* base of a relative path, reversed */
+};
+
+/* A hard link: an existing file given a second name. Both names are the
+ * kernel's own, walked from dentries at security_path_link, reversed the way
+ * `dir` above is ("c/b/a/" for /a/b/c), each with its own ALLSEER_DIR_* flags.
+ * inode and device are the source file's: what the new name will refer to. */
+struct allseer_link_payload {
+    __u64 inode;
+    __u64 device;
+    __u32 src_flags;                   /* enum allseer_path_flag, DIR_* bits */
+    __u32 dst_flags;
+    char  src[ALLSEER_DIR_MAX];        /* the file linked to */
+    char  dst[ALLSEER_DIR_MAX];        /* the name created */
 };
 
 struct allseer_net_payload {
@@ -504,6 +518,7 @@ struct allseer_event {
         struct allseer_net_payload  net;
         struct allseer_exec_payload exec;
         struct allseer_priv_payload priv;
+        struct allseer_link_payload link;
     } payload;
 };
 

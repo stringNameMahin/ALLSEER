@@ -302,6 +302,11 @@ func decodePayload(rec *abi.Event, e *event.Event) error {
 		e.Capability = capability.KindFileRename
 		e.File = f
 
+	case abi.EvtFileLink:
+		p := rec.Link()
+		e.Capability = capability.KindFileLink
+		e.File = linkPayload(&p)
+
 	case abi.EvtFileChmod:
 		p := rec.File()
 		f, err := filePayload(&p, false)
@@ -776,6 +781,41 @@ func filePayload(p *abi.FilePayload, withNewPath bool) (*event.FilePayload, erro
 	return out, nil
 }
 
+// linkPayload reads struct allseer_link_payload.
+//
+// Both names are the kernel's, walked from dentries, so the source is used as
+// it stands (KernelPath) and is the observation's target, with the name
+// created carried as NewPath, the convention rename already follows. A walk
+// that did not reach the root, or a source whose name was already unlinked,
+// yields no path: Truncated, so the operation is unevaluable rather than
+// matched against a partial name.
+func linkPayload(p *abi.LinkPayload) *event.FilePayload {
+	out := &event.FilePayload{Inode: p.Inode, Device: p.Device, KernelPath: true}
+	if src, ok := walkedPath(p.Src[:], p.SrcFlags); ok {
+		out.Path = src
+	} else {
+		out.Truncated = true
+	}
+	if dst, ok := walkedPath(p.Dst[:], p.DstFlags); ok {
+		out.NewPath = dst
+	}
+	return out
+}
+
+// walkedPath turns one walk_dir result into an absolute path, or reports that
+// it is not one.
+func walkedPath(raw []byte, flags uint32) (string, bool) {
+	f := abi.PathFlag(flags)
+	if f&abi.AllseerDirComplete == 0 || f&(abi.AllseerDirTruncated|abi.AllseerDirUnavailable|abi.AllseerDirDeleted) != 0 {
+		return "", false
+	}
+	s, terminated := abi.CString(raw)
+	if !terminated || s == "" {
+		return "", false
+	}
+	return reverseDir(s)
+}
+
 // execPayload reads struct allseer_exec_payload.
 //
 // The environment is not read because it is not written: the header states that
@@ -1116,6 +1156,8 @@ func CapabilitiesFor(t abi.EventType) []capability.Kind {
 		return []capability.Kind{capability.KindFileRename}
 	case abi.EvtFileChmod:
 		return []capability.Kind{capability.KindFileChmod}
+	case abi.EvtFileLink:
+		return []capability.Kind{capability.KindFileLink}
 	case abi.EvtProcExec:
 		return []capability.Kind{capability.KindProcessExec}
 	case abi.EvtProcExit:

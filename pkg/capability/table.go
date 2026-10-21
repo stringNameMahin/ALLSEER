@@ -99,7 +99,7 @@ var descriptors = []Descriptor{
 		Domain:           DomainFilesystem,
 		Summary:          "Create a hard or symbolic link.",
 		BaselineSeverity: SeverityHigh,
-		Syscalls:         []string{"link", "linkat", "symlink", "symlinkat"},
+		Syscalls:         []string{"link", "linkat", "symlink", "symlinkat", "io_uring"},
 	},
 	{
 		Kind:             KindFileMount,

@@ -1131,3 +1131,62 @@ func TestCredentialReadThenEgressIsFlagged(t *testing.T) {
 		})
 	}
 }
+
+// Hard links reach the pipeline from a real agent, named by the file they
+// point at. A link inside the workspace is within the envelope; a link to a
+// key outside every grant is a departure scored as sensitive. Monitor mode,
+// so both run. The key sits outside /tmp, which sessions may write, and is
+// linked within its own directory so the link cannot cross a mount.
+func TestHardlinksAreObservedByTheirSource(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	ws := workspace(t)
+	home := fmt.Sprintf("/var/lib/allseer-e2e-home-%d", os.Getpid())
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	key := filepath.Join(home, ".ssh", "id_rsa")
+	src := filepath.Join(ws, "src.txt")
+	if err := os.MkdirAll(filepath.Dir(key), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{key, src} {
+		if err := os.WriteFile(f, []byte("test fixture, not a key\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []string{filepath.Dir(key), key, src} {
+		if err := os.Chown(p, agentUID, agentUID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := shim(t, d.socket, ws, "", script(t, "ln "+key+" "+key+".alias || exit 1\nln src.txt dst.txt || exit 1"))
+	sid := r.sessionID(t)
+	if code := r.wait(t, 30*time.Second); code != 0 {
+		t.Fatalf("agent exit = %d\n%s", code, r.stderr.String())
+	}
+
+	var keyLink, plain *decision.Decision
+	ds := d.decisions(t, sid)
+	for i := range ds {
+		switch target(ds[i]) {
+		case fmt.Sprintf("fs.link on %q", key):
+			keyLink = &ds[i]
+		case fmt.Sprintf("fs.link on %q", src):
+			plain = &ds[i]
+		}
+	}
+	if keyLink == nil || plain == nil {
+		t.Fatalf("link decisions: key %v plain %v, want both, named by their source", keyLink != nil, plain != nil)
+	}
+	if plain.Verdict != decision.VerdictWithinEnvelope {
+		t.Errorf("workspace link verdict = %s, want within_envelope", plain.Verdict)
+	}
+	if keyLink.Verdict == decision.VerdictWithinEnvelope {
+		t.Errorf("the link to a key outside every grant is within the envelope")
+	}
+	sensitive := false
+	for _, f := range keyLink.Risk.Factors {
+		sensitive = sensitive || (f.Name == "sensitive_path" && f.Weight > 0)
+	}
+	if !sensitive {
+		t.Errorf("the link to a key is not scored as sensitive: risk %.0f %+v", keyLink.Risk.Score, keyLink.Risk.Factors)
+	}
+}

@@ -67,7 +67,7 @@ func TestProbeTableNamesEveryAttachableProgram(t *testing.T) {
 		ProgProcExec, ProgProcExit,
 		ProgOpenatEnter, ProgOpenatExit,
 		ProgConnectEnter, ProgConnectExit,
-		ProgFileOpen, ProgSocketConnect,
+		ProgFileOpen, ProgSocketConnect, ProgPathLink,
 	}, ProgPrivPairs()...)
 
 	got := make(map[string]bool)
@@ -88,21 +88,21 @@ func TestProbeTableNamesEveryAttachableProgram(t *testing.T) {
 	}
 }
 
-// Thirty programs: the twenty-six tracepoint programs, the fentry/fexit pair on
-// do_sys_openat2, and the fentry hooks on security_file_open and
-// security_socket_connect.
-func TestProbeTableIsThirtyPrograms(t *testing.T) {
-	if n := len(AllProbes()); n != 30 {
-		t.Errorf("AllProbes() = %d programs, want 30", n)
+// Thirty-one programs: the twenty-six tracepoint programs, the fentry/fexit
+// pair on do_sys_openat2, and the fentry hooks on security_file_open,
+// security_socket_connect and security_path_link.
+func TestProbeTableIsThirtyOnePrograms(t *testing.T) {
+	if n := len(AllProbes()); n != 31 {
+		t.Errorf("AllProbes() = %d programs, want 31", n)
 	}
 }
 
-// Seventeen degradation units, never thirty. Two sched singletons, thirteen
-// enter/exit pairs and two fentry singletons.
-func TestProbeFamiliesAreSeventeenUnits(t *testing.T) {
+// Eighteen degradation units, never thirty-one. Two sched singletons,
+// thirteen enter/exit pairs and three fentry singletons.
+func TestProbeFamiliesAreEighteenUnits(t *testing.T) {
 	families := AllProbeFamilies()
-	if len(families) != 17 {
-		t.Fatalf("AllProbeFamilies() = %d units, want 17", len(families))
+	if len(families) != 18 {
+		t.Fatalf("AllProbeFamilies() = %d units, want 18", len(families))
 	}
 
 	singletons, pairs := 0, 0
@@ -116,8 +116,8 @@ func TestProbeFamiliesAreSeventeenUnits(t *testing.T) {
 			t.Errorf("family %q has %d programs, want 1 or 2", f.Name, len(f.Programs))
 		}
 	}
-	if singletons != 4 {
-		t.Errorf("%d singleton families, want 4", singletons)
+	if singletons != 5 {
+		t.Errorf("%d singleton families, want 5", singletons)
 	}
 	if pairs != 13 {
 		t.Errorf("%d paired families, want 13", pairs)
@@ -379,13 +379,13 @@ func TestEveryOpenEntryPointIsWatchedWhenFullyAttached(t *testing.T) {
 	}
 }
 
-// Exactly two programs may be dropped at load time, and they are the fentry
+// Exactly three programs may be dropped at load time, and they are the fentry
 // hooks. Anything else in this list would mean a tracepoint program could
 // vanish without the floor check or a family noticing.
 func TestOptionalProgramsAreTheFentryHooksOnly(t *testing.T) {
 	opt := OptionalPrograms()
-	if len(opt) != 2 || opt[0] != ProgFileOpen || opt[1] != ProgSocketConnect {
-		t.Fatalf("OptionalPrograms() = %v, want only %s and %s", opt, ProgFileOpen, ProgSocketConnect)
+	if len(opt) != 3 || opt[0] != ProgFileOpen || opt[1] != ProgSocketConnect || opt[2] != ProgPathLink {
+		t.Fatalf("OptionalPrograms() = %v, want only %s, %s and %s", opt, ProgFileOpen, ProgSocketConnect, ProgPathLink)
 	}
 	for _, d := range AllProbes() {
 		if d.Optional && d.Type != probeTypeFentry {
@@ -609,8 +609,8 @@ func TestCoverageRoundTripsThroughJSON(t *testing.T) {
 		t.Errorf("Unobservable = %d kinds after round trip, want %d",
 			len(back.Unobservable), len(cov.Unobservable))
 	}
-	if len(back.Probes) != 30 {
-		t.Errorf("Probes = %d after round trip, want 30", len(back.Probes))
+	if len(back.Probes) != 31 {
+		t.Errorf("Probes = %d after round trip, want 31", len(back.Probes))
 	}
 
 	var missing []string
@@ -708,7 +708,7 @@ func TestBugReportFlagsAFloorBreach(t *testing.T) {
 func TestBugReportOnAHealthyLoadReportsNoFailures(t *testing.T) {
 	report := ComputeCoverage(allAttached()).BugReport()
 
-	if !strings.Contains(report, "All 17 probe families attached.") {
+	if !strings.Contains(report, "All 18 probe families attached.") {
 		t.Errorf("healthy report does not say so\n\n%s", report)
 	}
 	if strings.Contains(report, "Attach failures:") {
@@ -817,5 +817,33 @@ func TestTheConnectHookAloneKeepsConnectObservable(t *testing.T) {
 		if !containsEntry(gap.Observed, want) || containsEntry(gap.SuccessOnly, want) {
 			t.Errorf("%s is not reported fully watched by the hook: %+v", want, gap)
 		}
+	}
+}
+
+// The link hook makes fs.link observable through link, linkat and io_uring,
+// for successful links only, and leaves symlinks reported as unwatched.
+func TestTheLinkHookCoversHardLinksOnly(t *testing.T) {
+	cov := ComputeCoverage(allAttached())
+	if !contains(cov.Observable, capability.KindFileLink) {
+		t.Fatal("fs.link is not observable with the link hook attached")
+	}
+	gap := gapFor(cov, capability.KindFileLink)
+	if gap == nil {
+		t.Fatal("fs.link reports no gap, but symlinks are never watched")
+	}
+	for _, want := range []string{"link", "linkat", "io_uring"} {
+		if !containsEntry(gap.SuccessOnly, want) {
+			t.Errorf("%s is not reported as watched for successes only: %+v", want, gap)
+		}
+	}
+	for _, want := range []string{"symlink", "symlinkat"} {
+		if !containsEntry(gap.Missing, want) {
+			t.Errorf("%s is not reported unwatched: %+v", want, gap)
+		}
+	}
+
+	without := ComputeCoverage(withDetached(allAttached(), ProgPathLink))
+	if contains(without.Observable, capability.KindFileLink) {
+		t.Error("fs.link is observable without the link hook")
 	}
 }

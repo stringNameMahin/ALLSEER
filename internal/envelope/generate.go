@@ -208,6 +208,10 @@ func (b *builder) base() {
 		b.homePaths(".cache/**")...)
 	b.add(capability.KindFileWrite, paths(writes...), "Changes stay in the workspace, temporary directories and caches.")
 	b.add(capability.KindFileCreate, paths(writes...), "New files stay in the workspace, temporary directories and caches.")
+	// A link is matched on the file it points at, so this grants linking files
+	// that already live where the task may write. Linking anything else, a
+	// credential above all, is a departure.
+	b.add(capability.KindFileLink, paths(writes...), "Hard links to files in the workspace, temporary directories and caches.")
 
 	execs := append([]string{ws}, systemExecs...)
 	execs = append(execs, b.homePaths("go/bin/**", ".local/bin/**", ".cargo/bin/**")...)

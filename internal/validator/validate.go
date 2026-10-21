@@ -305,13 +305,18 @@ func (v *DefaultValidator) evaluateDenials(denials []capability.Grant, e *event.
 // exercisedObservations returns the same observation under the other
 // capabilities the operation exercised, with the event's own kind left out.
 //
-// Only filesystem opens produce any: they are the case where one syscall
-// exercises more than one capability and the record says which flags it used.
+// Two operations produce any. An open exercises what its flags say. A hard
+// link gives a second name to its source, through which the file can be read
+// and written exactly as through the first, so a denial of reading or writing
+// the source covers linking it too.
 func exercisedObservations(e *event.Event, obs capability.Observation) []capability.Observation {
 	if e == nil || e.File == nil {
 		return nil
 	}
 	kinds := e.File.ExercisedKinds()
+	if e.Capability == capability.KindFileLink {
+		kinds = []capability.Kind{capability.KindFileLink, capability.KindFileRead, capability.KindFileWrite}
+	}
 	if len(kinds) < 2 {
 		return nil
 	}

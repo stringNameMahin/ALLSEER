@@ -205,6 +205,7 @@ func TestEveryEventTypeIsMapped(t *testing.T) {
 		// TestDecodeMapsEveryPrivilegeOperation.
 		abi.EvtPrivChange: {err: ErrUnsetPrivOp},
 		abi.EvtPtrace:     {kind: capability.KindProcessPtrace, domain: capability.DomainProcess},
+		abi.EvtFileLink:   {kind: capability.KindFileLink, domain: capability.DomainFilesystem},
 	}
 
 	all := abi.AllEventTypes()
@@ -926,7 +927,7 @@ func TestDecodeRefusesTheWrongSize(t *testing.T) {
 // An event type outside the enum means the loaded object is newer than this
 // binary. That is layout drift, and the value is reported rather than hidden.
 func TestDecodeRefusesUnknownEventType(t *testing.T) {
-	for _, typ := range []uint32{13, 14, 99, math.MaxUint32} {
+	for _, typ := range []uint32{14, 15, 99, math.MaxUint32} {
 		raw := newRecord(abi.EventType(typ))
 		e, err := NewDecoder().Decode(raw)
 		if !errors.Is(err, ErrUnknownEventType) {

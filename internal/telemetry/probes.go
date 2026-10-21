@@ -95,6 +95,11 @@ const (
 	// protocol and type, and emits only for connects the pair cannot see.
 	// Attached alone it reports every connect without a return value.
 	ProgSocketConnect = "socket_connect"
+
+	// ProgPathLink is the fentry/security_path_link program, emitting
+	// ALLSEER_EVT_FILE_LINK: a hard link, named by the file it points at and
+	// the name it creates.
+	ProgPathLink = "path_link"
 )
 
 // The privilege programs, one enter/exit pair per credential syscall, all
@@ -191,8 +196,8 @@ const (
 
 // Probe families, the unit that loads, attaches and degrades together.
 //
-// Seventeen units rather than thirty programs: two sched singletons,
-// thirteen enter/exit pairs and two fentry singletons. A pair shares a
+// Eighteen units rather than thirty-one programs: two sched singletons,
+// thirteen enter/exit pairs and three fentry singletons. A pair shares a
 // scratch map, so dropping one half leaks the scratch entry and emits nothing
 // at all, which is worse than dropping both.
 const (
@@ -209,6 +214,9 @@ const (
 	// FamilySocketConnect is the one-program family over
 	// security_socket_connect, on the same terms as FamilyFileOpen.
 	FamilySocketConnect = "socket_connect"
+
+	// FamilyPathLink is the one-program family over security_path_link.
+	FamilyPathLink = "path_link"
 )
 
 // PrivFamilyFor names the family carrying one credential syscall.
@@ -272,8 +280,8 @@ type ProbeDescriptor struct {
 	// Optional marks a program the object may be loaded without.
 	//
 	// Only the fentry hooks are: each needs kernel BTF to carry the function
-	// it attaches to, and a kernel that does not expose security_file_open or
-	// security_socket_connect cannot load it at all. libbpf fails the whole object when any program fails to
+	// it attaches to, and a kernel that does not expose it (security_path_link
+	// needs CONFIG_SECURITY_PATH) cannot load it at all. libbpf fails the whole object when any program fails to
 	// load, so without this the hook would turn every such kernel from
 	// "governed, with the entry points no tracepoint reaches unwatched" into
 	// "refuses to govern". The loader drops it and reports the loss; coverage
@@ -382,6 +390,18 @@ func AllProbes() []ProbeDescriptor {
 			// TCP Fast Open never call it.
 			Syscalls: []string{"connect", "io_uring"},
 		},
+		{
+			Name:        ProgPathLink,
+			Family:      FamilyPathLink,
+			Type:        probeTypeFentry,
+			AttachPoint: "security_path_link",
+			Emits:       abi.EvtFileLink,
+			Optional:    true,
+			// protected_hardlinks is checked before the hook, so a refused
+			// link leaves no record. Symlinks never reach it.
+			SuccessOnly: true,
+			Syscalls:    []string{"link", "linkat", "io_uring"},
+		},
 	}
 
 	// The twenty-two privilege programs are generated from the syscall list for
@@ -437,7 +457,7 @@ type ProbeFamily struct {
 	SuccessOnly bool
 }
 
-// AllProbeFamilies returns the seventeen degradation units, in declaration order.
+// AllProbeFamilies returns the eighteen degradation units, in declaration order.
 func AllProbeFamilies() []ProbeFamily {
 	var order []string
 	members := make(map[string][]ProbeDescriptor)

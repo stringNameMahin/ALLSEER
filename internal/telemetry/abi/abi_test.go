@@ -179,12 +179,13 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 // the distinction is load-bearing: a reader who takes ABIVersion for a bound has
 // misread the contract as badly as one who takes PathMax for a version.
 func TestABIVersionIsAValueNotABound(t *testing.T) {
-	if ABIVersion != 5 {
-		t.Errorf("ABIVersion = %d, want 5; version 1 was the first numbered layout, version 2 "+
+	if ABIVersion != 6 {
+		t.Errorf("ABIVersion = %d, want 6; version 1 was the first numbered layout, version 2 "+
 			"reshaped struct allseer_priv_payload, version 3 added the openat directory capture, "+
 			"version 4 added PATH_LATE, which a version 3 reader would take for an entry-time path, "+
 			"version 5 turned the header's padding into `flags` and added PATH_KERNEL, so a version "+
 			"4 reader would take an open with no outcome for one that returned fd 0, "+
+			"version 6 added ALLSEER_EVT_FILE_LINK and its payload, which a version 5 reader refuses as unknown, "+
 			"and the number changes only when the bytes on the wire change or change meaning", ABIVersion)
 	}
 
@@ -261,6 +262,7 @@ func TestEventTypeEnum(t *testing.T) {
 		EvtNetSend:    {10, "ALLSEER_EVT_NET_SEND"},
 		EvtPrivChange: {11, "ALLSEER_EVT_PRIV_CHANGE"},
 		EvtPtrace:     {12, "ALLSEER_EVT_PTRACE"},
+		EvtFileLink:   {13, "ALLSEER_EVT_FILE_LINK"},
 	}
 
 	all := AllEventTypes()

@@ -40,7 +40,7 @@ type fakeTel struct {
 
 func newFakeTel() *fakeTel {
 	return &fakeTel{ch: make(chan event.Event, 256), attached: map[string]uint64{}, observe: []capability.Kind{
-		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate,
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate, capability.KindFileLink,
 		capability.KindProcessExec, capability.KindProcessExit, capability.KindNetConnect,
 	}}
 }

@@ -1875,6 +1875,72 @@ int BPF_PROG(socket_connect, struct socket *sock, struct sockaddr *address, int 
 	return 0;
 }
 
+/* path_link: fentry on security_path_link, which every hard link reaches once
+ * the kernel has resolved both names: link(2), linkat(2) and io_uring's
+ * IORING_OP_LINKAT alike.
+ *
+ * A hard link gives an existing file a second name, and a path-based denial on
+ * the first name says nothing about the second. So the link is the act worth
+ * reporting, named by the file it points at. bpf_d_path is not allowed on this
+ * hook, so both names come from walk_dir. The kernel refuses a link across
+ * mounts before this hook, so the destination directory's mount is the
+ * source's too.
+ *
+ * protected_hardlinks is checked before this hook, so a link to a file the
+ * caller could not link never reaches it. What does reach it can still be
+ * refused afterwards by an LSM or the filesystem, so the record carries
+ * ALLSEER_EVT_F_OUTCOME_UNKNOWN, as file_open's do.
+ */
+SEC("fentry/security_path_link")
+int BPF_PROG(path_link, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
+{
+	struct allseer_event *e;
+	allseer_cgroup_id_t cgroup_id;
+	struct task_struct *task;
+	struct vfsmount *mnt;
+	__u64 pid_tgid, uid_gid;
+
+	cgroup_id = bpf_get_current_cgroup_id();
+	if (!bpf_map_lookup_elem(&tracked_cgroups, &cgroup_id))
+		return 0;
+
+	e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e) {
+		count_ringbuf_drop();
+		return 0;
+	}
+
+	e->timestamp = bpf_ktime_get_ns();
+	e->type = ALLSEER_EVT_FILE_LINK;
+	e->ret = 0;
+	e->version = ALLSEER_ABI_VERSION;
+	e->flags = ALLSEER_EVT_F_OUTCOME_UNKNOWN;
+
+	pid_tgid = bpf_get_current_pid_tgid();
+	uid_gid = bpf_get_current_uid_gid();
+	task = (struct task_struct *)bpf_get_current_task();
+	e->proc.cgroup_id = cgroup_id;
+	e->proc.start_time = BPF_CORE_READ(task, group_leader, start_boottime);
+	e->proc.pid = (__u32)(pid_tgid >> 32);
+	e->proc.tid = (__u32)pid_tgid;
+	e->proc.ppid = BPF_CORE_READ(task, real_parent, tgid);
+	e->proc.uid = (__u32)uid_gid;
+	e->proc.gid = (__u32)(uid_gid >> 32);
+	e->proc._pad = 0;
+	bpf_get_current_comm(&e->proc.comm, sizeof(e->proc.comm));
+
+	ALLSEER_CLEAR_PAYLOAD(e);
+
+	mnt = BPF_CORE_READ(new_dir, mnt);
+	e->payload.link.inode = BPF_CORE_READ(old_dentry, d_inode, i_ino);
+	e->payload.link.device = BPF_CORE_READ(old_dentry, d_inode, i_sb, s_dev);
+	e->payload.link.src_flags = walk_dir(old_dentry, mnt, e->payload.link.src);
+	e->payload.link.dst_flags = walk_dir(new_dentry, mnt, e->payload.link.dst);
+
+	bpf_ringbuf_submit(e, allseer_submit_flags());
+	return 0;
+}
+
 /* --- The privilege pairs -------------------------------------------------------
  *
  * Eleven syscalls, twenty-two programs, one pair of bodies. Every credential

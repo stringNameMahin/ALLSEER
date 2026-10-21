@@ -300,6 +300,10 @@ func record(s Spec, proc *Proc, timestamp uint64) ([]byte, error) {
 	}
 
 	switch {
+	case s.File != nil && s.Type == abi.EvtFileLink:
+		if err := putLink(raw, s.File); err != nil {
+			return nil, err
+		}
 	case s.File != nil:
 		if err := putFile(raw, s.File); err != nil {
 			return nil, err
@@ -345,6 +349,12 @@ func (s Spec) check() error {
 		if s.File.NewPath != "" && s.Type != abi.EvtFileRename {
 			return fmt.Errorf("%w: the header defines new_path as the rename/link destination, so %s "+
 				"would not carry it", ErrPayloadMismatch, s.Type)
+		}
+
+	case abi.EvtFileLink:
+		if s.File == nil || !strings.HasPrefix(s.File.Path, "/") {
+			return fmt.Errorf("%w: %s carries the source as the kernel walked it, so the spec needs an "+
+				"absolute File.Path", ErrPayloadMismatch, s.Type)
 		}
 
 	case abi.EvtProcExec:
@@ -434,6 +444,22 @@ func putFile(raw []byte, f *File) error {
 		return err
 	}
 	return putString(raw, base+abi.OffsetFilePayloadNewPath, abi.PathMax, f.NewPath, "file.new_path")
+}
+
+// putLink writes struct allseer_link_payload: Path is the source and NewPath
+// the name created, each as a complete kernel walk.
+func putLink(raw []byte, f *File) error {
+	base := abi.OffsetEventPayload
+	put64(raw, base+abi.OffsetLinkPayloadInode, f.Inode)
+	put64(raw, base+abi.OffsetLinkPayloadDevice, f.Device)
+	put32(raw, base+abi.OffsetLinkPayloadSrcFlags, uint32(abi.AllseerDirComplete))
+	if f.NewPath != "" {
+		put32(raw, base+abi.OffsetLinkPayloadDstFlags, uint32(abi.AllseerDirComplete))
+	}
+	if err := putString(raw, base+abi.OffsetLinkPayloadSrc, abi.DirMax, reverseDir(f.Path), "link.src"); err != nil {
+		return err
+	}
+	return putString(raw, base+abi.OffsetLinkPayloadDst, abi.DirMax, reverseDir(f.NewPath), "link.dst")
 }
 
 const atFDCWD = -100
