@@ -24,10 +24,22 @@ import (
 	"github.com/stringNameMahin/ALLSEER/internal/containment"
 	"github.com/stringNameMahin/ALLSEER/internal/daemon"
 	"github.com/stringNameMahin/ALLSEER/internal/ipc"
+	"github.com/stringNameMahin/ALLSEER/internal/logging"
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
 	"github.com/stringNameMahin/ALLSEER/internal/risk"
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry"
 )
+
+// report logs configuration issues at the severity they carry.
+func report(log *slog.Logger, issues []config.Issue) {
+	for _, i := range issues {
+		if i.Fatal {
+			log.Error("configuration", "field", i.Field, "problem", i.Message)
+		} else {
+			log.Warn("configuration", "field", i.Field, "problem", i.Message)
+		}
+	}
+}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == selfTestArg {
@@ -57,7 +69,10 @@ func run(args []string) int {
 		fmt.Println(buildinfo.String())
 		return 0
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Redacted from the first line, before the configuration that chooses
+	// where diagnostics go has been read.
+	log := slog.New(logging.NewRedactingHandler(
+		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}), logging.DefaultRedactor()))
 
 	cfg, err := config.FileLoader{}.Load(context.Background(), *cfgPath)
 	if err != nil {
@@ -73,20 +88,25 @@ func run(args []string) int {
 		cfg.Policy.DefaultMode = policy.Mode(*mode)
 	}
 	issues := config.Validate(cfg)
-	for _, i := range issues {
-		if i.Fatal {
-			log.Error("configuration", "field", i.Field, "problem", i.Message)
-		} else {
-			log.Warn("configuration", "field", i.Field, "problem", i.Message)
+	if fatal := len(config.Fatal(issues)) > 0; fatal || *check {
+		report(log, issues)
+		if fatal {
+			return 1
 		}
-	}
-	if len(config.Fatal(issues)) > 0 {
-		return 1
-	}
-	if *check {
 		fmt.Println("configuration OK")
 		return 0
 	}
+	configured, closeLog, err := logging.New(logging.Options{
+		Level: cfg.Logging.Level, Format: cfg.Logging.Format,
+		Output: cfg.Logging.Output, AddSource: cfg.Logging.AddSource,
+	}, os.Stdout, os.Stderr)
+	if err != nil {
+		log.Error("opening the diagnostic log", "err", err)
+		return 1
+	}
+	defer func() { _ = closeLog.Close() }()
+	log = configured
+	report(log, issues)
 
 	if err := preflight(cfg); err != nil {
 		log.Error("preflight failed; refusing to govern", "err", err)

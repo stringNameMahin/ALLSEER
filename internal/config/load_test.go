@@ -98,10 +98,6 @@ func TestUnimplementedSettingsAreReported(t *testing.T) {
 		{"audit rotation", func(c *Config) { c.Audit.MaxSizeMB = 512 }, "audit.max_size_mb", false},
 		{"audit retention", func(c *Config) { c.Audit.RetentionDays = 90 }, "audit.max_size_mb", false},
 		{"llm analyzer", func(c *Config) { c.Intent.Analyzer = "hybrid" }, "intent.analyzer", false},
-		{"log level", func(c *Config) { c.Logging.Level = "debug" }, "logging.level", false},
-		{"log format", func(c *Config) { c.Logging.Format = "json" }, "logging.format", false},
-		{"log output", func(c *Config) { c.Logging.Output = "/var/log/allseer.log" }, "logging.output", false},
-		{"log source", func(c *Config) { c.Logging.AddSource = true }, "logging.add_source", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -124,6 +120,41 @@ func TestUnimplementedSettingsAreReported(t *testing.T) {
 				t.Errorf("%s: message does not say it is unimplemented: %q", c.field, got.Message)
 			}
 		})
+	}
+}
+
+// The logging settings are honoured, so a valid value reports nothing and an
+// unusable one refuses startup rather than falling back to stderr.
+func TestLoggingSettingsAreValidated(t *testing.T) {
+	for _, set := range []func(*Config){
+		func(c *Config) { c.Logging.Level = "debug" },
+		func(c *Config) { c.Logging.Format = "json" },
+		func(c *Config) { c.Logging.Output = "/var/log/allseer/allseerd.log" },
+		func(c *Config) { c.Logging.Output = "stdout" },
+		func(c *Config) { c.Logging.AddSource = true },
+	} {
+		cfg := Defaults()
+		set(cfg)
+		for _, i := range Validate(cfg) {
+			if strings.HasPrefix(i.Field, "logging.") {
+				t.Errorf("a valid logging setting reported %s: %s", i.Field, i.Message)
+			}
+		}
+	}
+	for field, set := range map[string]func(*Config){
+		"logging.level":  func(c *Config) { c.Logging.Level = "verbose" },
+		"logging.format": func(c *Config) { c.Logging.Format = "xml" },
+		"logging.output": func(c *Config) { c.Logging.Output = "allseerd.log" },
+	} {
+		cfg := Defaults()
+		set(cfg)
+		fatal := false
+		for _, i := range Validate(cfg) {
+			fatal = fatal || (i.Field == field && i.Fatal)
+		}
+		if !fatal {
+			t.Errorf("an unusable %s was not refused", field)
+		}
 	}
 }
 

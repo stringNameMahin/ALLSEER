@@ -1,0 +1,8 @@
+# Fake credentials the redactor's tests feed it, ignored by fingerprint: this
+# file, this rule, this line. The same token in another file, or on another
+# line, is still reported.
+internal/logging/redact_test.go:private-key:16
+internal/logging/redact_test.go:curl-auth-header:21
+internal/logging/redact_test.go:gitlab-pat:32
+internal/logging/redact_test.go:stripe-access-token:35
+internal/logging/redact_test.go:jwt:38

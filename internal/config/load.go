@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/stringNameMahin/ALLSEER/internal/logging"
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry"
 )
@@ -138,6 +139,15 @@ func Validate(c *Config) []Issue {
 	if c.Audit.Path == "" {
 		fatal("audit.path", "is required: a daemon must not govern without an audit trail")
 	}
+	if _, err := logging.ParseLevel(c.Logging.Level); err != nil {
+		fatal("logging.level", "%v", err)
+	}
+	if err := logging.CheckFormat(c.Logging.Format); err != nil {
+		fatal("logging.format", "%v", err)
+	}
+	if err := logging.CheckOutput(c.Logging.Output); err != nil {
+		fatal("logging.output", "%v", err)
+	}
 	if !c.Telemetry.FailClosedOnDrop {
 		warn("telemetry.fail_closed_on_drop", "disabled: sessions continue across telemetry gaps")
 	}
@@ -197,20 +207,6 @@ func unimplemented(c *Config) []Issue {
 	if c.Intent.Analyzer == "llm" || c.Intent.Analyzer == "hybrid" {
 		ignored("intent.analyzer",
 			"only the deterministic rule analyzer is built, and it is what runs whatever this says")
-	}
-	// Only what the daemon cannot deliver. It logs text at info level, so a
-	// file asking for exactly that is not being ignored.
-	if c.Logging.Level != "" && c.Logging.Level != "info" {
-		ignored("logging.level", "the daemon logs at info level and does not read this")
-	}
-	if c.Logging.Format != "" && c.Logging.Format != "text" {
-		ignored("logging.format", "the daemon logs text and does not read this")
-	}
-	if c.Logging.Output != "" && c.Logging.Output != "stderr" {
-		ignored("logging.output", "the daemon logs to stderr and does not read this")
-	}
-	if c.Logging.AddSource {
-		ignored("logging.add_source", "log records carry no source location")
 	}
 	return out
 }

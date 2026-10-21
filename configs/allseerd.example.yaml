@@ -149,8 +149,11 @@ audit:
   # Without this, a crash loses exactly the records most likely to matter.
   sync_writes: true
 
-# Not read in this build: the daemon logs text at info level to stderr, with
-# no redaction. The values below are what it actually does.
+# Diagnostics only; decisions go to the audit log. level is debug, info, warn
+# or error; format is text or json; output is stderr, stdout or an absolute
+# path, created 0600 and appended to. Every record is redacted before it is
+# written: fields named like secrets are dropped and credential shapes are
+# removed from every value. Paths are kept, because they are the findings.
 logging:
   level: info
   format: text
