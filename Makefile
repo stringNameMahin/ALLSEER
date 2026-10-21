@@ -90,6 +90,94 @@ vmlinux: ## Generate bpf/include/vmlinux.h from the running kernel's BTF
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) $(BPF_DIR)/*.o coverage.out coverage.html
 
+##@ Install
+
+# Installed layout. The daemon's built-in defaults expect these paths, and the
+# installed allseerd.yaml is written with whatever they are set to. DESTDIR
+# stages an install for packaging. The state directory is fixed because the
+# systemd unit's StateDirectory names it.
+PREFIX     ?= /usr
+BINDIR     ?= $(PREFIX)/bin
+LIBDIR     ?= $(PREFIX)/lib/allseer
+DOCDIR     ?= $(PREFIX)/share/doc/allseer
+SYSCONFDIR ?= /etc/allseer
+UNITDIR    ?= $(PREFIX)/lib/systemd/system
+STATEDIR   := /var/lib/allseer
+
+INSTALL_FILES := $(BIN_DIR)/allseerd-ebpf $(BIN_DIR)/allseer-shim $(BIN_DIR)/allseerctl $(BPF_DIR)/allseer.bpf.o
+SUBST := sed -e 's|@BINDIR@|$(BINDIR)|g' -e 's|@LIBDIR@|$(LIBDIR)|g' \
+	-e 's|@DOCDIR@|$(DOCDIR)|g' -e 's|@SYSCONFDIR@|$(SYSCONFDIR)|g'
+
+.PHONY: release
+release: ## Build what make install installs: the ebpf daemon, shim, CLI and BPF object
+	./scripts/ci/tools.sh libbpf bpf-headers bpftool
+	$(MAKE) build-allseer-shim build-allseerctl
+	CPATH="$(BPF_HDR_DIR)/include" $(MAKE) bpf
+	$(EBPF_ENV) $(GO) build -trimpath -tags ebpf -ldflags "$(LDFLAGS)" \
+		-o $(BIN_DIR)/allseerd-ebpf ./cmd/allseerd
+
+# Copies only. Building here would run the Go toolchain as root and leave
+# root-owned files in the build tree and the module cache.
+.PHONY: install
+install: ## Install the release build (run make release first; DESTDIR and PREFIX honoured)
+	@for f in $(INSTALL_FILES); do test -f "$$f" || \
+		{ echo "missing $$f: run make release first, as your own user"; exit 1; }; done
+	install -D -m 0755 $(BIN_DIR)/allseerd-ebpf $(DESTDIR)$(BINDIR)/allseerd
+	install -D -m 0755 $(BIN_DIR)/allseer-shim $(DESTDIR)$(BINDIR)/allseer-shim
+	install -D -m 0755 $(BIN_DIR)/allseerctl $(DESTDIR)$(BINDIR)/allseerctl
+	install -D -m 0644 $(BPF_DIR)/allseer.bpf.o $(DESTDIR)$(LIBDIR)/allseer.bpf.o
+	install -D -m 0644 configs/allseerd.example.yaml $(DESTDIR)$(DOCDIR)/allseerd.example.yaml
+	install -d -m 0755 $(DESTDIR)$(SYSCONFDIR) $(DESTDIR)$(UNITDIR)
+	install -d -m 0700 $(DESTDIR)$(STATEDIR)
+	$(SUBST) deploy/systemd/allseerd.service.in > $(DESTDIR)$(UNITDIR)/allseerd.service
+	chmod 0644 $(DESTDIR)$(UNITDIR)/allseerd.service
+	@# Configuration an operator may have edited is never overwritten. The
+	@# generated file goes through a temporary file, not the build tree, which
+	@# this target must not write to when it runs as root.
+	@cfg=$$(mktemp); trap 'rm -f "$$cfg"' EXIT; $(SUBST) deploy/allseerd.yaml.in > "$$cfg"; \
+	for pair in $$cfg:allseerd.yaml configs/rules.default.yaml:rules.yaml \
+		configs/sensitivity.default.yaml:sensitivity.yaml; do \
+		src=$${pair%%:*}; dst=$(DESTDIR)$(SYSCONFDIR)/$${pair##*:}; \
+		if [ -e "$$dst" ]; then echo "kept $$dst"; \
+		else install -m 0644 "$$src" "$$dst"; echo "installed $$dst"; fi; done
+	@echo ""
+	@echo "Installed. With systemd: systemctl daemon-reload && systemctl enable --now allseerd"
+
+.PHONY: uninstall
+uninstall: ## Remove what make install installed, except configuration and the audit log
+	rm -f $(DESTDIR)$(BINDIR)/allseerd $(DESTDIR)$(BINDIR)/allseer-shim $(DESTDIR)$(BINDIR)/allseerctl
+	rm -f $(DESTDIR)$(LIBDIR)/allseer.bpf.o $(DESTDIR)$(UNITDIR)/allseerd.service
+	rm -f $(DESTDIR)$(DOCDIR)/allseerd.example.yaml
+	-rmdir $(DESTDIR)$(LIBDIR) $(DESTDIR)$(DOCDIR) 2>/dev/null
+	@echo "kept $(DESTDIR)$(SYSCONFDIR) and $(DESTDIR)$(STATEDIR) (configuration and audit log)"
+
+.PHONY: install-check
+install-check: ## Install into a scratch DESTDIR and check the layout, the config and the unit
+	rm -rf $(CI_OUT)/install-root
+	$(MAKE) install DESTDIR=$(CURDIR)/$(CI_OUT)/install-root
+	./scripts/ci/check-install.sh $(CURDIR)/$(CI_OUT)/install-root $(BINDIR) $(LIBDIR) $(SYSCONFDIR) $(UNITDIR)
+
+# A Debian package of the release build. The version is derived from the
+# commit until the project tags releases. The maintainer is a fixed
+# placeholder: nothing about whoever builds the package goes into it.
+DEB_VERSION ?= 0.0.0~git$(shell date -u +%Y%m%d).$(COMMIT)
+DEB_ARCH    ?= $(shell dpkg --print-architecture 2>/dev/null || echo unknown)
+MAINTAINER  ?= ALLSEER Maintainers <<placeholder>@gmail.com>
+DEB_ROOT    := $(BIN_DIR)/deb-root
+DEB_FILE     = $(BIN_DIR)/allseer_$(DEB_VERSION)_$(DEB_ARCH).deb
+
+.PHONY: deb
+deb: ## Build a .deb from the release build (run make release first; needs dpkg-deb)
+	rm -rf $(DEB_ROOT)
+	$(MAKE) install DESTDIR=$(CURDIR)/$(DEB_ROOT) PREFIX=/usr
+	install -d $(DEB_ROOT)/DEBIAN
+	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@ARCH@|$(DEB_ARCH)|' -e 's|@MAINTAINER@|$(MAINTAINER)|' \
+		deploy/debian/control.in > $(DEB_ROOT)/DEBIAN/control
+	install -m 0644 deploy/debian/conffiles $(DEB_ROOT)/DEBIAN/conffiles
+	install -m 0755 deploy/debian/postinst deploy/debian/prerm deploy/debian/postrm $(DEB_ROOT)/DEBIAN/
+	dpkg-deb --root-owner-group --build $(DEB_ROOT) $(DEB_FILE)
+	./scripts/ci/check-deb.sh $(DEB_FILE)
+
 ##@ Quality
 
 .PHONY: check
@@ -253,7 +341,7 @@ EBPF_ENV := CGO_ENABLED=1 CGO_CFLAGS="-I$(LIBBPF_DIR)/include" \
 # Default-tag builds need no libbpf. This keeps a CGO_LDFLAGS inherited from the
 # caller's environment out of the CI jobs, so they link the same on any host.
 # The ebpf commands set their own CGO_LDFLAGS through EBPF_ENV.
-tools ci-lint ci-static ci-build ci-unit ci-integration ci-security: CGO_LDFLAGS :=
+tools ci-lint ci-static ci-build ci-unit ci-integration ci-security release: CGO_LDFLAGS :=
 
 .PHONY: tools
 tools: ## Install every pinned CI tool into bin/tools
@@ -274,7 +362,7 @@ ci-lint: ## CI job: gofmt, golangci-lint (both tag sets), go.mod tidiness, actio
 	$(MAKE) fmt-check lint lint-ebpf
 	$(GO) mod tidy -diff
 	actionlint
-	shellcheck -x scripts/*.sh scripts/ci/*.sh
+	shellcheck -x scripts/*.sh scripts/ci/*.sh deploy/debian/postinst deploy/debian/prerm deploy/debian/postrm
 
 # The ebpf-tagged files were vetted but never linted, so every linter the
 # default build runs stopped at the build tag. Scoped to the packages that have
@@ -307,6 +395,8 @@ ci-build: ## CI job: binaries, BPF object, ebpf daemon, integration test binary
 		-coverpkg=./internal/telemetry/... -o $(CI_OUT)/telemetry-ebpf.test ./internal/telemetry
 	$(GO) test -c -o $(CI_OUT)/containment.test ./internal/containment
 	$(GO) test -c -o $(CI_OUT)/e2e.test ./test/e2e
+	$(MAKE) install-check
+	$(MAKE) deb
 
 .PHONY: ci-unit
 ci-unit: ## CI job: unit tests with race detector and coverage

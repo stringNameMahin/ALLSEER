@@ -1,0 +1,18 @@
+# allseerd configuration, installed by make install.
+#
+# Anything not set here takes its built-in default. Every setting is described
+# in @DOCDIR@/allseerd.example.yaml.
+telemetry:
+  object_path: @LIBDIR@/allseer.bpf.o
+
+policy:
+  rule_set_path: @SYSCONFDIR@/rules.yaml
+  # interactive asks on the agent's terminal or through allseerctl approve.
+  # monitor records only; enforce kills where interactive would ask.
+  default_mode: interactive
+
+risk:
+  sensitivity_path: @SYSCONFDIR@/sensitivity.yaml
+
+audit:
+  path: /var/lib/allseer/audit.jsonl

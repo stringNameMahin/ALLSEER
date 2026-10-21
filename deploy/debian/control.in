@@ -1,0 +1,12 @@
+Package: allseer
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+Depends: libc6, libelf1t64 | libelf1, zlib1g, libzstd1
+Section: admin
+Priority: optional
+Homepage: https://github.com/stringNameMahin/ALLSEER
+Description: governance runtime for AI coding agents
+ ALLSEER derives an execution envelope from the task an AI coding agent is
+ given, observes the agent with eBPF, and records, asks about or stops what
+ falls outside that envelope.

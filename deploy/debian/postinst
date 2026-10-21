@@ -1,0 +1,9 @@
+#!/bin/sh
+# The daemon is not started on install: it needs kernel BTF and governs
+# nothing until a user runs an agent through allseer-shim.
+set -e
+if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	echo "allseer: start the daemon with: systemctl enable --now allseerd"
+fi
+exit 0
