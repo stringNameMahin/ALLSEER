@@ -146,9 +146,13 @@ func startDaemonWith(t *testing.T, mode, cfg string) *daemon {
 		done:   make(chan error, 1),
 	}
 	args := []string{
-		"--socket", d.socket, "--object", e.object, "--mode", mode, "--audit", d.audit,
+		"--socket", d.socket, "--object", e.object, "--audit", d.audit,
 		"--rules", filepath.Join(e.repo, "configs/rules.default.yaml"),
 		"--sensitivity", filepath.Join(e.repo, "configs/sensitivity.default.yaml"),
+	}
+	// An empty mode runs the daemon on its built-in default.
+	if mode != "" {
+		args = append(args, "--mode", mode)
 	}
 	if cfg != "" {
 		args = append([]string{"--config", cfg}, args...)
@@ -553,6 +557,36 @@ func TestEnforceKillsAfterCredentialRead(t *testing.T) {
 	}
 	if dec := find(d.decisions(t, sid), decision.VerdictExplicitlyDenied, "/etc/shadow"); dec == nil || !dec.Enforced {
 		t.Fatal("the denial is not recorded as enforced")
+	}
+}
+
+// The enforce contract decided on 2026-10-21: warn is recorded and the agent
+// keeps running. A read outside the workspace of a file nothing grades as
+// sensitive is the commonest warn under the shipped rules.
+func TestEnforceLetsWarnThrough(t *testing.T) {
+	d := startDaemon(t, "monitor")
+	ws := workspace(t)
+	marker := filepath.Join(ws, "survived")
+	r := shim(t, d.socket, ws, "enforce", script(t, "cat /etc/hostname >/dev/null\nsleep 1\necho x > "+marker))
+	sid := r.sessionID(t)
+	if code := r.wait(t, 30*time.Second); code != 0 {
+		t.Fatalf("shim exit = %d, want 0\n%s", code, r.stderr.String())
+	}
+	if !exists(marker) {
+		t.Fatal("the agent was stopped after a warning")
+	}
+	var warned *decision.Decision
+	ds := d.decisions(t, sid)
+	for i := range ds {
+		if strings.Contains(target(ds[i]), "/etc/hostname") {
+			warned = &ds[i]
+		}
+	}
+	if warned == nil || warned.Action != ece.ActionWarn || warned.Enforced {
+		t.Fatalf("the /etc/hostname read = %+v, want an unenforced warn", warned)
+	}
+	if s, _ := d.client().GetSession(context.Background(), sid); s.State != session.StateCompleted || s.Outcome.BlockedCount != 0 {
+		t.Fatalf("session %s blocked %d, want completed with nothing blocked", s.State, s.Outcome.BlockedCount)
 	}
 }
 

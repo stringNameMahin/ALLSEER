@@ -18,7 +18,7 @@ import (
 )
 
 // Defaults returns the configuration a daemon runs with when nothing is
-// configured. Every security-relevant value is the safe one: monitor mode,
+// configured. Every security-relevant value is the safe one: interactive mode,
 // approval required, fail closed on telemetry loss.
 func Defaults() *Config {
 	return &Config{
@@ -52,7 +52,7 @@ func Defaults() *Config {
 		},
 		Policy: PolicyConfig{
 			RuleSetPath:           "/etc/allseer/rules.yaml",
-			DefaultMode:           policy.ModeMonitor,
+			DefaultMode:           policy.ModeInteractive,
 			ApprovalTimeout:       5 * time.Minute,
 			ApprovalTimeoutAction: "deny",
 		},

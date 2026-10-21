@@ -15,7 +15,7 @@ func TestDefaultsAreValidAndSafe(t *testing.T) {
 	if f := Fatal(Validate(c)); len(f) != 0 {
 		t.Fatalf("defaults have fatal issues: %+v", f)
 	}
-	if c.Policy.DefaultMode != policy.ModeMonitor || !c.Envelope.RequireApproval || !c.Telemetry.FailClosedOnDrop {
+	if c.Policy.DefaultMode != policy.ModeInteractive || !c.Envelope.RequireApproval || !c.Telemetry.FailClosedOnDrop {
 		t.Fatalf("defaults are not the safe values: %+v", c)
 	}
 	if c.Policy.ApprovalTimeoutAction != "deny" {

@@ -146,8 +146,9 @@ type PolicyConfig struct {
 	RuleSetPath string `json:"rule_set_path" yaml:"rule_set_path"`
 
 	// DefaultMode is the enforcement posture when a session does not specify
-	// one. Defaults to monitor: a system that starts out blocking will be
-	// uninstalled before it is trusted.
+	// one. Defaults to interactive: risky actions freeze the agent and ask its
+	// owner, so nothing is contained without a human decision or a timeout.
+	// monitor is the opt-in for evaluation, enforce for unattended runs.
 	DefaultMode policy.Mode `json:"default_mode" yaml:"default_mode"`
 
 	// HotReload watches the rule set file for changes.
@@ -218,7 +219,7 @@ type Issue struct {
 }
 
 // TODO(config): provide Defaults(). Every default has to be the safe choice:
-// monitor mode, approval required, fail-closed on telemetry loss. See
+// interactive mode, approval required, fail-closed on telemetry loss. See
 // configs/allseerd.example.yaml for the intended values.
 // TODO(config): implement layered loading with the restrict-only override rule
 // for security-relevant fields.

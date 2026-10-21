@@ -127,9 +127,12 @@ risk:
 
 policy:
   rule_set_path: /etc/allseer/rules.yaml
-  # Start here. A system that begins by blocking will be uninstalled before it
-  # is trusted.
-  default_mode: monitor
+  # interactive freezes the agent on a risky action and asks its owner on the
+  # terminal or through `allseerctl approve`. Use monitor to evaluate (records,
+  # never interrupts) and enforce for unattended runs and CI (kills where
+  # interactive would ask). A session can ask for a stricter mode, never a
+  # weaker one, so monitor has to be chosen here or with allseerd --mode.
+  default_mode: interactive
   hot_reload: true
   approval_timeout: 5m
   # "deny" is the safe default, but a deny-on-timeout firing while the user is

@@ -372,7 +372,9 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestAgentCannotObtainAWeakerNestedSession \
 	TestDaemonSelfTestProvesTheOpenProbe \
 	TestRuntimeConnectIsReportedOnceWithBothAttached \
-	TestCredentialReadThenEgressIsFlagged
+	TestCredentialReadThenEgressIsFlagged \
+	TestInteractiveDefaultPromptsOnARawTerminal \
+	TestEnforceLetsWarnThrough
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify

@@ -10,12 +10,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -136,7 +134,7 @@ func run(args []string) int {
 		if *yes {
 			note("envelope approved by --yes")
 		} else {
-			ok, err = askTTY("Approve this envelope and launch the agent? [y/N] ")
+			ok, err = askTTY(ctx, "Approve this envelope and launch the agent? [y/N] ")
 			if err != nil {
 				_ = client.ApproveEnvelope(ctx, ipc.ApproveEnvelopeRequest{SessionID: sid, Approved: false, Reason: "no terminal to approve on"})
 				return fail("approval needs a terminal or --yes: %v", err)
@@ -247,8 +245,15 @@ func watchApprovals(ctx context.Context, c *ipc.SocketClient, sid string, useTTY
 			fmt.Fprintf(os.Stderr, "[allseer] answer with: allseerctl approve %s   or   allseerctl deny %s\n", req.ID, req.ID)
 			continue
 		}
-		ok, err := askTTY("[allseer] approve and resume? [y/N] ")
-		if err != nil {
+		ok, err := askWhilePending(ctx, c, req.ID)
+		switch {
+		case err == nil:
+		case ctx.Err() != nil:
+			return
+		case errors.Is(err, context.Canceled):
+			fmt.Fprintf(os.Stderr, "[allseer] approval %s was settled elsewhere\n", req.ID)
+			continue
+		default:
 			fmt.Fprintf(os.Stderr, "[allseer] no terminal (%v); answer with allseerctl approve %s\n", err, req.ID)
 			continue
 		}
@@ -256,6 +261,39 @@ func watchApprovals(ctx context.Context, c *ipc.SocketClient, sid string, useTTY
 			fmt.Fprintf(os.Stderr, "[allseer] answering %s: %v\n", req.ID, err)
 		}
 	}
+}
+
+// askWhilePending asks on the terminal for as long as the request is open. An
+// answer from allseerctl, the approval timeout or the end of the session
+// closes it, and the question is withdrawn so the terminal goes back to the
+// agent.
+func askWhilePending(ctx context.Context, c *ipc.SocketClient, id string) (bool, error) {
+	askCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-askCtx.Done():
+				return
+			case <-t.C:
+			}
+			pending, err := c.PendingApprovals(askCtx)
+			if err != nil {
+				continue
+			}
+			open := false
+			for _, p := range pending {
+				open = open || p.ID == id
+			}
+			if !open {
+				cancel()
+				return
+			}
+		}
+	}()
+	return askTTY(askCtx, "[allseer] approve and resume? [y/N] ")
 }
 
 // watchDaemon stops the agent if the daemon stops answering.
@@ -301,21 +339,6 @@ func watchDaemon(ctx context.Context, c *ipc.SocketClient, kill func()) {
 		kill()
 		return
 	}
-}
-
-func askTTY(question string) (bool, error) {
-	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-	if err != nil {
-		return false, err
-	}
-	defer tty.Close()
-	fmt.Fprint(tty, question)
-	line, err := bufio.NewReader(tty).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-	a := strings.ToLower(strings.TrimSpace(line))
-	return a == "y" || a == "yes", nil
 }
 
 func printEnvelope(r *ipc.CreateSessionResponse, quiet bool) {
