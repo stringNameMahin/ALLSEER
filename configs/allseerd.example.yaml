@@ -55,9 +55,15 @@ intent:
   analyzer: rules
   timeout: 20s
   fallback_to_rules: true
-  # Not implemented in this build: no prompt-injection sanitizer exists, so
-  # prompts reach the analyzer unfiltered. Refused rather than ignored.
-  enable_sanitizer: false
+  # Removes invisible and direction-changing characters before analysis and
+  # flags text addressed to the governor ("ignore previous instructions").
+  # Flags appear as ambiguities on the envelope for the person approving it;
+  # the recorded prompt stays verbatim.
+  enable_sanitizer: true
+  # Keep the prompt verbatim in the envelope, the session and the audit log.
+  # Off: the prompt is analyzed in memory and dropped once the envelope is
+  # generated, since it can hold anything a user pasted into it.
+  retain_prompt: false
   llm:
     provider: anthropic
     model: claude-sonnet-5

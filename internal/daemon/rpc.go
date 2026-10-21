@@ -322,11 +322,33 @@ func (d *Daemon) createSession(ctx context.Context, peer ipc.Peer, req ipc.Creat
 		return nil, ipc.Errorf(ipc.ErrCodeInvalidRequest, "the daemon is at its limit of %d live sessions", d.cfg.Daemon.MaxConcurrentSessions)
 	}
 
+	// The analyzer reads the sanitized prompt. Any indicator is carried as an
+	// ambiguity so the person approving the envelope sees it.
+	prompt, indicators := req.Prompt, []string(nil)
+	if d.sanitizer != nil {
+		clean, found, err := d.sanitizer.Sanitize(ctx, req.Prompt)
+		if err != nil {
+			return nil, ipc.Errorf(ipc.ErrCodeAnalysisFailed, "sanitizing the prompt: %v", err)
+		}
+		prompt, indicators = clean, found
+	}
 	an, err := d.analyzer.Analyze(ctx, intent.Request{
-		Prompt: req.Prompt, WorkspaceRoot: ws, WorkspaceContext: req.Workspace, AgentIdentity: req.AgentIdentity,
+		Prompt: prompt, WorkspaceRoot: ws, WorkspaceContext: req.Workspace, AgentIdentity: req.AgentIdentity,
 	})
 	if err != nil {
 		return nil, ipc.Errorf(ipc.ErrCodeAnalysisFailed, "%v", err)
+	}
+	// The prompt is kept only when the operator asked for it. Nothing after
+	// generation reads it: the grants, not the text, govern the session.
+	an.Record.RawPrompt = ""
+	if d.cfg.Intent.RetainPrompt {
+		an.Record.RawPrompt = req.Prompt
+	}
+	for _, i := range indicators {
+		an.Record.Ambiguities = append(an.Record.Ambiguities, "possible prompt injection: "+i)
+	}
+	if len(indicators) > 0 {
+		d.log.Warn("possible prompt injection", "owner", peer.UID, "indicators", indicators)
 	}
 	sid := envelope.NewSessionID(d.now())
 	res, err := d.generator.Generate(ctx, an, d.observableCatalog(), envelope.Params{
@@ -342,7 +364,7 @@ func (d *Daemon) createSession(ctx context.Context, peer ipc.Peer, req ipc.Creat
 
 	mode := config.Restrict(d.cfg.Policy.DefaultMode, req.Mode)
 	if _, err := d.manager.Create(ctx, session.CreateRequest{
-		Envelope: res.Envelope, Prompt: req.Prompt, WorkspaceRoot: ws, Mode: mode, AgentIdentity: req.AgentIdentity,
+		Envelope: res.Envelope, Prompt: an.Record.RawPrompt, WorkspaceRoot: ws, Mode: mode, AgentIdentity: req.AgentIdentity,
 	}); err != nil {
 		return nil, err
 	}

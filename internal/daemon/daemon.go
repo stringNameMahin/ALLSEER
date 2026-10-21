@@ -136,6 +136,7 @@ type Daemon struct {
 	resolvers []string
 
 	analyzer  intent.Analyzer
+	sanitizer intent.Sanitizer
 	generator envelope.RuleGenerator
 	sealer    envelope.DigestSealer
 	manager   *session.MemoryManager
@@ -244,6 +245,9 @@ func New(o Options) (*Daemon, error) {
 	})
 	d.enforcer = newEnforcer(d)
 	d.approvals = newApprovals(d)
+	if o.Config.Intent.EnableSanitizer {
+		d.sanitizer = intent.RuleSanitizer{}
+	}
 
 	disp, err := session.NewDispatcher(session.DispatchConfig{
 		Registry: d.manager,

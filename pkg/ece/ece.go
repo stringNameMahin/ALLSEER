@@ -92,8 +92,10 @@ type Envelope struct {
 
 // IntentRecord captures how an envelope came to exist.
 type IntentRecord struct {
-	// RawPrompt is the user's request verbatim, never normalized. The exact
-	// text is what a reviewer needs to judge whether the grants follow from it.
+	// RawPrompt is the user's request verbatim, never normalized, when the
+	// daemon retains prompts (intent.retain_prompt), and empty otherwise.
+	// Where kept, the exact text is what a reviewer needs to judge whether
+	// the grants follow from it.
 	RawPrompt string `json:"raw_prompt"`
 
 	// Summary restates the task in the analyzer's words. Divergence from

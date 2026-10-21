@@ -92,7 +92,6 @@ func TestUnimplementedSettingsAreReported(t *testing.T) {
 	}{
 		{"privilege drop", func(c *Config) { c.Daemon.DropPrivileges = true }, "daemon.drop_privileges", true},
 		{"run as user", func(c *Config) { c.Daemon.RunAsUser = "allseer" }, "daemon.run_as_user", true},
-		{"sanitizer", func(c *Config) { c.Intent.EnableSanitizer = true }, "intent.enable_sanitizer", true},
 		{"dns correlation", func(c *Config) { c.Telemetry.EnableDNSCorrelation = true }, "telemetry.enable_dns_correlation", false},
 		{"binary hashing", func(c *Config) { c.Telemetry.EnableBinaryHashing = true }, "telemetry.enable_binary_hashing", false},
 		{"audit retention", func(c *Config) { c.Audit.RetentionDays = 90 }, "audit.retention_days", false},

@@ -75,6 +75,12 @@ type IntentConfig struct {
 
 	// EnableSanitizer runs prompt-injection detection before analysis.
 	EnableSanitizer bool `json:"enable_sanitizer" yaml:"enable_sanitizer"`
+
+	// RetainPrompt keeps the user's prompt verbatim in the sealed envelope,
+	// and so in the session and the audit log. Off by default: the prompt is
+	// analyzed in memory and dropped once the envelope is generated, because
+	// a prompt can hold anything a user pasted into it.
+	RetainPrompt bool `json:"retain_prompt" yaml:"retain_prompt"`
 }
 
 // LLMConfig configures the model-backed analyzer.

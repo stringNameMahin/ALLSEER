@@ -41,6 +41,7 @@ func Defaults() *Config {
 			Analyzer:        "rules",
 			Timeout:         20 * time.Second,
 			FallbackToRules: true,
+			EnableSanitizer: true,
 		},
 		Envelope: EnvelopeConfig{
 			RequireApproval: true,
@@ -197,10 +198,6 @@ func unimplemented(c *Config) []Issue {
 	}
 	if c.Daemon.RunAsUser != "" {
 		refuse("daemon.run_as_user", "privilege dropping is not implemented, so this user is never switched to")
-	}
-	if c.Intent.EnableSanitizer {
-		refuse("intent.enable_sanitizer",
-			"no prompt-injection sanitizer exists; prompts reach the analyzer unfiltered")
 	}
 	if c.Telemetry.EnableDNSCorrelation {
 		ignored("telemetry.enable_dns_correlation",

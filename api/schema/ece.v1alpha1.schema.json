@@ -189,11 +189,11 @@
       "additionalProperties": false,
       "properties": {
         "raw_prompt": {
-          "description": "The user's request verbatim. Never normalized, since the exact text is what a reviewer needs.",
+          "description": "The user's request verbatim, never normalized, when the daemon retains prompts; empty when it does not, which is the default.",
           "type": "string"
         },
         "summary": {
-          "description": "The analyzer's restatement. Divergence from raw_prompt is a warning sign: the system may be governing a task the user did not ask for.",
+          "description": "The analyzer's restatement. Where raw_prompt is retained, divergence from it is a warning sign: the system may be governing a task the user did not ask for.",
           "type": "string"
         },
         "task_type": { "type": "string" },

@@ -168,7 +168,11 @@ func runSession(args []string) int {
 	}
 	fmt.Printf("session   %s\nstate     %s\nmode      %s\nworkspace %s\nroot pid  %d\n", s.ID, s.State, s.Mode, s.WorkspaceRoot, s.RootPID)
 	if s.Envelope != nil {
-		fmt.Printf("task      %s (%s)\nprompt    %q\n", s.Envelope.Intent.Summary, s.Envelope.Intent.TaskType, s.Envelope.Intent.RawPrompt)
+		prompt := fmt.Sprintf("%q", s.Envelope.Intent.RawPrompt)
+		if s.Envelope.Intent.RawPrompt == "" {
+			prompt = "(not retained)"
+		}
+		fmt.Printf("task      %s (%s)\nprompt    %s\n", s.Envelope.Intent.Summary, s.Envelope.Intent.TaskType, prompt)
 	}
 	if session.IsTerminal(s.State) {
 		fmt.Printf("outcome   %s: %s\n", s.Outcome.Result, s.Outcome.Reason)
