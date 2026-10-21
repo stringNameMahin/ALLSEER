@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Check a built .deb: its control fields, that every installed file is in it
-# with root ownership and the right mode, and that configuration is marked
-# as conffiles so an upgrade keeps an operator's edits.
+# with root ownership and the right mode, that configuration is marked as
+# conffiles so an upgrade keeps an operator's edits, and that no email
+# address is in it.
 #
 # Usage: check-deb.sh <file.deb>
 set -euo pipefail
@@ -17,6 +18,9 @@ for field in Package Version Architecture Maintainer Depends Description; do
   dpkg-deb --field "$deb" "$field" >/dev/null 2>&1 || fail "no $field field"
 done
 [[ $(dpkg-deb --field "$deb" Package) == allseer ]] || fail "package is not named allseer"
+# Not printed: a wrong value may be someone's address.
+[[ $(dpkg-deb --field "$deb" Maintainer) == 'ALLSEER Maintainers <<placeholder>@gmail.com>' ]] ||
+  fail "Maintainer is not the placeholder"
 
 contents=$(dpkg-deb --contents "$deb")
 want() {
@@ -42,18 +46,9 @@ for c in /etc/allseer/allseerd.yaml /etc/allseer/rules.yaml /etc/allseer/sensiti
   grep -qxF "$c" <<<"$conffiles" || fail "$c is not a conffile"
 done
 
-# Nothing about whoever built the package may ship in it. The builder's git
-# email is the identity most likely to leak, so the whole package, control
-# files and payload, is searched for it.
-email=$(git config user.email 2>/dev/null || true)
-if [[ -n $email ]]; then
-  # grep -c reads everything: grep -q would stop at the first match, the
-  # writer would die of SIGPIPE, and pipefail would turn a find into a pass.
-  found=$({ dpkg-deb --ctrl-tarfile "$deb"; dpkg-deb --fsys-tarfile "$deb"; } | grep -acF "$email" || true)
-  if [[ $found != 0 ]]; then
-    fail "the package contains the builder's email address"
-  fi
-fi
+# Nothing about whoever built the package may ship in it, control files or
+# payload.
+"$(dirname "$0")/check-emails.sh" "$deb" || status=1
 
 [[ $status -eq 0 ]] && echo "check-deb: $deb is complete"
 exit $status

@@ -104,6 +104,8 @@ jobs:
           bin/allseerd bin/allseerctl bin/allseer-shim bin/allseerd-ebpf
           bin/ci/telemetry-ebpf.test bin/ci/containment.test bin/ci/e2e.test
           bpf/allseer.bpf.o
+      - name: Check build outputs for email addresses
+        run: ./scripts/ci/check-emails.sh build-${{ matrix.arch }}.tar
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: build-${{ matrix.arch }}

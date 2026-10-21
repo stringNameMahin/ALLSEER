@@ -156,6 +156,7 @@ install-check: ## Install into a scratch DESTDIR and check the layout, the confi
 	rm -rf $(CI_OUT)/install-root
 	$(MAKE) install DESTDIR=$(CURDIR)/$(CI_OUT)/install-root
 	./scripts/ci/check-install.sh $(CURDIR)/$(CI_OUT)/install-root $(BINDIR) $(LIBDIR) $(SYSCONFDIR) $(UNITDIR)
+	./scripts/ci/check-emails.sh $(CURDIR)/$(CI_OUT)/install-root
 
 # A Debian package of the release build. The version is derived from the
 # commit until the project tags releases. The maintainer is a fixed
@@ -177,6 +178,7 @@ deb: ## Build a .deb from the release build (run make release first; needs dpkg-
 	install -m 0755 deploy/debian/postinst deploy/debian/prerm deploy/debian/postrm $(DEB_ROOT)/DEBIAN/
 	dpkg-deb --root-owner-group --build $(DEB_ROOT) $(DEB_FILE)
 	./scripts/ci/check-deb.sh $(DEB_FILE)
+	./scripts/ci/check-emails.sh $(DEB_ROOT)
 
 ##@ Quality
 
