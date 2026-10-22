@@ -174,6 +174,11 @@ func runSession(args []string) int {
 		}
 		fmt.Printf("task      %s (%s)\nprompt    %s\n", s.Envelope.Intent.Summary, s.Envelope.Intent.TaskType, prompt)
 	}
+	if !session.IsTerminal(s.State) {
+		fmt.Printf("so far    %d events, %d decisions, %d violations, %d blocked, peak risk %.0f\n",
+			s.Summary.EventsObserved, s.Summary.DecisionsIssued, s.Outcome.ViolationCount, s.Outcome.BlockedCount,
+			s.Summary.PeakRiskScore)
+	}
 	if session.IsTerminal(s.State) {
 		fmt.Printf("outcome   %s: %s\n", s.Outcome.Result, s.Outcome.Reason)
 		fmt.Printf("summary   %d events, %d decisions, %d violations, %d blocked, peak risk %.0f, telemetry complete %v\n",

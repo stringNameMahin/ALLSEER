@@ -11,6 +11,7 @@ import (
 
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
+	"github.com/stringNameMahin/ALLSEER/pkg/decision"
 	"github.com/stringNameMahin/ALLSEER/pkg/ece"
 	"github.com/stringNameMahin/ALLSEER/pkg/event"
 )
@@ -768,18 +769,105 @@ func TestEndCapturesTheSummary(t *testing.T) {
 		})
 	}
 
+	st.RecordDecision(&decision.Decision{Verdict: decision.VerdictWithinEnvelope, Risk: decision.RiskAssessment{Score: 10}})
+	st.RecordDecision(&decision.Decision{Verdict: decision.VerdictOutsideEnvelope, Risk: decision.RiskAssessment{Score: 40}})
+
+	// A running session reports its counters so far, through Get and List
+	// alike: allseerctl sessions showed 0 events and 0 violations otherwise.
 	live, _ := m.Get(context.Background(), id)
-	if live.Summary.EventsObserved != 0 {
-		t.Errorf("Summary.EventsObserved = %d on a running session, want 0; "+
-			"a live summary is a documented limitation", live.Summary.EventsObserved)
+	listed, _ := m.List(context.Background(), Filter{})
+	if len(listed) != 1 {
+		t.Fatalf("List returned %d sessions, want 1", len(listed))
+	}
+	for name, s := range map[string]*Session{"Get": live, "List": listed[0]} {
+		if s.Summary.EventsObserved != 3 || s.Summary.DecisionsIssued != 2 || s.Summary.PeakRiskScore != 40 ||
+			s.Outcome.ViolationCount != 1 || s.Outcome.Result != "" {
+			t.Errorf("%s on a running session: summary %+v, outcome %+v; want 3 events, 2 decisions, "+
+				"peak 40, 1 violation and no result", name, s.Summary, s.Outcome)
+		}
 	}
 
-	if err := m.End(context.Background(), id, Outcome{Reason: "done"}); err != nil {
+	if err := m.End(context.Background(), id, Outcome{Reason: "done", ViolationCount: 1}); err != nil {
 		t.Fatalf("End: %v", err)
 	}
 	ended, _ := m.Get(context.Background(), id)
-	if ended.Summary.EventsObserved != 3 {
-		t.Errorf("Summary.EventsObserved = %d after End, want 3", ended.Summary.EventsObserved)
+	if ended.Summary.EventsObserved != 3 || ended.Outcome.Reason != "done" || ended.Outcome.ViolationCount != 1 {
+		t.Errorf("after End: summary %+v, outcome %+v; want the snapshot and the outcome End was given",
+			ended.Summary, ended.Outcome)
+	}
+}
+
+// End takes the summary and then releases what it was taken from: an ended
+// session kept its history ring and novelty set for nothing. The counters stay,
+// and a write that arrives late still counts without being kept.
+func TestEndReleasesTheTrackingStructures(t *testing.T) {
+	ctx := context.Background()
+	m, _, id := managerFor(t, ManagerConfig{})
+	drive(t, m, id, StateActive)
+	st, _ := m.State(id)
+	ms := st.(*MemoryState)
+	ms.RecordEvent(fileEvent(capability.KindFileRead, "/ws/a.go"))
+	ms.RecordDecision(&decision.Decision{Verdict: decision.VerdictOutsideEnvelope, MatchedRule: "r"})
+	if !ms.SeenTargets(capability.KindFileRead, "/ws/a.go") || len(ms.RecentEvents(10)) != 1 {
+		t.Fatal("the state did not keep the event before End")
+	}
+
+	if err := m.End(ctx, id, Outcome{}); err != nil {
+		t.Fatal(err)
+	}
+	if ms.SeenTargets(capability.KindFileRead, "/ws/a.go") || len(ms.RecentEvents(10)) != 0 || ms.violationTally != nil {
+		t.Error("End kept the novelty set, the history ring or the violation tally")
+	}
+	ended, _ := m.Get(ctx, id)
+	if ended.Summary.EventsObserved != 1 || len(ended.Summary.TopViolations) != 1 {
+		t.Errorf("summary after End = %+v, want the one event and one violation", ended.Summary)
+	}
+
+	ms.RecordEvent(fileEvent(capability.KindFileRead, "/ws/b.go"))
+	ms.RecordDecision(&decision.Decision{Verdict: decision.VerdictOutsideEnvelope, MatchedRule: "r"})
+	if ms.Live().EventsObserved != 2 || ms.ViolationCount() != 2 || len(ms.RecentEvents(10)) != 0 {
+		t.Errorf("after a late write: %d events, %d violations, %d kept; want 2, 2, 0",
+			ms.Live().EventsObserved, ms.ViolationCount(), len(ms.RecentEvents(10)))
+	}
+}
+
+// A long-lived daemon kept every session it ran. KeepEnded bounds the ended
+// ones, forgetting the one that ended first, and never a running one.
+func TestEndedSessionsPastKeepEndedAreForgotten(t *testing.T) {
+	ctx := context.Background()
+	c := newClock()
+	var m *MemoryManager
+	var evicted []string
+	m = NewManager(ManagerConfig{Now: c.now, KeepEnded: 2, OnEvict: func(id string) {
+		evicted = append(evicted, id)
+		_ = m.Len() // called with the manager unlocked
+	}})
+	for _, id := range []string{"s-1", "s-2", "s-3", "s-4", "s-5"} {
+		if _, err := m.Create(ctx, CreateRequest{Envelope: testEnvelope(id)}); err != nil {
+			t.Fatal(err)
+		}
+		drive(t, m, id, StateActive)
+	}
+	// s-1 keeps running; the rest end out of creation order.
+	for _, id := range []string{"s-3", "s-2", "s-5", "s-4"} {
+		c.advance(time.Second)
+		if err := m.End(ctx, id, Outcome{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fmt.Sprint(evicted) != "[s-3 s-2]" {
+		t.Errorf("evicted %v, want [s-3 s-2]: the two that ended first", evicted)
+	}
+	list, _ := m.List(ctx, Filter{})
+	var ids []string
+	for _, s := range list {
+		ids = append(ids, s.ID)
+	}
+	if fmt.Sprint(ids) != "[s-1 s-4 s-5]" {
+		t.Errorf("sessions kept = %v, want [s-1 s-4 s-5]", ids)
+	}
+	if _, err := m.Get(ctx, "s-3"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get of a forgotten session = %v, want ErrNotFound", err)
 	}
 }
 

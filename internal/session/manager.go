@@ -275,7 +275,20 @@ type ManagerConfig struct {
 	// time.Now. Injectable so lifecycle timestamps are testable without
 	// sleeping, the same seam pipeline.Config.Now provides.
 	Now func() time.Time
+
+	// KeepEnded is how many ended sessions stay queryable. Past it the one that
+	// ended first is forgotten; its record is in the audit log. Running
+	// sessions are never forgotten. Zero means DefaultKeepEnded.
+	KeepEnded int
+
+	// OnEvict, when set, is told each session KeepEnded forgets, after the
+	// manager's lock is released.
+	OnEvict func(sessionID string)
 }
+
+// DefaultKeepEnded bounds the ended sessions a manager holds, so a long-lived
+// daemon's memory and session list stop growing with every session it ran.
+const DefaultKeepEnded = 128
 
 // MemoryManager is the in-memory session lifecycle state machine.
 //
@@ -320,6 +333,9 @@ func NewManager(cfg ManagerConfig) *MemoryManager {
 	}
 	if cfg.DefaultMode == "" {
 		cfg.DefaultMode = policy.ModeMonitor
+	}
+	if cfg.KeepEnded <= 0 {
+		cfg.KeepEnded = DefaultKeepEnded
 	}
 	return &MemoryManager{
 		sessions: make(map[string]*managed),
@@ -600,9 +616,8 @@ func (m *MemoryManager) Resume(ctx context.Context, sessionID string) error {
 //
 // The summary is snapshotted here and only here. Snapshot reads structures that
 // belong to the session's writer goroutine, and End is the moment that
-// goroutine has stopped — the pipeline has drained, nothing is processing. That
-// is why Get on a *running* session reports a zero Summary rather than a live
-// one; see the limitation note there.
+// goroutine has stopped: the pipeline has drained, nothing is processing.
+// Until then Get reports only the live counters; see view.
 func (m *MemoryManager) End(_ context.Context, sessionID string, outcome Outcome) error {
 	final := outcome.Result
 	if final == "" {
@@ -612,6 +627,14 @@ func (m *MemoryManager) End(_ context.Context, sessionID string, outcome Outcome
 		return fmt.Errorf("%w: got %q, want one of %v", ErrBadOutcome, final, TerminalStates())
 	}
 
+	var evicted []string
+	defer func() {
+		for _, id := range evicted {
+			if m.cfg.OnEvict != nil {
+				m.cfg.OnEvict(id)
+			}
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -629,7 +652,43 @@ func (m *MemoryManager) End(_ context.Context, sessionID string, outcome Outcome
 	rec.session.EndedAt = &ended
 	rec.session.Outcome = outcome
 	rec.session.Summary = rec.state.Snapshot()
+	rec.state.release()
+	evicted = m.evictEnded()
 	return nil
+}
+
+// evictEnded forgets the ended sessions past KeepEnded, those that ended first.
+// Caller holds the write lock.
+func (m *MemoryManager) evictEnded() []string {
+	var ended []*managed
+	for _, rec := range m.sessions {
+		if IsTerminal(rec.session.State) {
+			ended = append(ended, rec)
+		}
+	}
+	if len(ended) <= m.cfg.KeepEnded {
+		return nil
+	}
+	sort.Slice(ended, func(i, j int) bool {
+		a, b := ended[i].session, ended[j].session
+		if !endedAt(a).Equal(endedAt(b)) {
+			return endedAt(a).Before(endedAt(b))
+		}
+		return a.ID < b.ID
+	})
+	var out []string
+	for _, rec := range ended[:len(ended)-m.cfg.KeepEnded] {
+		delete(m.sessions, rec.session.ID)
+		out = append(out, rec.session.ID)
+	}
+	return out
+}
+
+func endedAt(s Session) time.Time {
+	if s.EndedAt == nil {
+		return time.Time{}
+	}
+	return *s.EndedAt
 }
 
 // --- queries ---------------------------------------------------------------------
@@ -642,11 +701,7 @@ func (m *MemoryManager) End(_ context.Context, sessionID string, outcome Outcome
 // deliberately: it is sealed and immutable by the time anyone can observe it,
 // and copying a capability set per status query would be expensive for no gain.
 //
-// Limitation: Summary is zero until End. It is captured there because Snapshot
-// reads owner-goroutine-only structures, and a status query runs on a different
-// goroutine. A live summary needs either a snapshot taken by the session's own
-// writer or an atomic-safe subset of Summary, and choosing between those is a
-// change to MemoryState rather than to this file.
+// A session that has not ended carries its live counters; see view.
 func (m *MemoryManager) Get(_ context.Context, sessionID string) (*Session, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -655,8 +710,21 @@ func (m *MemoryManager) Get(_ context.Context, sessionID string) (*Session, erro
 	if err != nil {
 		return nil, err
 	}
-	out := rec.session.clone()
+	out := rec.view()
 	return &out, nil
+}
+
+// view is the copy Get and List hand out. Until End, Summary and Outcome hold
+// only the counters MemoryState keeps in atomics (events, decisions, peak
+// risk, violations, blocked, telemetry complete), read here off the owner
+// goroutine. The rest of Summary is the snapshot End takes.
+func (rec *managed) view() Session {
+	out := rec.session.clone()
+	if !IsTerminal(out.State) && rec.state != nil {
+		out.Summary = rec.state.Live()
+		out.Outcome = rec.state.Outcome("")
+	}
+	return out
 }
 
 // List returns copies of the sessions matching f, oldest first.
@@ -679,7 +747,7 @@ func (m *MemoryManager) List(_ context.Context, f Filter) ([]*Session, error) {
 		if !f.matches(&rec.session) {
 			continue
 		}
-		s := rec.session.clone()
+		s := rec.view()
 		out = append(out, &s)
 	}
 
@@ -748,11 +816,8 @@ func (m *MemoryManager) Binding(sessionID string) (Binding, bool) {
 
 // Len reports how many sessions the manager holds, terminal ones included.
 //
-// A manager never forgets. Nothing here evicts an ended session, because the
-// record is the point and dropping it would lose the audit trail the moment the
-// agent stopped. Eviction belongs with session.Store, which is where persistence
-// lands (M7) and where the question "how long do we keep this in memory" can be
-// answered against somewhere to put it.
+// Ended sessions count until KeepEnded forgets them; see evictEnded. Their
+// record is in the audit log by then.
 func (m *MemoryManager) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -841,9 +906,8 @@ func (s *Session) clone() Session {
 // record that the session was suspended at all.
 // TODO(session): implement session persistence so audit records survive a
 // restart, and decide whether active sessions can be recovered or must fail.
-// Session.Store is the seam; MemoryManager deliberately implements no eviction
-// until there is somewhere for an evicted session to go.
-// TODO(session): report a live Summary from Get. Snapshot reads
-// owner-goroutine-only structures, so it is captured at End today; a live one
-// needs either a snapshot taken by the session's own writer or an atomic-safe
-// subset, and that is a change to MemoryState.
+// Session.Store is the seam. Until it exists, ended sessions past KeepEnded
+// survive only in the audit log.
+// TODO(session): a live Summary beyond the atomic counters (capability usage,
+// unused grants, top violations) needs a snapshot taken by the session's own
+// writer.

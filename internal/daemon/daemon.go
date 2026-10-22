@@ -112,6 +112,10 @@ type Options struct {
 	// Leftovers is what the startup sweep found: the session cgroups an
 	// earlier daemon left with processes in them, and which it froze.
 	Leftovers containment.SweepResult
+
+	// KeepEnded is how many ended sessions stay queryable. Zero means
+	// session.DefaultKeepEnded.
+	KeepEnded int
 }
 
 type sessionInfo struct {
@@ -242,6 +246,8 @@ func New(o Options) (*Daemon, error) {
 		DefaultMode:     o.Config.Policy.DefaultMode,
 		Supervisor:      supervisor{d: d},
 		Now:             now,
+		KeepEnded:       o.KeepEnded,
+		OnEvict:         d.forget,
 	})
 	d.enforcer = newEnforcer(d)
 	d.approvals = newApprovals(d)
@@ -386,6 +392,13 @@ func (d *Daemon) finish(ctx context.Context, sid string, result session.State, r
 	d.record(ctx, d.sessionEnd(ctx, sid, out))
 	d.dispatch.Release(sid)
 	d.log.Info("session ended", "session", sid, "result", result, "reason", reason)
+}
+
+// forget drops what the daemon kept for a session the manager evicted.
+func (d *Daemon) forget(sid string) {
+	d.mu.Lock()
+	delete(d.sessions, sid)
+	d.mu.Unlock()
 }
 
 func (d *Daemon) failSession(ctx context.Context, sid, reason string) {

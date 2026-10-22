@@ -371,7 +371,9 @@ func (s *MemoryState) RecordDecision(d *decision.Decision) {
 
 	if decision.ValidVerdict(d.Verdict) && d.Verdict != decision.VerdictWithinEnvelope {
 		s.violations.Add(1)
-		s.violationTally[violationKey{verdict: d.Verdict, rule: d.MatchedRule}]++
+		if s.violationTally != nil {
+			s.violationTally[violationKey{verdict: d.Verdict, rule: d.MatchedRule}]++
+		}
 	}
 
 	if d.Action == ece.ActionBlock && d.Enforced {
@@ -682,6 +684,33 @@ func (s *MemoryState) Snapshot() Summary {
 	sum.UnusedGrants = s.unusedGrantKinds()
 	sum.TopViolations = s.topViolations()
 	return sum
+}
+
+// Live is the part of Snapshot backed by atomics, so any goroutine may read it
+// while the session runs: the counters and the peak score. The maps and lists
+// are Snapshot's, taken at End.
+func (s *MemoryState) Live() Summary {
+	if s == nil {
+		return Summary{}
+	}
+	return Summary{
+		EventsObserved:  s.eventsObserved.Load(),
+		DecisionsIssued: s.decisionsIssued.Load(),
+		PeakRiskScore:   s.PeakRiskScore(),
+	}
+}
+
+// release drops the structures once the summary has been taken from them: the
+// novelty set and the history ring, which an ended session keeps for nothing.
+// The counters stay. Anything recorded afterwards still counts but is not
+// kept. Owner goroutine only, like the structures themselves.
+func (s *MemoryState) release() {
+	if s == nil {
+		return
+	}
+	s.seen, s.maxSeenTargets = nil, 0
+	s.ring, s.ringNext, s.ringLen = nil, 0, 0
+	s.violationTally = nil
 }
 
 // unusedGrantKinds projects UnusedGrantIndexes onto Kinds, deduplicated and in
