@@ -143,6 +143,31 @@ func TestUnobservableGrantsAreDroppedAndReported(t *testing.T) {
 	}
 }
 
+// A kind the host's telemetry lost is the host's gap, not the build's, and
+// the warning has to say which, or the operator looks for a missing feature.
+func TestDroppedGrantsNameTheHostWhenItLostTheKind(t *testing.T) {
+	an, _ := intent.NewRuleAnalyzer().Analyze(context.Background(), intent.Request{Prompt: "build the project with make"})
+	onlyExec := capability.NewCatalog(capability.KindProcessExec, capability.KindProcessExit)
+	res, err := RuleGenerator{}.Generate(context.Background(), an, onlyExec, Params{
+		WorkspaceRoot: "/w", Unobservable: []capability.Kind{capability.KindFileWrite},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var host, build bool
+	for _, w := range res.Warnings {
+		switch {
+		case strings.HasPrefix(w, "dropped fs.write grant: no probe on this host observes it"):
+			host = true
+		case strings.HasPrefix(w, "dropped fs.read grant: no probe in this build observes it"):
+			build = true
+		}
+	}
+	if !host || !build {
+		t.Errorf("warnings %q: want fs.write blamed on the host and fs.read on the build", res.Warnings)
+	}
+}
+
 func TestGitPushOverSSHIsVisibleToTheApprover(t *testing.T) {
 	res := generate(t, "commit the changes and git push to github.com", "go")
 	env := res.Envelope

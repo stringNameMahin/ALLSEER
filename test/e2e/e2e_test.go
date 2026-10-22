@@ -173,6 +173,12 @@ func startDaemonWith(t *testing.T, mode, cfg string) *daemon {
 // startDaemonAt starts a daemon on a given socket, as a restart would.
 func startDaemonAt(t *testing.T, mode, cfg, socket string) *daemon {
 	t.Helper()
+	return startDaemonFrom(t, mode, cfg, socket, e.object)
+}
+
+// startDaemonFrom starts a daemon on a given BPF object.
+func startDaemonFrom(t *testing.T, mode, cfg, socket, object string) *daemon {
+	t.Helper()
 	need(t)
 	d := &daemon{
 		socket: socket,
@@ -181,7 +187,7 @@ func startDaemonAt(t *testing.T, mode, cfg, socket string) *daemon {
 		done:   make(chan error, 1),
 	}
 	args := []string{
-		"--socket", d.socket, "--object", e.object, "--audit", d.audit, "--cgroup-base", e.cgroups,
+		"--socket", d.socket, "--object", object, "--audit", d.audit, "--cgroup-base", e.cgroups,
 		"--rules", filepath.Join(e.repo, "configs/rules.default.yaml"),
 		"--sensitivity", filepath.Join(e.repo, "configs/sensitivity.default.yaml"),
 	}

@@ -353,7 +353,7 @@ func (d *Daemon) createSession(ctx context.Context, peer ipc.Peer, req ipc.Creat
 	sid := envelope.NewSessionID(d.now())
 	res, err := d.generator.Generate(ctx, an, d.observableCatalog(), envelope.Params{
 		SessionID: sid, WorkspaceRoot: ws, Home: d.host.Home(peer.UID), Resolvers: d.resolvers,
-		TTL: d.cfg.Envelope.DefaultTTL, Now: d.now().UTC(),
+		TTL: d.cfg.Envelope.DefaultTTL, Now: d.now().UTC(), Unobservable: d.tel.Coverage().Unobservable,
 	})
 	if err != nil {
 		return nil, ipc.Errorf(ipc.ErrCodeAnalysisFailed, "generating the envelope: %v", err)

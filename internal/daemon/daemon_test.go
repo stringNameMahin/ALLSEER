@@ -471,6 +471,36 @@ func newUntested(t *testing.T, b probeBehaviour, prober bool) (*Daemon, *fakeTel
 	return d, tel
 }
 
+// A daemon is not built on telemetry blind to a core kind, as it is not built
+// without the floor: with no connect record there is no egress to catch.
+func TestNewRefusesTelemetryBlindToACoreKind(t *testing.T) {
+	rs, err := policy.NewLoader().Load(context.Background(), "../../configs/rules.default.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pe, err := policy.NewEngine(rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dark := range telemetry.CoreKinds() {
+		tel := newFakeTel()
+		var observe []capability.Kind
+		for _, k := range tel.observe {
+			if k != dark {
+				observe = append(observe, k)
+			}
+		}
+		tel.observe = observe
+		_, err := New(Options{
+			Config: config.Defaults(), Telemetry: tel, Groups: &fakeGroups{groups: map[string]*fakeGroup{}},
+			Host: fakeHost{ppid: int32(os.Getpid())}, Policy: pe, Risk: risk.NewEngine(), Audit: &memSink{},
+		})
+		if !errors.Is(err, telemetry.ErrCoreUnobservable) || !strings.Contains(err.Error(), string(dark)) {
+			t.Errorf("New without %s = %v, want ErrCoreUnobservable naming it", dark, err)
+		}
+	}
+}
+
 // The self-test has to be satisfied by the critical probe and nothing else. A
 // record from the kernel-side hook, a record with the wrong outcome, silence,
 // and having no way to run the check at all are each a failure - and after a

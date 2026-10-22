@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -236,18 +238,19 @@ func TestCollectorRefusesWithoutTheFloor(t *testing.T) {
 	}
 }
 
-// A refused non-floor family is a reported gap, not a startup failure. The
-// connect hook is refused too, since it alone would keep net.connect observable.
+// A refused non-floor family is a reported gap, not a startup failure, while
+// another family still observes each core kind.
 func TestCollectorReportsPartialCoverage(t *testing.T) {
 	f := newFakeLoader()
 	f.refuse[telemetry.ProgConnectExit] = true
-	f.refuse[telemetry.ProgSocketConnect] = true
+	f.refuse[telemetry.ProgPathLink] = true
 	c := startCollector(t, f, 4)
 	cov := c.Coverage()
-	for _, k := range cov.Observable {
-		if k == capability.KindNetConnect {
-			t.Fatal("net.connect reported observable with half its family attached and no hook")
-		}
+	if !cov.Degraded || !slices.Contains(cov.Unobservable, capability.KindFileLink) {
+		t.Fatalf("coverage = %+v, want degraded with fs.link unobservable", cov)
+	}
+	if !slices.Contains(cov.Observable, capability.KindNetConnect) {
+		t.Fatal("net.connect reported unobservable though the connect hook attached")
 	}
 	var found bool
 	for _, p := range c.Probes() {
@@ -257,6 +260,34 @@ func TestCollectorReportsPartialCoverage(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the refused probe is not reported with its error")
+	}
+}
+
+// Both families behind a core kind gone is a refusal to govern, not a gap:
+// nothing would record the credential read or the connection that carries it.
+func TestCollectorRefusesWhenACoreKindIsUnobservable(t *testing.T) {
+	for _, c := range []struct {
+		refuse []string
+		dark   string
+	}{
+		{[]string{telemetry.ProgConnectExit, telemetry.ProgSocketConnect}, "[net.connect]"},
+		{[]string{telemetry.ProgOpenatEnter, telemetry.ProgFileOpen}, "[fs.read fs.write fs.create]"},
+	} {
+		f := newFakeLoader()
+		for _, name := range c.refuse {
+			f.refuse[name] = true
+		}
+		col, err := telemetry.NewLiveCollector(telemetry.Config{}, telemetry.CollectorOptions{Loader: f})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = col.Start(context.Background())
+		if !errors.Is(err, telemetry.ErrCoreUnobservable) || !strings.Contains(err.Error(), c.dark) {
+			t.Errorf("Start without %v = %v, want ErrCoreUnobservable naming %s", c.refuse, err, c.dark)
+		}
+		if !f.closed {
+			t.Errorf("without %v the loader was left open after refusing to start", c.refuse)
+		}
 	}
 }
 

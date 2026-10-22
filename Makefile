@@ -496,7 +496,12 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestRuntimeLinkatIsReportedByTheKernelsNames \
 	TestHardlinksAreObservedByTheirSource \
 	TestShimNoticesItsSessionWasLostToARestart \
-	TestLongPathsInTheWorkspaceDoNotStopTheAgent
+	TestLongPathsInTheWorkspaceDoNotStopTheAgent \
+	TestRuntimeARefusedFamilyIsLeftOut \
+	TestRuntimeARefusedFloorFailsTheLoad \
+	TestDaemonGovernsWithoutAFamilyTheKernelRefuses \
+	TestRuntimeARefusedCoreKindFailsTheStart \
+	TestDaemonRefusesWhenTheKernelRefusesACoreKind
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/stringNameMahin/ALLSEER/internal/telemetry/abi"
@@ -277,15 +278,14 @@ type ProbeDescriptor struct {
 	// abi.OpUnknown for every other program.
 	PrivOp abi.PrivOp
 
-	// Optional marks a program the object may be loaded without.
+	// Optional marks a program a supported kernel may lack.
 	//
 	// Only the fentry hooks are: each needs kernel BTF to carry the function
 	// it attaches to, and a kernel that does not expose it (security_path_link
-	// needs CONFIG_SECURITY_PATH) cannot load it at all. libbpf fails the whole object when any program fails to
-	// load, so without this the hook would turn every such kernel from
-	// "governed, with the entry points no tracepoint reaches unwatched" into
-	// "refuses to govern". The loader drops it and reports the loss; coverage
-	// is what says the entry points went with it.
+	// needs CONFIG_SECURITY_PATH) cannot load it at all. The loader leaves out
+	// any refused family but the floor, so this names what is expected to be
+	// missing, not what may be; coverage is what says the entry points went
+	// with it.
 	Optional bool
 
 	// SuccessOnly marks a program that observes an operation only once the
@@ -527,9 +527,8 @@ func capabilitiesFor(descs []ProbeDescriptor) []capability.Kind {
 	return out
 }
 
-// OptionalPrograms names every program the object may be loaded without, in
-// declaration order. The loader disables these and retries when a load fails,
-// so a kernel missing one hook loses that hook rather than all telemetry.
+// OptionalPrograms names every program a supported kernel may lack, in
+// declaration order.
 func OptionalPrograms() []string {
 	var out []string
 	for _, d := range AllProbes() {
@@ -722,6 +721,28 @@ func (c Coverage) DegradedEntryPoints() []EntryPointGap {
 		}
 		if len(lost) > 0 || len(weakened) > 0 {
 			out = append(out, EntryPointGap{Kind: g.Kind, Observed: g.Observed, Missing: lost, SuccessOnly: weakened})
+		}
+	}
+	return out
+}
+
+// CoreKinds are the kinds the lead guarantees rest on: a credential read and
+// the connection that would carry it out. Two families stand behind each, so
+// losing one costs entry points. Losing both leaves the guarantee with no
+// evidence at all, and the collector and the daemon refuse to govern, as they
+// do without the floor.
+func CoreKinds() []capability.Kind {
+	return []capability.Kind{
+		capability.KindFileRead, capability.KindFileWrite, capability.KindFileCreate, capability.KindNetConnect,
+	}
+}
+
+// UnobservableCore is the part of CoreKinds this coverage cannot observe.
+func (c Coverage) UnobservableCore() []capability.Kind {
+	var out []capability.Kind
+	for _, k := range CoreKinds() {
+		if !slices.Contains(c.Observable, k) {
+			out = append(out, k)
 		}
 	}
 	return out

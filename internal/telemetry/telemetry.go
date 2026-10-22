@@ -248,6 +248,8 @@ type Config struct {
 
 	// EnabledProbes selects which probes to attach; empty means all. Narrowing
 	// it is the main lever for reducing overhead, at the cost of blind spots.
+	// It cannot narrow away the floor or both families behind a core kind:
+	// the collector refuses to start without them (CoreKinds).
 	EnabledProbes []string `json:"enabled_probes" yaml:"enabled_probes"`
 
 	// EnableBinaryHashing computes SHA-256 of executed binaries. Expensive on
@@ -636,8 +638,9 @@ type Config struct {
 // relocation that cannot resolve is poisoned rather than fatal, which is what
 // makes this object loadable on kernels it was not built on. A *verifier*
 // rejection is not: bpf_object__load fails entire, so one program a future
-// kernel refuses takes the other twenty-seven down with it, and it is not
-// detectable by testing on the build host.
+// kernel refuses would take the rest down with it, and it is not detectable
+// by testing on the build host. The loader now leaves out the refused family
+// instead; see below.
 //
 // What changed is the answer, not the question. "Option 3" - splitting this
 // object into independently loadable telemetry modules, so named because it was
@@ -649,41 +652,20 @@ type Config struct {
 // mechanism that survived is better served by something cheaper and
 // finer-grained than a split.
 //
-// TODO(architecture): implement family-granular reactive autoload degradation
-// in M6/M7, alongside the capability reporting that makes partial observability
-// safe. On a load failure, identify the refused program, disable its probe
-// family with BPFProg.SetAutoload(false) - or a refused map with
-// BPFMap.SetAutocreate(false) - reopen, retry, converge on the maximal loadable
-// subset, and report the gap. The open-to-load window this needs already exists
-// in loader_linux.go and already carries resizeRingBuffer and
-// applyForceWakeup, so the intervention point is not new.
+// Family-granular reactive autoload degradation is implemented: on a load
+// failure the loader bisects the autoload set by family (degradeFamilies),
+// disables what the kernel refuses with SetAutoload(false), reopens, and keeps
+// the largest set that loads. It does not parse the verifier log: that is
+// process-global state in libbpfgo, and libbpf's wording is not control flow
+// to depend on. The constraints it keeps:
 //
-// Identify the culprit by bisecting the autoload set, not by parsing the
-// verifier log. libbpfgo can capture that log through SetLoggerCbs and it is
-// worth capturing as the diagnostic, but it is process-global mutable state and
-// a string match against libbpf's wording is not a control flow to depend on.
-// Bisecting is deterministic, needs no log, and costs at most fifteen
-// reopen-and-load cycles at startup.
-//
-// Three constraints on that work, none of them optional:
-//
-//  1. The unit of degradation is the probe family, never the program. Thirteen
-//     of the thirty-one programs are enter/exit pairs sharing a scratch
-//     map, so dropping openat_exit while keeping openat_enter
-//     would leak openat_scratch and emit nothing, which is worse than dropping
-//     both. That is eighteen degradation units - two sched singletons,
-//     thirteen pairs and the three fentry hooks - and never thirty-one.
-//  2. proc_exec and proc_exit are a floor rather than a family. They are the
-//     attribution backbone every other probe hangs off, so a host that cannot
-//     load them must refuse to run rather than degrade. See the M7 requirement
-//     below.
-//  3. The gap must reach ProbeInfo.Capabilities, MemoryCatalog.SetObservable
-//     through CapabilitiesFor, the audit record and allseerctl status. A
-//     partial load that does not report itself is the silent degradation this
-//     project rejects everywhere else, and it would be strictly worse than the
-//     loud total failure it replaces. That reporting is the bulk of the work,
-//     not a follow-up to it, and it is why the mechanism is sequenced with M6
-//     rather than built now.
+//  1. The unit is the probe family, never the program. Thirteen families are
+//     enter/exit pairs sharing a scratch map, so dropping openat_exit while
+//     keeping openat_enter would leak openat_scratch and emit nothing.
+//  2. proc_exec and proc_exit are a floor rather than a family: a kernel that
+//     refuses them fails the load, and the daemon refuses to govern.
+//  3. The gap reaches ProbeInfo, coverage, the session warnings, the
+//     session_start record and allseerctl status, as any missing family does.
 //
 // TODO(architecture): M7 must fail closed when core telemetry cannot load.
 // This is the mitigation for the catastrophic case and it costs no

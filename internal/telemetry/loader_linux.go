@@ -88,8 +88,7 @@ type BPFLoader struct {
 	closed   bool
 
 	// loaded is which programs the loaded object actually carries, recorded at
-	// Load. Every program is present today; family-granular degradation is what
-	// will make this a subset.
+	// Load. A subset when the kernel refused a family.
 	loaded map[string]bool
 
 	// attachErrs is why an attach failed, kept because the failure is the
@@ -98,7 +97,7 @@ type BPFLoader struct {
 	attachErrs map[string]string
 
 	// disabled names programs this load left out of the kernel, with the
-	// reason. Only Optional programs can appear here.
+	// reason. Never a floor program: without the floor, Load fails.
 	disabled map[string]string
 }
 
@@ -184,43 +183,27 @@ func (l *BPFLoader) Load(ctx context.Context, objectPath string) error {
 		return err
 	}
 
-	module, err := bpf.NewModuleFromFile(objectPath)
+	module, err := l.openLocked(objectPath)
 	if err != nil {
-		return fmt.Errorf("telemetry: opening BPF object %s: %w", objectPath, err)
-	}
-
-	// Between open and load is the only window in which a map can be resized:
-	// after load it exists in the kernel at whatever size it was created with.
-	if err := resizeRingBuffer(module, l.cfg.RingBufferSize); err != nil {
-		module.Close()
 		return err
 	}
-
-	// The same window, for the same reason. .rodata becomes a frozen map at
-	// load, so a value written after it is a value written to something the
-	// kernel will refuse, and one written before it is a constant the verifier
-	// can fold.
-	if err := applyForceWakeup(module, l.cfg.RingbufForceWakeup); err != nil {
-		module.Close()
-		return err
-	}
-
 	if err := module.BPFLoadObject(); err != nil {
 		module.Close()
 
-		// One retry without the optional programs. A kernel that cannot load
-		// the fentry hook - no BTF for security_file_open, or a signature this
-		// object was not built against - must lose that hook rather than all
-		// telemetry, because libbpf fails the whole object for one program.
-		// The first error is what gets reported either way: it is the reason
-		// the hook is gone, and a retry that also fails must not replace it
-		// with a second, less informative one.
-		degraded, left, rerr := l.loadWithoutOptional(objectPath, err)
+		// libbpf fails the whole object for one refused program, so a kernel
+		// without the BTF for one fentry hook, or whose verifier refuses one
+		// program, would govern nothing. Instead the families it refuses are
+		// left out and reported, and the rest loads. The first error is what
+		// gets reported when nothing loads: it is the reason, and a later
+		// attempt must not replace it with a less informative one.
+		degraded, left, rerr := l.loadDegraded(objectPath, err)
 		if rerr != nil {
 			return rerr
 		}
 		l.module = degraded
-		l.disabled = left
+		for name, why := range left {
+			l.disabled[name] = why
+		}
 		l.recordLoadedLocked()
 		return nil
 	}
@@ -230,46 +213,94 @@ func (l *BPFLoader) Load(ctx context.Context, objectPath string) error {
 	return nil
 }
 
-// loadWithoutOptional reopens the object with every Optional program's autoload
-// off and loads it again. It returns the module and what it left out, or the
-// original load error when the object fails without them too.
-func (l *BPFLoader) loadWithoutOptional(objectPath string, first error) (*bpf.Module, map[string]string, error) {
-	names := OptionalPrograms()
-	if len(names) == 0 {
-		return nil, nil, fmt.Errorf("telemetry: loading BPF object %s: %w", objectPath, first)
-	}
-
+// openLocked opens the object and applies everything that must happen before
+// it loads.
+func (l *BPFLoader) openLocked(objectPath string) (*bpf.Module, error) {
 	module, err := bpf.NewModuleFromFile(objectPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("telemetry: reopening BPF object %s: %w", objectPath, err)
-	}
-	fail := func(e error) (*bpf.Module, map[string]string, error) {
-		module.Close()
-		return nil, nil, e
-	}
-	if err := resizeRingBuffer(module, l.cfg.RingBufferSize); err != nil {
-		return fail(err)
-	}
-	if err := applyForceWakeup(module, l.cfg.RingbufForceWakeup); err != nil {
-		return fail(err)
+		return nil, fmt.Errorf("telemetry: opening BPF object %s: %w", objectPath, err)
 	}
 
-	left := make(map[string]string, len(names))
-	for _, name := range names {
-		prog, err := module.GetProgram(name)
-		if err != nil {
+	// Between open and load is the only window in which a map can be resized:
+	// after load it exists in the kernel at whatever size it was created with.
+	if err := resizeRingBuffer(module, l.cfg.RingBufferSize); err != nil {
+		module.Close()
+		return nil, err
+	}
+
+	// The same window, for the same reason. .rodata becomes a frozen map at
+	// load, so a value written after it is a value written to something the
+	// kernel will refuse, and one written before it is a constant the verifier
+	// can fold.
+	if err := applyForceWakeup(module, l.cfg.RingbufForceWakeup); err != nil {
+		module.Close()
+		return nil, err
+	}
+	return module, nil
+}
+
+// loadDegraded converges on the largest set of probe families the kernel
+// loads, after the whole object failed with first. The unit is the family,
+// never the program: half of an enter/exit pair fills scratch and emits
+// nothing. The floor is never left out, so a kernel refusing it fails here.
+// It returns the module and the programs it left out, with why.
+func (l *BPFLoader) loadDegraded(objectPath string, first error) (*bpf.Module, map[string]string, error) {
+	var units []string
+	programs := map[string][]string{}
+	for _, f := range AllProbeFamilies() {
+		if f.Floor {
 			continue
 		}
-		if err := prog.SetAutoload(false); err != nil {
-			return fail(fmt.Errorf("telemetry: disabling %s after a failed load: %w", name, err))
+		programs[f.Name] = f.Programs
+		units = append(units, f.Name)
+	}
+
+	// Each attempt reopens the object: a module whose load failed cannot be
+	// loaded again. The last one that loads is the one kept.
+	var kept *bpf.Module
+	load := func(out map[string]bool) error {
+		module, err := l.openLocked(objectPath)
+		if err != nil {
+			// Not %w: an errno from reopening is not the kernel refusing a
+			// family, and must not read as one.
+			return fmt.Errorf("telemetry: reopening BPF object %s: %s", objectPath, err)
 		}
-		left[name] = "not loaded: " + first.Error()
+		for f := range out {
+			for _, name := range programs[f] {
+				prog, err := module.GetProgram(name)
+				if err != nil {
+					continue
+				}
+				if err := prog.SetAutoload(false); err != nil {
+					module.Close()
+					return fmt.Errorf("telemetry: leaving %s unloaded: %s", name, err)
+				}
+			}
+		}
+		if err := module.BPFLoadObject(); err != nil {
+			module.Close()
+			return err
+		}
+		if kept != nil {
+			kept.Close()
+		}
+		kept = module
+		return nil
 	}
-	if err := module.BPFLoadObject(); err != nil {
-		module.Close()
-		return nil, nil, fmt.Errorf("telemetry: loading BPF object %s: %w", objectPath, first)
+	why, err := degradeFamilies(units, first, load)
+	if err != nil {
+		if kept != nil {
+			kept.Close()
+		}
+		return nil, nil, fmt.Errorf("telemetry: loading BPF object %s: %w", objectPath, err)
 	}
-	return module, left, nil
+	left := map[string]string{}
+	for f, e := range why {
+		for _, name := range programs[f] {
+			left[name] = "not loaded: the kernel refused the " + f + " family: " + e.Error()
+		}
+	}
+	return kept, left, nil
 }
 
 // recordLoadedLocked notes which of the object's programs are present.

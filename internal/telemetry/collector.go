@@ -21,6 +21,11 @@ var (
 	// than report a quiet session.
 	ErrTelemetryFloor = errors.New("telemetry: core probes (proc_exec, proc_exit) are not attached; refusing to govern")
 
+	// ErrCoreUnobservable means no attached family observes a core kind, so
+	// file opens or connects would go unrecorded. The collector refuses to
+	// start rather than govern without them. See CoreKinds.
+	ErrCoreUnobservable = errors.New("telemetry: core kinds are unobservable on this host; refusing to govern")
+
 	// ErrNotStarted means a session operation was called before Start.
 	ErrNotStarted = errors.New("telemetry: collector is not started")
 
@@ -172,8 +177,8 @@ func (c *LiveCollector) Events() <-chan event.Event { return c.out }
 // Tracker exposes the process tracker.
 func (c *LiveCollector) Tracker() *ProcTracker { return c.tracker }
 
-// Start loads the object, attaches probes, enforces the attribution floor, and
-// begins draining the ring buffer.
+// Start loads the object, attaches probes, enforces the attribution floor and
+// the core kinds, and begins draining the ring buffer.
 func (c *LiveCollector) Start(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -194,6 +199,10 @@ func (c *LiveCollector) Start(ctx context.Context) error {
 	if !floorAttached(c.probes) {
 		_ = c.loader.Close()
 		return fmt.Errorf("%w\n%s", ErrTelemetryFloor, ComputeCoverage(c.probes).BugReport())
+	}
+	if cov := ComputeCoverage(c.probes); len(cov.UnobservableCore()) > 0 {
+		_ = c.loader.Close()
+		return fmt.Errorf("%w: %v\n%s", ErrCoreUnobservable, cov.UnobservableCore(), cov.BugReport())
 	}
 
 	raw, err := c.loader.RingBuffer(ctx, MapEvents)

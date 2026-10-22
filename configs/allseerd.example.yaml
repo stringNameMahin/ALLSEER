@@ -35,7 +35,9 @@ telemetry:
   ring_buffer_size: 16777216
   event_channel_size: 16384
   # Empty means attach everything. Narrowing this is the main lever for reducing
-  # overhead, paid for in blind spots.
+  # overhead, paid for in blind spots. File opens (openat or file_open) and
+  # connects (connect or socket_connect) must stay: without them the daemon
+  # refuses to start.
   enabled_probes: []
   enable_binary_hashing: false
   # Not implemented in this build: there is no DNS correlator, so a grant that

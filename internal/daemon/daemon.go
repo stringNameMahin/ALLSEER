@@ -190,8 +190,12 @@ func New(o Options) (*Daemon, error) {
 	case o.Audit == nil:
 		return nil, errors.New("daemon: an audit sink is required")
 	}
-	if !o.Telemetry.Coverage().FloorIntact {
+	cov := o.Telemetry.Coverage()
+	if !cov.FloorIntact {
 		return nil, telemetry.ErrTelemetryFloor
+	}
+	if dark := cov.UnobservableCore(); len(dark) > 0 {
+		return nil, fmt.Errorf("%w: %v", telemetry.ErrCoreUnobservable, dark)
 	}
 	now := o.Now
 	if now == nil {

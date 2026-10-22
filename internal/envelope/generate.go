@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +35,17 @@ type Params struct {
 	Resolvers []string
 	TTL       time.Duration
 	Now       time.Time
+	// Unobservable are kinds this build observes and this host's telemetry
+	// does not, so a dropped grant blames the host rather than the build.
+	Unobservable []capability.Kind
+}
+
+// where says whose gap an unobservable kind is.
+func (p Params) where(k capability.Kind) string {
+	if slices.Contains(p.Unobservable, k) {
+		return "on this host"
+	}
+	return "in this build"
 }
 
 // Result is a generated envelope plus what generation could not honour.
@@ -88,7 +100,7 @@ func (g RuleGenerator) Generate(_ context.Context, an *intent.Analysis, cat capa
 			continue
 		}
 		if cat != nil && !cat.Observable(gr.Kind) {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("dropped %s grant: no probe in this build observes it", gr.Kind))
+			res.Warnings = append(res.Warnings, fmt.Sprintf("dropped %s grant: no probe %s observes it", gr.Kind, p.where(gr.Kind)))
 			continue
 		}
 		grants = append(grants, gr)
@@ -96,7 +108,7 @@ func (g RuleGenerator) Generate(_ context.Context, an *intent.Analysis, cat capa
 	var denials []capability.Grant
 	for _, d := range b.denials_ {
 		if cat != nil && !cat.Observable(d.Kind) {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("denial of %s is unenforceable: no probe in this build observes it", d.Kind))
+			res.Warnings = append(res.Warnings, fmt.Sprintf("denial of %s is unenforceable: no probe %s observes it", d.Kind, p.where(d.Kind)))
 			continue
 		}
 		denials = append(denials, d)
