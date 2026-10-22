@@ -36,6 +36,9 @@ type fakeTel struct {
 	attached map[string]uint64
 	observe  []capability.Kind
 	gaps     []telemetry.EntryPointGap
+	degraded bool
+	// unobservable is what the host lost; observe should not list it.
+	unobservable []capability.Kind
 }
 
 func newFakeTel() *fakeTel {
@@ -53,7 +56,8 @@ func (f *fakeTel) CollectorStats() telemetry.CollectorStats { return telemetry.C
 func (f *fakeTel) Coverage() telemetry.Coverage {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return telemetry.Coverage{FloorIntact: true, Observable: f.observe, EntryPoints: f.gaps}
+	return telemetry.Coverage{FloorIntact: true, Observable: f.observe, EntryPoints: f.gaps, Degraded: f.degraded,
+		Unobservable: f.unobservable, Families: []telemetry.FamilyCoverage{{Name: "path_link", Complete: !f.degraded}}}
 }
 func (f *fakeTel) AttachCgroup(_ context.Context, sid string, id uint64, _ int32) error {
 	f.mu.Lock()

@@ -58,6 +58,8 @@ func (d *Daemon) sessionEnd(ctx context.Context, sid string, out session.Outcome
 	}
 	rec.UnusedGrants = s.Summary.UnusedGrants
 	rec.TopViolations = s.Summary.TopViolations
+	rec.UnmatchedConnects = s.Summary.UnmatchedConnects
+	rec.UnmatchedConnectTargets = s.Summary.UnmatchedConnectTargets
 	return rec
 }
 

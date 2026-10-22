@@ -14,6 +14,7 @@ import (
 	"github.com/stringNameMahin/ALLSEER/internal/envelope"
 	"github.com/stringNameMahin/ALLSEER/internal/intent"
 	"github.com/stringNameMahin/ALLSEER/internal/ipc"
+	"github.com/stringNameMahin/ALLSEER/internal/policy"
 	"github.com/stringNameMahin/ALLSEER/internal/session"
 	"github.com/stringNameMahin/ALLSEER/pkg/decision"
 	"github.com/stringNameMahin/ALLSEER/pkg/ece"
@@ -320,6 +321,23 @@ func (d *Daemon) createSession(ctx context.Context, peer ipc.Peer, req ipc.Creat
 	}
 	if d.activeCount() >= d.cfg.Daemon.MaxConcurrentSessions {
 		return nil, ipc.Errorf(ipc.ErrCodeInvalidRequest, "the daemon is at its limit of %d live sessions", d.cfg.Daemon.MaxConcurrentSessions)
+	}
+	// Enforce runs with nobody watching, so the degraded-telemetry warning
+	// would reach no one and the session would read as fully governed.
+	// Interactive and monitor sessions still run, and warn.
+	if config.Restrict(d.cfg.Policy.DefaultMode, req.Mode) == policy.ModeEnforce {
+		if cov := d.tel.Coverage(); cov.Degraded {
+			var missing []string
+			for _, f := range cov.Families {
+				if !f.Complete {
+					missing = append(missing, f.Name)
+				}
+			}
+			return nil, ipc.Errorf(ipc.ErrCodeTelemetryFailed,
+				"refusing an enforce session: telemetry is degraded on this host (missing families: %s; unobservable: %v); "+
+					"run in interactive or monitor mode, or restore the probes (allseerctl status)",
+				strings.Join(missing, ", "), cov.Unobservable)
+		}
 	}
 
 	// The analyzer reads the sanitized prompt. Any indicator is carried as an

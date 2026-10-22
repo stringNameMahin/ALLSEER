@@ -142,6 +142,11 @@ type Summary struct {
 	// TopViolations lists the most significant departures from the envelope.
 	TopViolations []string `json:"top_violations,omitempty"`
 
+	// UnmatchedConnects counts connections policy allowed although no grant
+	// matched them; UnmatchedConnectTargets names the most frequent.
+	UnmatchedConnects       int                         `json:"unmatched_connects,omitempty"`
+	UnmatchedConnectTargets []decision.UnmatchedConnect `json:"unmatched_connect_targets,omitempty"`
+
 	PeakRiskScore float64 `json:"peak_risk_score"`
 }
 
@@ -228,6 +233,10 @@ type State_ interface {
 
 	// RecordDecision updates decision counters.
 	RecordDecision(d *decision.Decision)
+
+	// RecordAllowed notes an event policy let through although no grant
+	// matched it.
+	RecordAllowed(e *event.Event, d *decision.Decision)
 
 	// RecordGrantUse marks a grant as exercised, supporting MaxCount. The index
 	// is validator.Result.MatchedGrantIndex, valid when MatchedGrant is set.

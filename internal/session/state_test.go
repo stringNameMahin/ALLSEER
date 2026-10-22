@@ -1208,3 +1208,50 @@ func BenchmarkRecordEvent(b *testing.B) {
 		st.RecordEvent(e)
 	}
 }
+
+// A connection allowed with no grant matching it is what enforce mode lets
+// through at low risk, and the summary is where it is read back. Matched
+// connects, ones a rule stopped, and other kinds are not in it.
+func TestUnmatchedConnectsAreSummarized(t *testing.T) {
+	st := NewState("s-1", nil)
+	connect := func(target string) *event.Event { return eventOf(capability.KindNetConnect, target) }
+	allow := func(v decision.Verdict, a ece.Action) *decision.Decision {
+		return &decision.Decision{Verdict: v, Action: a}
+	}
+	for range 3 {
+		st.RecordAllowed(connect("203.0.113.5:443"), allow(decision.VerdictIndeterminate, ece.ActionWarn))
+	}
+	st.RecordAllowed(connect("198.51.100.7:80"), allow(decision.VerdictOutsideEnvelope, ece.ActionAllow))
+	st.RecordAllowed(connect("proxy.golang.org:443"), allow(decision.VerdictWithinEnvelope, ece.ActionAllow))
+	st.RecordAllowed(connect("192.0.2.1:22"), allow(decision.VerdictIndeterminate, ece.ActionRequestApproval))
+	st.RecordAllowed(connect("192.0.2.2:22"), allow(decision.VerdictOutsideEnvelope, ece.ActionBlock))
+	st.RecordAllowed(eventOf(capability.KindFileRead, "/etc/hosts"), allow(decision.VerdictIndeterminate, ece.ActionWarn))
+
+	sum := st.Snapshot()
+	want := []decision.UnmatchedConnect{
+		{Target: "203.0.113.5:443", Verdict: decision.VerdictIndeterminate, Count: 3},
+		{Target: "198.51.100.7:80", Verdict: decision.VerdictOutsideEnvelope, Count: 1},
+	}
+	if sum.UnmatchedConnects != 4 || !reflect.DeepEqual(sum.UnmatchedConnectTargets, want) {
+		t.Errorf("summary %d %+v, want 4 %+v", sum.UnmatchedConnects, sum.UnmatchedConnectTargets, want)
+	}
+}
+
+// Bounded twice: the summary names a handful, and the tally behind it stops
+// taking new targets, while the total still counts every connect.
+func TestUnmatchedConnectsAreBounded(t *testing.T) {
+	st := NewState("s-1", nil)
+	d := &decision.Decision{Verdict: decision.VerdictIndeterminate, Action: ece.ActionWarn}
+	n := maxUnmatchedTargets + 50
+	for i := range n {
+		st.RecordAllowed(eventOf(capability.KindNetConnect, fmt.Sprintf("10.0.%d.%d:443", i/256, i%256)), d)
+	}
+	if len(st.unmatched) != maxUnmatchedTargets {
+		t.Errorf("tallied %d targets, want the bound %d", len(st.unmatched), maxUnmatchedTargets)
+	}
+	sum := st.Snapshot()
+	if sum.UnmatchedConnects != n || len(sum.UnmatchedConnectTargets) != maxUnmatchedReported {
+		t.Errorf("summary %d with %d targets, want %d with %d", sum.UnmatchedConnects,
+			len(sum.UnmatchedConnectTargets), n, maxUnmatchedReported)
+	}
+}

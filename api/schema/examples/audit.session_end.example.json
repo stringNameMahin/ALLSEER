@@ -23,5 +23,13 @@
   "top_violations": [
     "outside_envelope \u00d72 (rule medium-risk-departure)",
     "explicitly_denied \u00d71 (rule envelope-explicit-denial)"
+  ],
+  "unmatched_connects": 2,
+  "unmatched_connect_targets": [
+    {
+      "target": "203.0.113.5:443",
+      "verdict": "indeterminate",
+      "count": 2
+    }
   ]
 }

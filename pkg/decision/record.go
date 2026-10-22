@@ -230,6 +230,20 @@ type SessionEnd struct {
 	CapabilityUsage map[capability.Kind]int `json:"capability_usage,omitempty"`
 	UnusedGrants    []capability.Kind       `json:"unused_grants,omitempty"`
 	TopViolations   []string                `json:"top_violations,omitempty"`
+
+	// UnmatchedConnects counts connections policy let through although no
+	// grant matched them, which every mode does at low risk, enforce
+	// included. UnmatchedConnectTargets names the most frequent.
+	UnmatchedConnects       int                `json:"unmatched_connects,omitempty"`
+	UnmatchedConnectTargets []UnmatchedConnect `json:"unmatched_connect_targets,omitempty"`
+}
+
+// UnmatchedConnect is one destination a session was allowed to connect to
+// although no grant matched it.
+type UnmatchedConnect struct {
+	Target  string  `json:"target"`
+	Verdict Verdict `json:"verdict"`
+	Count   int     `json:"count"`
 }
 
 // LeftoverAction is what happened to a leftover session cgroup.

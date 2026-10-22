@@ -166,7 +166,26 @@
           "additionalProperties": { "type": "integer", "minimum": 0 }
         },
         "unused_grants": { "$ref": "#/$defs/capabilityKinds" },
-        "top_violations": { "type": "array", "items": { "type": "string" } }
+        "top_violations": { "type": "array", "items": { "type": "string" } },
+        "unmatched_connects": {
+          "description": "Connections policy allowed although no grant matched them. Every mode allows these at low risk, enforce included.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "unmatched_connect_targets": {
+          "description": "The most frequent of those, most frequent first.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["target", "verdict", "count"],
+            "additionalProperties": false,
+            "properties": {
+              "target": { "type": "string" },
+              "verdict": { "$ref": "decision.v1alpha2.schema.json#/$defs/verdict" },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
       }
     },
     "leftover": {

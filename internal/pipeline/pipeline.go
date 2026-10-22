@@ -170,6 +170,10 @@ type State interface {
 	// RecordDecision folds a rendered decision into the counters.
 	RecordDecision(d *decision.Decision)
 
+	// RecordAllowed notes an event policy let through although no grant
+	// matched it.
+	RecordAllowed(e *event.Event, d *decision.Decision)
+
 	// RecordGrantUse charges one use against a grant, by envelope index.
 	RecordGrantUse(grantIndex int)
 }

@@ -390,6 +390,14 @@ func printOutcome(s *session.Session) {
 	for _, v := range sum.TopViolations {
 		fmt.Fprintf(w, "[allseer]   violation: %s\n", v)
 	}
+	// Allowed in every mode, enforce included: the rules stop an unmatched
+	// connection only once its risk is high enough.
+	if sum.UnmatchedConnects > 0 {
+		fmt.Fprintf(w, "[allseer]   %d connections were allowed although no grant matched them\n", sum.UnmatchedConnects)
+		for _, c := range sum.UnmatchedConnectTargets {
+			fmt.Fprintf(w, "[allseer]   allowed, unmatched: %s (%s) x%d\n", c.Target, c.Verdict, c.Count)
+		}
+	}
 }
 
 func note(format string, a ...any) { fmt.Fprintf(os.Stderr, "[allseer] "+format+"\n", a...) }

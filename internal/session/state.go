@@ -172,6 +172,11 @@ type MemoryState struct {
 	ringLen  int
 
 	violationTally map[violationKey]int
+
+	// unmatched tallies connects allowed with no grant matching, by target,
+	// up to maxUnmatchedTargets of them; unmatchedTotal counts every one.
+	unmatched      map[unmatchedKey]int
+	unmatchedTotal int
 }
 
 type seenKey struct {
@@ -182,6 +187,11 @@ type seenKey struct {
 type violationKey struct {
 	verdict decision.Verdict
 	rule    string
+}
+
+type unmatchedKey struct {
+	target  string
+	verdict decision.Verdict
 }
 
 var (
@@ -262,6 +272,7 @@ func NewStateWith(cfg Config) *MemoryState {
 		seen:           make(map[seenKey]struct{}),
 		ring:           make([]event.Event, historySize),
 		violationTally: make(map[violationKey]int),
+		unmatched:      make(map[unmatchedKey]int),
 	}
 
 	// Populated for every known Kind up front so the map is never written after
@@ -381,6 +392,29 @@ func (s *MemoryState) RecordDecision(d *decision.Decision) {
 	}
 
 	s.raisePeak(d.Risk.Score)
+}
+
+// RecordAllowed notes a connection policy let through although no grant
+// matched it: an indeterminate or out-of-envelope connect whose risk stayed
+// below every rule that stops one. Enforce mode allows these too, and the
+// session summary is where they are read back, so a connection by raw address
+// to a host the envelope does not name is not lost among the allowed ones.
+func (s *MemoryState) RecordAllowed(e *event.Event, d *decision.Decision) {
+	if s == nil || e == nil || d == nil || d.Verdict == decision.VerdictWithinEnvelope ||
+		(d.Action != ece.ActionAllow && d.Action != ece.ActionWarn) {
+		return
+	}
+	obs, err := validator.ObservationOf(e)
+	if err != nil || obs.Kind != capability.KindNetConnect {
+		return
+	}
+	s.unmatchedTotal++
+	k := unmatchedKey{target: obs.Target, verdict: d.Verdict}
+	if _, ok := s.unmatched[k]; ok || len(s.unmatched) < maxUnmatchedTargets {
+		if s.unmatched != nil {
+			s.unmatched[k]++
+		}
+	}
 }
 
 // RecordGrantUse charges one use against the grant at grantIndex, which is
@@ -683,6 +717,8 @@ func (s *MemoryState) Snapshot() Summary {
 
 	sum.UnusedGrants = s.unusedGrantKinds()
 	sum.TopViolations = s.topViolations()
+	sum.UnmatchedConnects = s.unmatchedTotal
+	sum.UnmatchedConnectTargets = s.topUnmatched()
 	return sum
 }
 
@@ -711,6 +747,7 @@ func (s *MemoryState) release() {
 	s.seen, s.maxSeenTargets = nil, 0
 	s.ring, s.ringNext, s.ringLen = nil, 0, 0
 	s.violationTally = nil
+	s.unmatched = nil
 }
 
 // unusedGrantKinds projects UnusedGrantIndexes onto Kinds, deduplicated and in
@@ -741,6 +778,38 @@ func (s *MemoryState) unusedGrantKinds() []capability.Kind {
 // maxTopViolations bounds the summary's violation list. A summary is read by a
 // human in a few seconds; a hundred lines of it is not read at all.
 const maxTopViolations = 5
+
+// maxUnmatchedTargets bounds the distinct targets tallied for unmatched
+// connects, and maxUnmatchedReported how many the summary names.
+const (
+	maxUnmatchedTargets  = 1024
+	maxUnmatchedReported = 10
+)
+
+// topUnmatched lists the most frequent unmatched connect targets, most
+// frequent first, ties by target.
+func (s *MemoryState) topUnmatched() []decision.UnmatchedConnect {
+	if len(s.unmatched) == 0 {
+		return nil
+	}
+	out := make([]decision.UnmatchedConnect, 0, len(s.unmatched))
+	for k, n := range s.unmatched {
+		out = append(out, decision.UnmatchedConnect{Target: k.target, Verdict: k.verdict, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Verdict < out[j].Verdict
+	})
+	if len(out) > maxUnmatchedReported {
+		out = out[:maxUnmatchedReported]
+	}
+	return out
+}
 
 // topViolations renders the most frequent violating verdict/rule pairs, most
 // frequent first.

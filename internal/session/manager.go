@@ -11,6 +11,7 @@ import (
 	"github.com/stringNameMahin/ALLSEER/internal/policy"
 	"github.com/stringNameMahin/ALLSEER/internal/validator"
 	"github.com/stringNameMahin/ALLSEER/pkg/capability"
+	"github.com/stringNameMahin/ALLSEER/pkg/decision"
 	"github.com/stringNameMahin/ALLSEER/pkg/ece"
 )
 
@@ -879,6 +880,7 @@ func (s *Session) clone() Session {
 	}
 	out.Summary.UnusedGrants = append([]capability.Kind(nil), s.Summary.UnusedGrants...)
 	out.Summary.TopViolations = append([]string(nil), s.Summary.TopViolations...)
+	out.Summary.UnmatchedConnectTargets = append([]decision.UnmatchedConnect(nil), s.Summary.UnmatchedConnectTargets...)
 	return out
 }
 

@@ -16,6 +16,7 @@ import (
 // A kernel whose verifier refuses one probe family used to stop the daemon
 // governing at all. It now governs without that family, and says so to the
 // person launching the agent, in status and in the session's audit record.
+// It does not run enforce sessions on it.
 func TestDaemonGovernsWithoutAFamilyTheKernelRefuses(t *testing.T) {
 	need(t)
 	obj := refuseSections(t, e.object, "tracepoint/syscalls/sys_exit_connect")
@@ -41,6 +42,16 @@ func TestDaemonGovernsWithoutAFamilyTheKernelRefuses(t *testing.T) {
 	}
 	if log := filterLibbpf(d.log.String()); !strings.Contains(log, "refused the connect family") {
 		t.Errorf("the daemon log does not name the refused family:\n%s", log)
+	}
+
+	// Nobody reads the warning in an unattended run, so enforce is refused
+	// and the agent never starts.
+	r = shim(t, d.socket, workspace(t), "enforce", script(t, "exit 0"))
+	if code := r.wait(t, 30*time.Second); code != 125 {
+		t.Errorf("enforce on degraded telemetry: shim exit = %d, want 125 (not launched)\n%s", code, r.stderr.String())
+	}
+	if !strings.Contains(r.stderr.String(), "refusing an enforce session") || !strings.Contains(r.stderr.String(), "connect") {
+		t.Errorf("the refusal does not say why:\n%s", r.stderr.String())
 	}
 }
 

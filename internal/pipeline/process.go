@@ -213,6 +213,7 @@ func (p *EventPipeline) commit(pc *ProcessingContext) {
 
 	if pc.Decision != nil {
 		pc.State.RecordDecision(pc.Decision)
+		pc.State.RecordAllowed(pc.Event, pc.Decision)
 	}
 }
 

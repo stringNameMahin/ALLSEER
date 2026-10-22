@@ -501,7 +501,8 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestRuntimeARefusedFloorFailsTheLoad \
 	TestDaemonGovernsWithoutAFamilyTheKernelRefuses \
 	TestRuntimeARefusedCoreKindFailsTheStart \
-	TestDaemonRefusesWhenTheKernelRefusesACoreKind
+	TestDaemonRefusesWhenTheKernelRefusesACoreKind \
+	TestEnforceReportsTheConnectionsItAllowsUnmatched
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify

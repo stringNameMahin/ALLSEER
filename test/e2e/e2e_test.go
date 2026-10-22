@@ -1074,6 +1074,36 @@ func TestDaemonRefusesToGovernWhenTheOpenProbeIsMissing(t *testing.T) {
 	}
 }
 
+// Enforce kills on request_approval and block, and nothing else. When the
+// grants name hosts, a connect by address is indeterminate, and at low risk
+// that is a warning that lets the connection stand. The address here is
+// public and unlisted, as an attacker's server would be. Such connections are
+// reported when the agent exits and in session_end, where automation reads
+// them, rather than lost among the allowed operations.
+func TestEnforceReportsTheConnectionsItAllowsUnmatched(t *testing.T) {
+	d := startDaemon(t, "enforce")
+	// UDP, so the connect returns at once though nothing answers there. A bash
+	// builtin only: the Go helper and the Rust coreutils read their own /proc
+	// maps, which the credential-then-egress factor counts as a credential read.
+	const dest = "192.0.2.10:443"
+	agent := "exec 3<>/dev/udp/192.0.2.10/443 || exit 1"
+	r := shim(t, d.socket, workspace(t), "", script(t, agent),
+		"-prompt", "download https://proxy.golang.org/golang.org/x/text/@v/list and run the tests")
+	sid := r.sessionID(t)
+	if code := r.wait(t, 30*time.Second); code != 0 {
+		t.Fatalf("agent exit = %d, want 0: the connect should be allowed\n%s\n%s", code, r.stderr.String(), d.explain())
+	}
+	if want := "allowed, unmatched: " + dest + " (indeterminate) x1"; !strings.Contains(r.stderr.String(), want) {
+		t.Errorf("the exit summary does not say %q:\n%s\n%s", want, r.stderr.String(), d.explain())
+	}
+	_, end := d.framed(t, sid)
+	want := decision.UnmatchedConnect{Target: dest, Verdict: decision.VerdictIndeterminate, Count: 1}
+	if end.UnmatchedConnects != 1 || len(end.UnmatchedConnectTargets) != 1 || end.UnmatchedConnectTargets[0] != want {
+		t.Errorf("session_end reports %d unmatched connects %+v, want 1 %+v",
+			end.UnmatchedConnects, end.UnmatchedConnectTargets, want)
+	}
+}
+
 // Plan D's lead scenario: an agent reads a credential and then opens a
 // connection. The sequence detector must mark the egress, whichever entry point
 // it used. connect(2) was the only one observed before the security_socket_connect

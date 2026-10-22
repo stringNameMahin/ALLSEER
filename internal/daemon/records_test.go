@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -268,5 +269,46 @@ func TestFailedRecordWritesAreReportedInStatus(t *testing.T) {
 	}
 	if st.AuditErrors == 0 {
 		t.Fatal("a failed session record write is not reported in status")
+	}
+}
+
+// An enforce session runs unattended, so the degraded-telemetry warning would
+// reach nobody. It is refused, whether enforce was configured or requested;
+// an interactive session still runs and carries the warning.
+func TestEnforceSessionsAreRefusedOnDegradedTelemetry(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		configured, requested policy.Mode
+	}{
+		{policy.ModeEnforce, ""},
+		{policy.ModeInteractive, policy.ModeEnforce},
+	} {
+		r := newRig(t, c.configured, time.Minute)
+		r.tel.mu.Lock()
+		r.tel.degraded = true
+		r.tel.mu.Unlock()
+		_, err := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: "run the go tests", WorkspaceRoot: r.ws, Mode: c.requested})
+		if err == nil || !strings.Contains(err.Error(), "refusing an enforce session") ||
+			!strings.Contains(err.Error(), "path_link") {
+			t.Errorf("configured %s, requested %q: CreateSession = %v, want refused naming the missing family",
+				c.configured, c.requested, err)
+		}
+	}
+
+	// A grant the host lost is dropped as the host's gap, not the build's.
+	r := newRig(t, policy.ModeInteractive, time.Minute)
+	r.tel.mu.Lock()
+	r.tel.degraded = true
+	r.tel.observe = slices.DeleteFunc(r.tel.observe, func(k capability.Kind) bool { return k == capability.KindFileWrite })
+	r.tel.unobservable = []capability.Kind{capability.KindFileWrite}
+	r.tel.mu.Unlock()
+	resp, err := r.client.CreateSession(ctx, ipc.CreateSessionRequest{Prompt: "run the go tests", WorkspaceRoot: r.ws})
+	if err != nil {
+		t.Fatalf("interactive on degraded telemetry: %v", err)
+	}
+	for _, want := range []string{"telemetry is degraded on this host", "dropped fs.write grant: no probe on this host observes it"} {
+		if !slices.ContainsFunc(resp.Warnings, func(w string) bool { return strings.HasPrefix(w, want) }) {
+			t.Errorf("warnings %q do not say %q", resp.Warnings, want)
+		}
 	}
 }
