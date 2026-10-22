@@ -33,13 +33,15 @@
  * size. It does not catch a layout that stayed the same size and changed
  * meaning: a field retyped, two fields swapped, a bound moved from one array to
  * another. Those records decode without complaint into confident nonsense. */
-#define ALLSEER_ABI_VERSION  6
+#define ALLSEER_ABI_VERSION  7
 
-/* Bounded because eBPF stack space is limited to 512 bytes and the verifier
- * rejects unbounded copies. These caps are a real constraint on what a probe
- * can report, and long paths will be truncated. The user-space enricher must
- * treat truncation as an enrichment failure, never as a complete path. */
-#define ALLSEER_PATH_MAX     256
+/* Bounded because the verifier rejects unbounded copies. A longer path is
+ * truncated, and the user-space enricher must treat truncation as an
+ * enrichment failure, never as a complete path. ABI v7 raised this from 256:
+ * ordinary layouts (pnpm's node_modules/.pnpm, Bazel output trees) pass 255
+ * bytes, and every such open was unresolvable and asked for approval. A path
+ * past 1023 bytes is still truncated and still charged. */
+#define ALLSEER_PATH_MAX     1024
 #define ALLSEER_COMM_LEN     16
 
 /* Room for the directory a relative open is resolved against. Must stay a

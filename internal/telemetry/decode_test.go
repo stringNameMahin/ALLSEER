@@ -154,9 +154,10 @@ func TestEventSizeIsTheGeneratedRecordSize(t *testing.T) {
 	// the generator. abi has the same assertion; having it on both sides means
 	// a generator bug producing self-consistent nonsense fails here too.
 	//
-	// 1144 = 8 timestamp + 4 type + 4 ret + 4 version + 4 pad + 56 proc
-	//      + 1064 payload union (the ABI v3 file payload), counting version and its pad.
-	const want = 1144
+	// 2680 = 8 timestamp + 4 type + 4 ret + 4 version + 4 pad + 56 proc
+	//      + 2600 payload union (the file payload, PathMax 1024 since ABI v7),
+	//      counting version and its pad.
+	const want = 2680
 	if got != want {
 		t.Errorf("EventSize() = %d, want %d (8 + 4 + 4 + 4 + 4 + %d + %d)",
 			got, want, abi.SizeofProc, abi.SizeofPayload)

@@ -637,11 +637,14 @@ func TestRuntimeOpenPathTruncation(t *testing.T) {
 	trackThisCgroup(t, l)
 	thread := newLockedThread(t)
 
-	// Two components well inside NAME_MAX, joined into a path well past
+	// Components well inside NAME_MAX, joined into a path past
 	// ALLSEER_PATH_MAX. The file does not exist and is not created: openat
 	// still fires both tracepoints, and the argument is captured before the
 	// kernel has decided the path resolves to nothing.
-	dir := filepath.Join(t.TempDir(), strings.Repeat("d", 200))
+	dir := t.TempDir()
+	for len(dir) <= abi.PathMax {
+		dir = filepath.Join(dir, strings.Repeat("d", 200))
+	}
 	path := filepath.Join(dir, strings.Repeat("f", 200))
 	if len(path) <= abi.PathMax {
 		t.Fatalf("this test needs a path longer than %d bytes; built one of %d", abi.PathMax, len(path))
@@ -666,6 +669,37 @@ func TestRuntimeOpenPathTruncation(t *testing.T) {
 		t.Error("a truncated path arrived without Truncated set")
 	}
 	requireNoScratchEntry(t, scratchMap(t, l), scratchKey(os.Getpid(), thread.tid), "an open with a truncated path")
+}
+
+// A path between the old 256-byte field and ALLSEER_PATH_MAX arrives whole.
+// Before ABI v7 every such open was truncated, unresolvable and asked for
+// approval, and pnpm's node_modules/.pnpm and Bazel output trees reach that
+// length in ordinary builds.
+func TestRuntimeOpenOfALongPathArrivesWhole(t *testing.T) {
+	l, records := loadAndAttachPrograms(t, ProgOpenatEnter, ProgOpenatExit)
+	trackThisCgroup(t, l)
+	thread := newLockedThread(t)
+
+	dir := t.TempDir()
+	for len(dir) < 600 {
+		dir = filepath.Join(dir, strings.Repeat("d", 190))
+	}
+	path := filepath.Join(dir, "f")
+	if len(path) >= abi.PathMax {
+		t.Fatalf("this test needs a path shorter than %d bytes; built one of %d", abi.PathMax, len(path))
+	}
+	if ret := thread.open(path, syscall.O_RDONLY, 0); ret >= 0 {
+		t.Fatalf("openat(%s) unexpectedly succeeded", path)
+	}
+
+	found := collectOpens(t, records, path, 3*time.Second)
+	if len(found) == 0 {
+		t.Fatalf("no open event carrying the whole %d-byte path reached user space", len(path))
+	}
+	if found[0].event.File.Truncated {
+		t.Errorf("a %d-byte path arrived marked Truncated", len(path))
+	}
+	requireNoScratchEntry(t, scratchMap(t, l), scratchKey(os.Getpid(), thread.tid), "an open with a long path")
 }
 
 // --- the filter ---------------------------------------------------------------

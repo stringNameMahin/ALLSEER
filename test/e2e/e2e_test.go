@@ -969,14 +969,15 @@ func TestEnforceKillsRelativeCredentialRead(t *testing.T) {
 	}
 }
 
-// Padding a path past the kernel's buffer hides its tail. The probe flags the
-// truncation, the path is never resolved, and unverifiable_path carries it to
-// indeterminate-high-risk, which enforce mode contains.
+// Padding a path past the probe's buffer (1024 bytes since ABI v7) hides its
+// tail. The probe flags the truncation, the path is never resolved, and
+// unverifiable_path carries it to indeterminate-high-risk, which enforce mode
+// contains.
 func TestEnforceContainsATruncatedPath(t *testing.T) {
 	d := startDaemon(t, "monitor")
 	ws := workspace(t)
 	marker := filepath.Join(ws, "survived")
-	padded := "/etc/" + strings.Repeat("./", 140) + "shadow"
+	padded := "/etc/" + strings.Repeat("./", 520) + "shadow"
 	r := shim(t, d.socket, ws, "enforce", script(t, "cat "+padded+" 2>/dev/null\nsleep 3\necho x > "+marker))
 	sid := r.sessionID(t)
 	if code := r.wait(t, 30*time.Second); code != 137 {

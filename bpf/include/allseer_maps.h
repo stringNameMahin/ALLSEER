@@ -56,7 +56,7 @@
  * a larger buffer converts dropped records into latency rather than removing
  * the loss. Records lost here are the hole pkg/event.Event.Dropped reports, and
  * telemetry.Config.FailClosedOnDrop is what an operator does about it. */
-#define ALLSEER_RINGBUF_BYTES  (1 << 22)
+#define ALLSEER_RINGBUF_BYTES  (1 << 24)
 
 /* Capacity of `tracked_cgroups`. One entry per governed cgroup, and sessions
  * are counted in the low tens, so this is deliberately generous: the failure

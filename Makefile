@@ -471,7 +471,8 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestLeftoversAreFrozenAfterADaemonCrash \
 	TestRuntimeLinkatIsReportedByTheKernelsNames \
 	TestHardlinksAreObservedByTheirSource \
-	TestShimNoticesItsSessionWasLostToARestart
+	TestShimNoticesItsSessionWasLostToARestart \
+	TestLongPathsInTheWorkspaceDoNotStopTheAgent
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify

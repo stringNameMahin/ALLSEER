@@ -33,7 +33,7 @@ func Defaults() *Config {
 		},
 		Telemetry: telemetry.Config{
 			ObjectPath:       "/usr/lib/allseer/allseer.bpf.o",
-			RingBufferSize:   8 << 20,
+			RingBufferSize:   16 << 20,
 			EventChannelSize: 16384,
 			FailClosedOnDrop: true,
 		},

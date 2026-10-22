@@ -256,20 +256,32 @@ struct {
  * accessors among them — are GPL-only and refuse to verify without it. */
 char LICENSE[] SEC("license") = "GPL";
 
-/* Clears a record's payload union. ABI v3 made the union larger than clang will
- * inline in one memset for BPF, so it is cleared in two 8-byte-aligned halves.
- * The barrier stops LLVM merging the halves back into one call. */
-#define ALLSEER_PAYLOAD_HALF(e)  ((sizeof((e)->payload) / 2) & ~7UL)
-#define ALLSEER_CLEAR_PAYLOAD(e) do {						\
-	__builtin_memset(&(e)->payload, 0, ALLSEER_PAYLOAD_HALF(e));		\
-	asm volatile("" ::: "memory");						\
-	__builtin_memset((char *)&(e)->payload + ALLSEER_PAYLOAD_HALF(e), 0,	\
-			 sizeof((e)->payload) - ALLSEER_PAYLOAD_HALF(e));	\
+/* Zeroes n bytes at p, 8-byte aligned. clang inlines a memset for BPF only up
+ * to 128 stores, 1024 bytes at that alignment, and cannot call one, so larger
+ * structures are cleared in pieces of at most that size. The barriers stop
+ * LLVM merging the pieces back into one call. Each piece's size is a constant. */
+#define ALLSEER_CLEAR_CHUNK 1024UL
+#define ALLSEER_ZERO_PART(p, n, i) do {						\
+	if ((n) > (i) * ALLSEER_CLEAR_CHUNK) {					\
+		__builtin_memset((char *)(p) + (i) * ALLSEER_CLEAR_CHUNK, 0,	\
+			(n) - (i) * ALLSEER_CLEAR_CHUNK < ALLSEER_CLEAR_CHUNK ?	\
+			(n) - (i) * ALLSEER_CLEAR_CHUNK : ALLSEER_CLEAR_CHUNK);	\
+		asm volatile("" ::: "memory");					\
+	}									\
 } while (0)
+#define ALLSEER_ZERO(p, n) do {							\
+	ALLSEER_ZERO_PART(p, n, 0);						\
+	ALLSEER_ZERO_PART(p, n, 1);						\
+	ALLSEER_ZERO_PART(p, n, 2);						\
+} while (0)
+#define ALLSEER_CLEAR_PAYLOAD(e) ALLSEER_ZERO(&(e)->payload, sizeof((e)->payload))
 
 _Static_assert(sizeof(((struct allseer_event *)0)->payload) % 8 == 0 &&
-	       sizeof(((struct allseer_event *)0)->payload) <= 2048,
-	       "the payload union outgrew ALLSEER_CLEAR_PAYLOAD's two halves");
+	       sizeof(((struct allseer_event *)0)->payload) <= 3 * ALLSEER_CLEAR_CHUNK,
+	       "the payload union outgrew ALLSEER_ZERO's three pieces");
+_Static_assert(sizeof(struct allseer_open_scratch) % 8 == 0 &&
+	       sizeof(struct allseer_open_scratch) <= 3 * ALLSEER_CLEAR_CHUNK,
+	       "the open scratch entry outgrew ALLSEER_ZERO's three pieces");
 
 /* The record ABI version this object was compiled against.
  *
@@ -1040,7 +1052,7 @@ int BPF_PROG(openat_enter, int dfd, const char *filename, struct open_how *how)
 	s = bpf_map_lookup_elem(&open_staging, &zero);
 	if (!s)
 		return 0;
-	__builtin_memset(s, 0, sizeof(*s));
+	ALLSEER_ZERO(s, sizeof(*s));
 
 	/* The instant the call was made. Copied into the record verbatim by the
 	 * exit side; allseer_maps.h says why it is this instant and not the one the

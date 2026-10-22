@@ -32,7 +32,7 @@ telemetry:
   object_path: /usr/lib/allseer/allseer.bpf.o
   # Must be a power-of-two multiple of the page size. Larger buffers tolerate
   # consumer stalls at the cost of locked memory.
-  ring_buffer_size: 8388608
+  ring_buffer_size: 16777216
   event_channel_size: 16384
   # Empty means attach everything. Narrowing this is the main lever for reducing
   # overhead, paid for in blind spots.

@@ -78,13 +78,13 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 			why  string
 		}{
 			{"Proc", SizeofProc, 56, "8+8 + 6*4 + 16, already 8-aligned"},
-			{"FilePayload", SizeofFilePayload, 1064, "3*8 + 4*4 + 2*256 + 512 (ABI v3 added dirfd, path_flags, dir)"},
+			{"FilePayload", SizeofFilePayload, 2600, "3*8 + 4*4 + 2*1024 + 512 (ABI v3 added dirfd, path_flags, dir; v7 PathMax 1024)"},
 			{"NetPayload", SizeofNetPayload, 56, "16+16 + 8 + 6*2 = 52, rounded up to the 8-byte alignment"},
-			{"ExecPayload", SizeofExecPayload, 776, "2*4 + 256 + 8*64"},
+			{"ExecPayload", SizeofExecPayload, 1544, "2*4 + 1024 + 8*64"},
 			{"PrivState", SizeofPrivState, 96, "5*8 + 14*4, already 8-aligned"},
 			{"PrivPayload", SizeofPrivPayload, 208, "2*96 + 4*4"},
-			{"Payload union", SizeofPayload, 1064, "the largest member, FilePayload since ABI v3"},
-			{"Event", SizeofEvent, 1144, "8 + 4 + 4 + 4 + 4 + 56 + 1064, counting version and its pad"},
+			{"Payload union", SizeofPayload, 2600, "the largest member, FilePayload since ABI v3"},
+			{"Event", SizeofEvent, 2680, "8 + 4 + 4 + 4 + 4 + 56 + 2600, counting version and its pad"},
 		}
 		for _, c := range cases {
 			if c.got != c.want {
@@ -133,15 +133,15 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 			{"FilePayload.Dirfd", OffsetFilePayloadDirfd, 32},
 			{"FilePayload.PathFlags", OffsetFilePayloadPathFlags, 36},
 			{"FilePayload.Path", OffsetFilePayloadPath, 40},
-			{"FilePayload.NewPath", OffsetFilePayloadNewPath, 296},
-			{"FilePayload.Dir", OffsetFilePayloadDir, 552},
+			{"FilePayload.NewPath", OffsetFilePayloadNewPath, 1064},
+			{"FilePayload.Dir", OffsetFilePayloadDir, 2088},
 
 			{"NetPayload.Daddr", OffsetNetPayloadDaddr, 16},
 			{"NetPayload.Bytes", OffsetNetPayloadBytes, 32},
 			{"NetPayload.Dport", OffsetNetPayloadDport, 42},
 
 			{"ExecPayload.Filename", OffsetExecPayloadFilename, 8},
-			{"ExecPayload.Argv", OffsetExecPayloadArgv, 264},
+			{"ExecPayload.Argv", OffsetExecPayloadArgv, 1032},
 
 			{"PrivState.CapBounding", OffsetPrivStateCapBounding, 32},
 			{"PrivState.UIDEffective", OffsetPrivStateUIDEffective, 44},
@@ -166,8 +166,8 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 		if DirMax != 512 || DirMax&(DirMax-1) != 0 {
 			t.Errorf("DirMax = %d, want 512, a power of two the probe masks with", DirMax)
 		}
-		if PathMax != 256 || CommLen != 16 || ArgvMax != 8 || ArgLen != 64 {
-			t.Errorf("bounds = PathMax %d, CommLen %d, ArgvMax %d, ArgLen %d; want 256, 16, 8, 64",
+		if PathMax != 1024 || CommLen != 16 || ArgvMax != 8 || ArgLen != 64 {
+			t.Errorf("bounds = PathMax %d, CommLen %d, ArgvMax %d, ArgLen %d; want 1024, 16, 8, 64",
 				PathMax, CommLen, ArgvMax, ArgLen)
 		}
 	})
@@ -179,13 +179,14 @@ func TestLayoutMatchesHandComputedExpectations(t *testing.T) {
 // the distinction is load-bearing: a reader who takes ABIVersion for a bound has
 // misread the contract as badly as one who takes PathMax for a version.
 func TestABIVersionIsAValueNotABound(t *testing.T) {
-	if ABIVersion != 6 {
-		t.Errorf("ABIVersion = %d, want 6; version 1 was the first numbered layout, version 2 "+
+	if ABIVersion != 7 {
+		t.Errorf("ABIVersion = %d, want 7; version 1 was the first numbered layout, version 2 "+
 			"reshaped struct allseer_priv_payload, version 3 added the openat directory capture, "+
 			"version 4 added PATH_LATE, which a version 3 reader would take for an entry-time path, "+
 			"version 5 turned the header's padding into `flags` and added PATH_KERNEL, so a version "+
 			"4 reader would take an open with no outcome for one that returned fd 0, "+
 			"version 6 added ALLSEER_EVT_FILE_LINK and its payload, which a version 5 reader refuses as unknown, "+
+			"version 7 raised ALLSEER_PATH_MAX from 256 to 1024, which moves every field after a path, "+
 			"and the number changes only when the bytes on the wire change or change meaning", ABIVersion)
 	}
 

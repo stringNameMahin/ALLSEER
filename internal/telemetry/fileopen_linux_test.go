@@ -285,6 +285,33 @@ func TestRuntimeOpenat2IsObservedByTheKernelHook(t *testing.T) {
 	assertKernelOpen(t, kernelOpen(t, records, target), target)
 }
 
+// The kernel's own name for a deep file fits too. bpf_d_path writes into the
+// same field as the openat pair, and at 256 bytes it failed for any path past
+// it, which ordinary layouts such as node_modules/.pnpm reach.
+func TestRuntimeKernelHookReportsALongPathWhole(t *testing.T) {
+	dir := realDir(t)
+	for len(dir) < 600 {
+		dir = filepath.Join(dir, strings.Repeat("d", 190))
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "deep.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, records := loadAndAttachPrograms(t, ProgFileOpen)
+	trackThisCgroup(t, l)
+	thread := newLockedThread(t)
+	if ret := thread.openat2(target, syscall.O_RDONLY); ret < 0 {
+		if ret == -int(syscall.ENOSYS) {
+			t.Skip("openat2 is not available on this kernel")
+		}
+		t.Fatalf("openat2: %d", ret)
+	}
+	assertKernelOpen(t, kernelOpen(t, records, target), target)
+}
+
 // The case no tracepoint can reach. An IORING_OP_OPENAT is a ring entry the
 // kernel executes, so there is no openat syscall to attach to at all.
 func TestRuntimeIoUringOpenIsObserved(t *testing.T) {
