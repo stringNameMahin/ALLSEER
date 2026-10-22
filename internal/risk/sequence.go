@@ -443,6 +443,11 @@ func (s CredentialEgressScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, e
 		if obs.Kind != capability.KindFileRead || obs.Target == "" {
 			continue
 		}
+		// A process reading its own /proc entry learns nothing it does not
+		// hold, so it is not the first half of an exfiltration.
+		if ownProcEntry(obs.Target, prev.Process) {
+			continue
+		}
 
 		grade := s.oracle.PathSensitivity(obs.Target)
 		if !AccessSensitivityQualifies(grade) {

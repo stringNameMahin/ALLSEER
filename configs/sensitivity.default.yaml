@@ -185,12 +185,20 @@ paths:
       CLI credential stores for source hosting and cloud providers. They hold
       refresh tokens, so disclosure survives the session that leaked them.
 
-  - patterns: [/proc/*/environ, /proc/*/mem, /proc/*/maps]
+  - patterns:
+      - /proc/*/environ
+      - /proc/*/mem
+      - /proc/*/maps
+      - /proc/*/task/*/environ
+      - /proc/*/task/*/mem
+      - /proc/*/task/*/maps
     sensitivity: high
     reason: >
       Another process's environment and memory. Environment variables routinely
       carry credentials, and reading another process's memory is how a running
-      agent or the governing daemon itself is looted.
+      agent or the governing daemon itself is looted. The task/ paths are the
+      same files through a thread. A process's own entries are not graded by
+      this list: it already holds what is there.
 
   # --- medium: identity and history -----------------------------------------
 

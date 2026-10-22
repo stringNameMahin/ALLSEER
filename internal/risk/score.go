@@ -924,6 +924,13 @@ func (s SensitivePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 
 	grade := s.rate(dim, sc.target)
 
+	// The reader's own /proc entry is its own state, whatever the list says
+	// about /proc/*: graded info, with the reason why.
+	own := dim == DimensionPath && sc.req.Event != nil && ownProcEntry(sc.target, sc.req.Event.Process)
+	if own {
+		grade = capability.SeverityInfo
+	}
+
 	// Only the *empty* grade takes the unknown branch. A non-empty grade this
 	// build does not recognize — reachable through a third-party oracle with
 	// its own vocabulary, since the loader refuses one in a file — is reported
@@ -948,7 +955,9 @@ func (s SensitivePathScorer) evaluate(sc *scoreCtx) (decision.Factor, bool, erro
 	// The written reason travels into the audit record, so "why did this score
 	// go up" is answered by the sentence the list's author wrote rather than by
 	// a glob the reader has to interpret.
-	if o, ok := s.oracle.(interface {
+	if own {
+		ev[EvidenceReason] = ownProcReason
+	} else if o, ok := s.oracle.(interface {
 		PathSensitivityReason(string) (capability.Severity, string)
 	}); ok && dim == DimensionPath {
 		if _, reason := o.PathSensitivityReason(sc.target); reason != "" {

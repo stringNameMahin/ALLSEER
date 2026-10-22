@@ -502,7 +502,8 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestDaemonGovernsWithoutAFamilyTheKernelRefuses \
 	TestRuntimeARefusedCoreKindFailsTheStart \
 	TestDaemonRefusesWhenTheKernelRefusesACoreKind \
-	TestEnforceReportsTheConnectionsItAllowsUnmatched
+	TestEnforceReportsTheConnectionsItAllowsUnmatched \
+	TestReadingItsOwnProcFilesIsNotCredentialAccess
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify

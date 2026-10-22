@@ -1104,6 +1104,52 @@ func TestEnforceReportsTheConnectionsItAllowsUnmatched(t *testing.T) {
 	}
 }
 
+// A process reading its own /proc maps, environ or memory is not credential
+// access: Rust's standard library does it at start, so on Ubuntu 26.04 every
+// coreutils command did, and the next unmatched connect was killed in enforce.
+// Reading another process's maps before the same connect still is.
+func TestReadingItsOwnProcFilesIsNotCredentialAccess(t *testing.T) {
+	d := startDaemon(t, "enforce")
+	const prompt = "download https://proxy.golang.org/golang.org/x/text/@v/list and run the tests"
+	const connect = "exec 3<>/dev/udp/192.0.2.10/443 || exit 1"
+	for _, c := range []struct {
+		name, read string
+		killed     bool // by the connect's decision
+	}{
+		{"own", "read -r _ < /proc/self/maps || exit 1", false},
+		// uutils on Ubuntu 26.04 reads its own maps; GNU ls does not.
+		{"coreutils", "ls / >/dev/null || exit 1", false},
+		{"parent", "bash -c 'read -r _ < /proc/$PPID/maps' || exit 1", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := shim(t, d.socket, workspace(t), "", script(t, c.read+"\n"+connect), "-prompt", prompt)
+			sid := r.sessionID(t)
+			code := r.wait(t, 30*time.Second)
+			var egress *decision.Decision
+			ds := d.decisions(t, sid)
+			for i := range ds {
+				if strings.HasPrefix(target(ds[i]), "net.connect") && strings.Contains(target(ds[i]), "192.0.2.10:443") {
+					egress = &ds[i]
+				}
+			}
+			if egress == nil {
+				t.Fatalf("no decision for the connect (exit %d)\n%s", code, r.stderr.String())
+			}
+			charged := false
+			for _, f := range egress.Risk.Factors {
+				charged = charged || (f.Name == "credential_access_egress" && f.Weight > 0)
+			}
+			// The kill may land after a UDP connect has let the script finish,
+			// so the action says what enforce decided.
+			stopped := egress.Action == ece.ActionRequestApproval || egress.Action == ece.ActionBlock
+			if charged != c.killed || stopped != c.killed || (!c.killed && code != 0) {
+				t.Errorf("credential_access_egress charged %v, action %s, agent exit %d; want charged and stopped %v\n%s",
+					charged, egress.Action, code, c.killed, d.explain())
+			}
+		})
+	}
+}
+
 // Plan D's lead scenario: an agent reads a credential and then opens a
 // connection. The sequence detector must mark the egress, whichever entry point
 // it used. connect(2) was the only one observed before the security_socket_connect
