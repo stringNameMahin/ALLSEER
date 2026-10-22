@@ -141,17 +141,6 @@ func run(args []string) int {
 		log.Error("building risk engine", "err", err)
 		return 1
 	}
-	sink, err := audit.Open(cfg.Audit)
-	if err != nil {
-		log.Error("opening audit log", "err", err)
-		return 1
-	}
-	defer sink.Close()
-	sink.OnRotationError(func(err error) {
-		log.Error("audit log rotation failed; records continue in the current file, which keeps growing",
-			"path", cfg.Audit.Path, "err", err)
-	})
-
 	mgr, err := containment.NewManager(*cgroupBase)
 	if err != nil {
 		log.Error("session cgroups", "err", err)
@@ -169,6 +158,19 @@ func run(args []string) int {
 		return 1
 	}
 	defer func() { _ = mgr.Unlock() }()
+
+	// After the lock: a daemon refused for the base must not create or touch
+	// the audit log of the one that holds it.
+	sink, err := audit.Open(cfg.Audit)
+	if err != nil {
+		log.Error("opening audit log", "err", err)
+		return 1
+	}
+	defer sink.Close()
+	sink.OnRotationError(func(err error) {
+		log.Error("audit log rotation failed; records continue in the current file, which keeps growing",
+			"path", cfg.Audit.Path, "err", err)
+	})
 	leftovers := sweep(ctx, log, mgr)
 
 	tel, err := newTelemetry(ctx, cfg.Telemetry)

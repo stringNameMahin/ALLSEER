@@ -167,9 +167,15 @@ func startDaemonWithConfig(t *testing.T, mode, body string) *daemon {
 
 func startDaemonWith(t *testing.T, mode, cfg string) *daemon {
 	t.Helper()
+	return startDaemonAt(t, mode, cfg, filepath.Join(e.dir, fmt.Sprintf("d-%d.sock", time.Now().UnixNano())))
+}
+
+// startDaemonAt starts a daemon on a given socket, as a restart would.
+func startDaemonAt(t *testing.T, mode, cfg, socket string) *daemon {
+	t.Helper()
 	need(t)
 	d := &daemon{
-		socket: filepath.Join(e.dir, fmt.Sprintf("d-%d.sock", time.Now().UnixNano())),
+		socket: socket,
 		audit:  filepath.Join(e.dir, fmt.Sprintf("audit-%d.jsonl", time.Now().UnixNano())),
 		log:    &bytes.Buffer{},
 		done:   make(chan error, 1),

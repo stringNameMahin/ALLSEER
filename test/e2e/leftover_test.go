@@ -95,6 +95,9 @@ func TestLeftoversAreFrozenAfterADaemonCrash(t *testing.T) {
 	if err == nil || !strings.Contains(string(out), "another daemon is governing this cgroup base") {
 		t.Fatalf("a second daemon on a base in use = %v:\n%s", err, filterLibbpf(string(out)))
 	}
+	if exists(filepath.Join(e.dir, "third.jsonl")) {
+		t.Fatal("the refused daemon created its audit log")
+	}
 
 	ctl(t, second, "leftovers", "thaw", sid)
 	if !ticking(t, counter) {
@@ -115,4 +118,63 @@ func TestLeftoversAreFrozenAfterADaemonCrash(t *testing.T) {
 	if fmt.Sprint(actions) != "[frozen thawed killed]" {
 		t.Fatalf("leftover records = %v, want [frozen thawed killed]", actions)
 	}
+}
+
+// A daemon restarted inside the shim's grace period comes back without the
+// session and freezes its agent as a leftover. The shim used to wait on the
+// frozen agent and say nothing; it now says why and stops it.
+func TestShimNoticesItsSessionWasLostToARestart(t *testing.T) {
+	first := startDaemon(t, "monitor")
+	ws := workspace(t)
+	r := shim(t, first.socket, ws, "", script(t, "sleep 120"))
+	sid := r.sessionID(t)
+	group := filepath.Join(e.cgroups, sid)
+	t.Cleanup(func() { killGroup(group) })
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if b, _ := os.ReadFile(filepath.Join(group, "cgroup.procs")); len(strings.TrimSpace(string(b))) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the agent never ran in its cgroup:\n%s", r.stderr.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if err := first.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-first.done
+	first.done <- nil
+	startDaemonAt(t, "monitor", "", first.socket)
+
+	// The shim's stderr is a pipe here and the frozen leftover holds it open,
+	// so Wait cannot return before the leftover is gone. The shim process
+	// itself has to have exited, which /proc shows.
+	pid := r.cmd.Process.Pid
+	deadline = time.Now().Add(30 * time.Second)
+	for !strings.Contains(r.stderr.String(), "restarted without it") || running(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the shim did not report the lost session and exit (running %v):\n%s", running(pid), r.stderr.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !strings.Contains(r.stderr.String(), "no longer knows session "+sid) {
+		t.Fatalf("shim output after a restart:\n%s", r.stderr.String())
+	}
+	killGroup(group)
+	if code := r.wait(t, 10*time.Second); code == 0 {
+		t.Fatal("the shim exited 0 for an agent it stopped")
+	}
+}
+
+// running reports whether pid is a live process, not gone or a zombie.
+func running(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	s := string(b)
+	i := strings.LastIndexByte(s, ')')
+	return i >= 0 && i+2 < len(s) && s[i+2] != 'Z'
 }

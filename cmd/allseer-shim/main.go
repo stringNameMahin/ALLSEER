@@ -182,10 +182,10 @@ func run(args []string) int {
 	}()
 
 	approvalsCtx, stopApprovals := context.WithCancel(ctx)
-	var daemonGone atomic.Bool
+	var lost atomic.Pointer[string]
 	go watchApprovals(approvalsCtx, client, sid, !*noTTY)
-	go watchDaemon(approvalsCtx, client, func() {
-		daemonGone.Store(true)
+	go watchDaemon(approvalsCtx, client, sid, func(why string) {
+		lost.Store(&why)
 		_ = child.Process.Kill()
 	})
 
@@ -200,8 +200,8 @@ func run(args []string) int {
 	signal.Stop(sigs)
 
 	// Nothing to report the end to, and the agent was stopped because of it.
-	if daemonGone.Load() {
-		note("the session was not ended cleanly: the governance daemon is gone")
+	if why := lost.Load(); why != nil {
+		note("the session was not ended cleanly: %s", *why)
 		return code
 	}
 	endCtx, cancelEnd := context.WithTimeout(ctx, 30*time.Second)
@@ -296,17 +296,21 @@ func askWhilePending(ctx context.Context, c *ipc.SocketClient, id string) (bool,
 	return askTTY(askCtx, "[allseer] approve and resume? [y/N] ")
 }
 
-// watchDaemon stops the agent if the daemon stops answering.
+// watchDaemon stops the agent if the daemon stops answering, or answers without
+// the session.
 //
 // The shim refuses to launch an agent with no daemon reachable. A daemon that
 // disappears mid-session leaves the agent running with nothing observing it,
 // which is the same situation, so it gets the same answer. The grace period is
-// there so a restart or a slow reply does not kill a long build.
+// there so a slow reply does not kill a long build. A daemon restarted inside
+// it comes back without the session, which lived in the old one's memory, and
+// freezes the agent as a leftover: waiting on it would hang the terminal with
+// nothing said.
 //
 // It kills the launcher it started. Descendants that have left that process
 // behind are out of reach: killing the session cgroup needs the daemon, and
 // the shim is unprivileged by design.
-func watchDaemon(ctx context.Context, c *ipc.SocketClient, kill func()) {
+func watchDaemon(ctx context.Context, c *ipc.SocketClient, sid string, kill func(why string)) {
 	const (
 		every = 2 * time.Second
 		grace = 10 * time.Second
@@ -321,9 +325,17 @@ func watchDaemon(ctx context.Context, c *ipc.SocketClient, kill func()) {
 		case <-t.C:
 		}
 		callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		_, err := c.Status(callCtx)
+		_, err := c.GetSession(callCtx, sid)
 		cancel()
-		if err == nil {
+		var pe *ipc.Error
+		if errors.As(err, &pe) && pe.Code == ipc.ErrCodeSessionNotFound {
+			fmt.Fprintf(os.Stderr, "\n[allseer] the governance daemon restarted and no longer knows session %s; "+
+				"stopping the agent\n[allseer] processes it left are frozen; root can list them with: allseerctl leftovers\n", sid)
+			kill("the governance daemon restarted without it")
+			return
+		}
+		// Any answer, an error included, is a daemon that is there.
+		if err == nil || pe != nil {
 			downSince = time.Time{}
 			continue
 		}
@@ -336,7 +348,7 @@ func watchDaemon(ctx context.Context, c *ipc.SocketClient, kill func()) {
 		}
 		fmt.Fprintf(os.Stderr,
 			"\n[allseer] the governance daemon has not answered for %s; stopping the agent\n", grace)
-		kill()
+		kill("the governance daemon is gone")
 		return
 	}
 }

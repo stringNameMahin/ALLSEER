@@ -470,7 +470,8 @@ REQUIRED_INTEGRATION_TESTS := \
 	TestRuntimeOneDaemonPerBase \
 	TestLeftoversAreFrozenAfterADaemonCrash \
 	TestRuntimeLinkatIsReportedByTheKernelsNames \
-	TestHardlinksAreObservedByTheirSource
+	TestHardlinksAreObservedByTheirSource \
+	TestShimNoticesItsSessionWasLostToARestart
 
 .PHONY: ci-security
 ci-security: ## CI job: gitleaks over git history, govulncheck, go mod verify
