@@ -1,0 +1,63 @@
+# Packs the tree make install staged; nothing is compiled here. The packager
+# is the fixed placeholder and the build host a fixed name: nothing about
+# whoever builds the package goes into it.
+%define _buildhost allseer-build
+%define debug_package %{nil}
+%define _build_id_links none
+# No stripping or other post-processing: the binaries are already stripped and
+# the BPF object must stay exactly as built.
+%global __os_install_post %{nil}
+
+Name:           allseer
+Version:        @VERSION@
+Release:        1
+Summary:        Governance runtime for AI coding agents
+# Not chosen yet; the owner decides.
+License:        NOASSERTION
+URL:            https://github.com/stringNameMahin/ALLSEER
+Packager:       @MAINTAINER@
+
+%description
+ALLSEER derives an execution envelope from the task an AI coding agent is
+given, observes the agent with eBPF, and records, asks about or stops what
+falls outside that envelope.
+
+%install
+cp -a @STAGE@/. %{buildroot}/
+
+# The daemon is not started on install: it needs kernel BTF and governs
+# nothing until a user runs an agent through allseer-shim.
+%post
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	if [ "$1" -eq 1 ]; then
+		echo "allseer: start the daemon with: systemctl enable --now allseerd"
+	fi
+fi
+
+%preun
+if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
+	systemctl disable --now allseerd >/dev/null 2>&1 || true
+fi
+
+# The audit log in /var/lib/allseer is kept on removal: it is evidence.
+%postun
+if [ -d /run/systemd/system ]; then
+	systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+%files
+%defattr(-,root,root,-)
+/usr/bin/allseerd
+/usr/bin/allseer-shim
+/usr/bin/allseerctl
+%dir /usr/lib/allseer
+/usr/lib/allseer/allseer.bpf.o
+/usr/lib/systemd/system/allseerd.service
+%dir /usr/share/doc/allseer
+/usr/share/doc/allseer/allseerd.example.yaml
+%dir /etc/allseer
+%config(noreplace) /etc/allseer/allseerd.yaml
+%config(noreplace) /etc/allseer/rules.yaml
+%config(noreplace) /etc/allseer/sensitivity.yaml
+%dir %attr(0700,root,root) /var/lib/allseer

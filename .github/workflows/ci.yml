@@ -92,7 +92,7 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends clang llvm libelf-dev zlib1g-dev
+          sudo apt-get install -y -q --no-install-recommends clang llvm libelf-dev zlib1g-dev rpm rpm2cpio cpio
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: bin/tools
@@ -112,6 +112,15 @@ jobs:
           path: build-${{ matrix.arch }}.tar
           if-no-files-found: error
           retention-days: 7
+      # make ci-build checked both packages, contents and identity alike.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: packages-${{ matrix.arch }}
+          path: |
+            bin/allseer_*.deb
+            bin/allseer-*.rpm
+          if-no-files-found: error
+          retention-days: 7
 
   unit:
     name: Unit tests
@@ -127,6 +136,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # test/ci builds small packages to check the identity guard on.
+      - name: Install system packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends rpm rpm2cpio cpio
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: build-amd64

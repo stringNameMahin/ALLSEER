@@ -180,6 +180,27 @@ deb: ## Build a .deb from the release build (run make release first; needs dpkg-
 	./scripts/ci/check-deb.sh $(DEB_FILE)
 	./scripts/ci/check-emails.sh $(DEB_ROOT)
 
+# The same release build as an .rpm, from the same staged install. The version
+# keeps the deb's ~git suffix, which rpm also sorts before a release.
+RPM_ARCH ?= $(shell uname -m)
+RPM_ROOT := $(BIN_DIR)/rpm-root
+RPM_TOP  := $(BIN_DIR)/rpmbuild
+RPM_FILE  = $(BIN_DIR)/allseer-$(DEB_VERSION)-1.$(RPM_ARCH).rpm
+
+.PHONY: rpm
+rpm: ## Build an .rpm from the release build (run make release first; needs rpmbuild, rpm2cpio, cpio)
+	rm -rf $(RPM_ROOT) $(RPM_TOP)
+	$(MAKE) install DESTDIR=$(CURDIR)/$(RPM_ROOT) PREFIX=/usr
+	install -d $(RPM_TOP)
+	sed -e 's|@VERSION@|$(DEB_VERSION)|' -e 's|@MAINTAINER@|$(MAINTAINER)|' -e 's|@STAGE@|$(CURDIR)/$(RPM_ROOT)|' \
+		deploy/rpm/allseer.spec.in > $(RPM_TOP)/allseer.spec
+	rpmbuild -bb --quiet --target $(RPM_ARCH) --define "_topdir $(CURDIR)/$(RPM_TOP)" \
+		--define "_rpmdir $(CURDIR)/$(BIN_DIR)" \
+		--define "_build_name_fmt %%{NAME}-%%{VERSION}-%%{RELEASE}.%%{ARCH}.rpm" \
+		$(RPM_TOP)/allseer.spec
+	./scripts/ci/check-rpm.sh $(RPM_FILE)
+	./scripts/ci/check-emails.sh $(RPM_ROOT)
+
 ##@ Quality
 
 .PHONY: check
@@ -399,6 +420,9 @@ ci-build: ## CI job: binaries, BPF object, ebpf daemon, integration test binary
 	$(GO) test -c -o $(CI_OUT)/e2e.test ./test/e2e
 	$(MAKE) install-check
 	$(MAKE) deb
+	@# CI always builds the .rpm; a host without rpmbuild says so instead.
+	@if command -v rpmbuild >/dev/null || [ -n "$${CI:-}" ]; then $(MAKE) rpm; \
+	else echo "rpmbuild not found: the .rpm was not built here (CI builds it)"; fi
 
 .PHONY: ci-unit
 ci-unit: ## CI job: unit tests with race detector and coverage

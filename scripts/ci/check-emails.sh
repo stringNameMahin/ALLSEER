@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Fail if a file, a directory, a .deb package or a .tar contains an email
-# address, in file contents, file names or symlink targets. Build outputs
-# carry no identity: the deb Maintainer is a placeholder that is not an
-# address, so any address found is a leak, most likely of whoever built it.
+# Fail if a file, a directory, a .deb or .rpm package or a .tar contains an
+# email address, in file contents, file names or symlink targets. Build
+# outputs carry no identity: the package maintainer is a placeholder that is
+# not an address, so any address found is a leak, most likely of whoever
+# built it.
 # Nothing needs to know the address, so the check runs the same with or
 # without a git identity. Findings name the file only, so a CI log never
 # shows the address.
@@ -61,6 +62,15 @@ for path in "$@"; do
       fail "$path: cannot extract"
       continue
     fi
+  elif [[ -f $path && $path == *.rpm ]]; then
+    # The payload unpacked, and the header (packager, scripts, file names) as
+    # text beside it.
+    dir=$tmp/x$n
+    if ! mkdir "$dir" || ! rpm -qp --nosignature --xml -- "$path" >"$dir/.rpm-header.xml" ||
+      ! rpm2cpio "$path" | (cd "$dir" && cpio -idm --quiet --no-absolute-filenames); then
+      fail "$path: cannot extract"
+      continue
+    fi
   elif [[ ! -e $path ]]; then
     fail "$path: does not exist"
     continue
@@ -86,7 +96,7 @@ for path in "$@"; do
       continue
     }
     case $magic in
-      1f8b* | 425a68* | fd377a585a00 | 28b52ffd* | 504b0304* | 213c61726368)
+      1f8b* | 425a68* | fd377a585a00 | 28b52ffd* | 504b0304* | 213c61726368 | edabeedb*)
         fail "$(where "$f"): compressed or archived, cannot be searched" ;;
     esac
   done <"$files"
